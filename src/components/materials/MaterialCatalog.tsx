@@ -1,57 +1,56 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import {
-  Alert,
   Box,
-  Chip,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  Divider,
-  FormControlLabel,
-  IconButton,
-  InputAdornment,
-  Menu,
-  MenuItem,
   Paper,
-  Skeleton,
-  Switch,
-  TextField,
-  Tooltip,
+  Button,
   Typography,
+  Tooltip,
   useTheme,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Autocomplete,
+  Select,
+  MenuItem,
+  FormControlLabel,
+  Switch,
+  Alert,
+  FormControl,
+  InputLabel,
 } from '@mui/material'
-import { AnimatePresence, motion } from 'framer-motion'
+import { inventoryService } from '../../services/inventoryService'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
-  FiBox,
-  FiChevronRight,
-  FiClipboard,
-  FiCopy,
-  FiFileText,
-  FiFolder,
-  FiMaximize2,
-  FiMinimize2,
-  FiMoreHorizontal,
-  FiRefreshCw,
-  FiScissors,
-  FiSearch,
-  FiTrash2,
   FiPlus,
+  FiFolder,
+  FiBox,
+  FiFileText,
+  FiChevronRight,
   FiEdit2,
+  FiTrash2,
+  FiAlertCircle,
 } from 'react-icons/fi'
-import { EmptyState } from '../ui/EmptyState'
+import { materialsService } from '../../services/materialsService'
+import type { MaterialRecord } from '../../services/materialsService'
+import { formatDisplayNumber } from '../../utils/displayFormatting'
+import { getUserFriendlyErrorMessage } from '../../utils/errorMessages'
 
 export type MaterialType = 'main' | 'sub'
 
 export interface MaterialNode {
   id: string
   type: MaterialType
+  parentId: string | null
   isNonStock?: boolean
   returnability?: string
   materialNumber: string
   name: string
   notes?: string
   unit?: string
+  openingBalance?: number | null
+  openingWarehouseId?: string | null
   costPrice?: string
   price1?: string
   price2?: string
@@ -63,819 +62,701 @@ interface MaterialCatalogProps {
   onLoaded?: () => void
 }
 
-type FormValues = {
+const initialTree: MaterialNode[] = []
+
+// Dialog types
+interface DialogState {
+  open: boolean
+  mode: 'add-main' | 'add-sub' | 'edit' | 'delete' | 'error' | null
+  parentId?: string | null
+  nodeId?: string | null
+}
+
+interface FormData {
   returnability: string
   materialNumber: string
   name: string
-  notes: string
   unit: string
+  openingBalance?: number | string
+  openingWarehouseId?: string
   costPrice: string
   price1: string
   price2: string
   price3: string
+  notes: string
   isNonStock: boolean
 }
 
-interface DialogState {
-  open: boolean
-  mode: 'add' | 'edit' | 'message'
-  title: string
-  subtitle?: string
-  parentId?: string
-  nodeType?: MaterialType
-  node?: MaterialNode
-  message?: string
-}
-
-const initialTree: MaterialNode[] = [
-  {
-    id: 'root',
-    type: 'main',
-    materialNumber: 'ROOT-01',
-    name: 'المواد',
-    notes: 'الجذر الرئيسي للكتالوج',
-    children: [
-      {
-        id: 'main-1',
-        type: 'main',
-        returnability: 'ممتازة',
-        materialNumber: 'M-100',
-        name: 'مواد غذائية',
-        notes: 'مجموعة رئيسية',
-        children: [
-          {
-            id: 'main-2',
-            type: 'main',
-            returnability: 'مقبولة',
-            materialNumber: 'M-101',
-            name: 'حلويات',
-            notes: 'قسم الحلويات',
-            children: [
-              {
-                id: 'sub-1',
-                type: 'sub',
-                isNonStock: true,
-                returnability: 'عالية',
-                materialNumber: 'S-200',
-                name: 'شوكولا',
-                unit: 'كجم',
-                costPrice: '45',
-                price1: '60',
-                price2: '65',
-                price3: '70',
-                notes: 'مادة فرعية مثال',
-                children: [],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  },
-]
-
-const emptyFormValues: FormValues = {
+const emptyForm: FormData = {
   returnability: '',
   materialNumber: '',
   name: '',
-  notes: '',
   unit: '',
+  openingBalance: '',
+  openingWarehouseId: '',
   costPrice: '',
   price1: '',
   price2: '',
   price3: '',
+  notes: '',
   isNonStock: false,
 }
 
-const priceLabels = {
-  priceLabel1: 'priceLabel1',
-  priceLabel2: 'priceLabel2',
-  priceLabel3: 'priceLabel3',
-}
+// Legacy static options removed from runtime usage. Suggestions come from DB via `unitOptionsState`.
 
-function cloneNode(node: MaterialNode): MaterialNode {
-  return {
-    ...node,
-    children: node.children.map(cloneNode),
-  }
-}
-
-function findNodeById(nodes: MaterialNode[], id: string): MaterialNode | null {
+function findNodeById(nodes: MaterialNode[], id: string | null): MaterialNode | null {
+  if (!id) return null
   for (const node of nodes) {
-    if (node.id === id) {
-      return node
-    }
-    const child = findNodeById(node.children, id)
-    if (child) {
-      return child
-    }
+    if (node.id === id) return node
+    const found = findNodeById(node.children, id)
+    if (found) return found
   }
   return null
 }
 
-function collectNodeIds(nodes: MaterialNode[]): string[] {
-  return nodes.flatMap((node) => [node.id, ...collectNodeIds(node.children)])
+
+function countSubtree(node: MaterialNode) {
+  const counts = { main: 0, sub: 0, nonStock: 0, total: 0 }
+
+  const traverse = (current: MaterialNode) => {
+    if (current.type === 'main') {
+      counts.main += 1
+    } else {
+      counts.sub += 1
+    }
+    if (current.isNonStock) {
+      counts.nonStock += 1
+    }
+    counts.total += 1
+    current.children.forEach(traverse)
+  }
+
+  traverse(node)
+  return counts
 }
 
-function updateNodeInTree(nodes: MaterialNode[], targetId: string, updater: (node: MaterialNode) => MaterialNode): MaterialNode[] {
-  return nodes.map((node) => {
-    if (node.id === targetId) {
-      return updater(node)
-    }
-    if (node.children.length) {
-      return {
-        ...node,
-        children: updateNodeInTree(node.children, targetId, updater),
-      }
-    }
-    return node
-  })
+function hasNegativeNumericValue(value: string | number | null | undefined): boolean {
+  if (value === '' || value === null || typeof value === 'undefined') {
+    return false
+  }
+
+  const numericValue = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numericValue) && numericValue < 0
 }
 
-function addChildToParent(nodes: MaterialNode[], parentId: string, child: MaterialNode): MaterialNode[] {
-  return nodes.map((node) => {
-    if (node.id === parentId) {
-      return {
-        ...node,
-        children: [...node.children, child],
-      }
-    }
-    if (node.children.length) {
-      return {
-        ...node,
-        children: addChildToParent(node.children, parentId, child),
-      }
-    }
-    return node
-  })
+function getNodeReturnabilityDisplay(materials: MaterialNode[], node: MaterialNode | null): string {
+  if (!node) {
+    return 'لا يوجد'
+  }
+
+  const parent = node.parentId ? findNodeById(materials, node.parentId) : null
+  if (!parent) {
+    return 'لا يوجد'
+  }
+
+  return `${parent.materialNumber}-${parent.name}`
 }
 
-function removeNodeFromTree(nodes: MaterialNode[], targetId: string): MaterialNode[] {
-  return nodes.reduce<MaterialNode[]>((acc, node) => {
-    if (node.id === targetId) {
-      return acc
+export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
+  const theme = useTheme()
+  const [materials, setMaterials] = useState<MaterialNode[]>(initialTree)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [treeWidth, setTreeWidth] = useState(40)
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [dialog, setDialog] = useState<DialogState>({ open: false, mode: null })
+  const [formData, setFormData] = useState<FormData>(emptyForm)
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({})
+  const [errorMessage, setErrorMessage] = useState('')
+  const [unitOptionsState, setUnitOptionsState] = useState<string[]>([])
+  const [warehouses, setWarehouses] = useState<{id:string,name:string,status?:string}[]>([])
+  const [subMaterialAverageCost, setSubMaterialAverageCost] = useState(0)
+
+  const openingWarehouseRequired = Number(formData.openingBalance || 0) > 0
+
+  const extractUnitsFromRecords = useCallback((records: MaterialRecord[]): string[] => {
+    const flattened: MaterialRecord[] = []
+    const walk = (items: MaterialRecord[]) => {
+      for (const item of items) {
+        flattened.push(item)
+        if (item.children?.length) walk(item.children)
+      }
     }
-    acc.push({
-      ...node,
-      children: removeNodeFromTree(node.children, targetId),
-    })
-    return acc
+    walk(records)
+    const units = Array.from(new Set(flattened.map(item => (item.unit ?? '').trim()).filter(unit => unit.length > 0)))
+    return units
   }, [])
-}
-
-function getNodeChildren(nodes: MaterialNode[], parentId: string): MaterialNode[] {
-  const parent = findNodeById(nodes, parentId)
-  return parent?.children ?? []
-}
-
-function canAcceptChildren(node: MaterialNode | null): boolean {
-  if (!node) {
-    return true
-  }
-  return node.type === 'main'
-}
-
-function getNodeLabel(type: MaterialType): string {
-  switch (type) {
-    case 'main':
-      return 'مادة رئيسية'
-    case 'sub':
-      return 'مادة فرعية'
-    default:
-      return 'مادة'
-  }
-}
-
-function getNodeIcon(type: MaterialType) {
-  switch (type) {
-    case 'main':
-      return <FiFolder size={16} color="#2563EB" />
-    case 'sub':
-      return <FiBox size={16} color="#0F766E" />
-    default:
-      return <FiFileText size={16} color="#64748B" />
-  }
-}
-
-function buildFormValues(node: MaterialNode | null): FormValues {
-  if (!node) {
-    return { ...emptyFormValues }
-  }
-
-  return {
-    returnability: node.returnability ?? '',
-    materialNumber: node.materialNumber,
-    name: node.name,
-    notes: node.notes ?? '',
-    unit: node.unit ?? '',
-    costPrice: node.costPrice ?? '',
-    price1: node.price1 ?? '',
-    price2: node.price2 ?? '',
-    price3: node.price3 ?? '',
-    isNonStock: node.isNonStock ?? false,
-  }
-}
-
-function buildNodeFromValues(type: MaterialType, values: FormValues): MaterialNode {
-  const base = {
-    id: `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    type,
-    materialNumber: values.materialNumber,
-    name: values.name,
-    notes: values.notes,
-    children: [],
-  }
-
-  if (type === 'main') {
-    return {
-      ...base,
-      returnability: values.returnability,
-    }
-  }
-
-  if (type === 'sub') {
-    return {
-      ...base,
-      returnability: values.returnability,
-      unit: values.unit,
-      costPrice: values.costPrice,
-      price1: values.price1,
-      price2: values.price2,
-      price3: values.price3,
-      isNonStock: values.isNonStock,
-    }
-  }
-
-  return {
-    ...base,
-  }
-}
-
-function validateForm(values: FormValues, type: MaterialType, parentId: string, tree: MaterialNode[], currentNodeId?: string): string[] {
-  const errors: string[] = []
-
-  if (type === 'main' || type === 'sub') {
-    if (!values.returnability.trim()) {
-      errors.push('يرجى إدخال عائدية المادة.')
-    }
-    if (!values.materialNumber.trim()) {
-      errors.push('يرجى إدخال رقم المادة.')
-    }
-    if (!values.name.trim()) {
-      errors.push('يرجى إدخال اسم المادة.')
-    }
-  } else if (!values.name.trim()) {
-    errors.push('يرجى إدخال اسم المادة.')
-  }
-
-  if ((type === 'main' || type === 'sub') && values.materialNumber.trim()) {
-    const siblings = getNodeChildren(tree, parentId)
-    const allNodes = collectNodeIds(tree)
-    const existingNumberNode = tree.flatMap((node) => [node, ...node.children]).find((node) => node.materialNumber === values.materialNumber.trim() && node.id !== currentNodeId)
-    if (existingNumberNode) {
-      errors.push('رقم المادة موجود بالفعل.')
-    }
-    if (siblings.some((node) => node.name.trim() === values.name.trim() && node.id !== currentNodeId)) {
-      errors.push('اسم المادة موجود بالفعل تحت نفس الأب.')
-    }
-
-    if (allNodes.length === 0) {
-      return errors
-    }
-  }
-
-  if ((type === 'main' || type === 'sub') && values.name.trim()) {
-    const siblings = getNodeChildren(tree, parentId)
-    if (siblings.some((node) => node.name.trim() === values.name.trim() && node.id !== currentNodeId)) {
-      errors.push('اسم المادة موجود بالفعل تحت نفس الأب.')
-    }
-  }
-
-  if (type === 'sub') {
-    if (!values.unit.trim()) {
-      errors.push('يرجى إدخال الوحدة.')
-    }
-    if (!values.costPrice.trim()) {
-      errors.push('يرجى إدخال سعر التكلفة.')
-    }
-  }
-
-  return errors
-}
-
-function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
-  const [tree, setTree] = useState<MaterialNode[]>(initialTree)
-  const [selectedNodeId, setSelectedNodeId] = useState<string>('root')
-  const [expandedIds, setExpandedIds] = useState<string[]>(['root'])
-  const [searchTerm, setSearchTerm] = useState('')
-  const [loading, setLoading] = useState(true)
-  const [leftWidth, setLeftWidth] = useState(410)
-  const [resizing, setResizing] = useState(false)
-  const [contextMenu, setContextMenu] = useState<{ mouseX: number; mouseY: number; nodeId: string } | null>(null)
-  const [dialog, setDialog] = useState<DialogState>({ open: false, mode: 'add', title: '' })
-  const [formValues, setFormValues] = useState<FormValues>({ ...emptyFormValues })
-  const [errors, setErrors] = useState<string[]>([])
-  const [clipboard, setClipboard] = useState<{ node: MaterialNode; mode: 'copy' | 'cut' } | null>(null)
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setLoading(false)
+    const timer = setTimeout(() => {
       onLoaded?.()
-    }, 650)
-    return () => window.clearTimeout(timer)
+    }, 300)
+    return () => clearTimeout(timer)
   }, [onLoaded])
 
+  const convertMaterialRecords = useCallback(function convertMaterialRecords(records: MaterialRecord[]): MaterialNode[] {
+    return records.map((r) => ({
+      id: r.id,
+      type: r.type,
+      parentId: r.parentId ?? null,
+      isNonStock: r.isNonStock ?? false,
+      returnability: r.returnability ?? '',
+      materialNumber: r.materialNumber,
+      name: r.name,
+      notes: r.notes ?? '',
+      unit: r.unit ?? '',
+      openingBalance: r.openingBalance ?? null,
+      openingWarehouseId: r.openingWarehouseId ?? null,
+      costPrice: r.costPrice ?? '',
+      price1: r.price1 ?? '',
+      price2: r.price2 ?? '',
+      price3: r.price3 ?? '',
+      children: [],
+    }))
+  }, [])
+
+  const buildTreeFromRecords = useCallback((records: MaterialRecord[]): MaterialNode[] => {
+    const flattenedRecords: MaterialRecord[] = []
+
+    const walkRecords = (items: MaterialRecord[]) => {
+      for (const item of items) {
+        flattenedRecords.push(item)
+        if (Array.isArray(item.children) && item.children.length > 0) {
+          walkRecords(item.children)
+        }
+      }
+    }
+
+    walkRecords(records)
+
+    const nodes = convertMaterialRecords(flattenedRecords)
+    const byId = new Map<string, MaterialNode>()
+
+    for (const node of nodes) {
+      byId.set(node.id, node)
+    }
+
+    const roots: MaterialNode[] = []
+
+    for (const node of nodes) {
+      const parentId = node.parentId
+      if (parentId && byId.has(parentId)) {
+        const parent = byId.get(parentId)
+        if (parent) {
+          parent.children.push(node)
+        }
+      } else {
+        roots.push(node)
+      }
+    }
+
+    return roots
+  }, [convertMaterialRecords])
+
   useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
-      if (!resizing) {
+    let cancelled = false
+
+    const loadMaterials = async () => {
+      try {
+        const persisted = await materialsService.listMaterials()
+        if (!cancelled) {
+          setMaterials(buildTreeFromRecords(persisted))
+
+          // extract unit suggestions
+          const flattened: MaterialRecord[] = []
+
+          const walk = (items: MaterialRecord[]) => {
+            for (const item of items) {
+              flattened.push(item)
+
+              if (item.children?.length) {
+                walk(item.children)
+              }
+            }
+          }
+
+          walk(persisted)
+
+              const units = Array.from(
+                new Set(
+                  flattened
+                    .map((item) => (item.unit ?? '').trim())
+                    .filter((unit) => unit.length > 0)
+                )
+              )
+
+              setUnitOptionsState(units)
+        }
+      } catch (error) {
+        console.error('FAILED_TO_LOAD_MATERIALS_FROM_SQLITE', error)
+      }
+    }
+
+    void loadMaterials()
+
+    return () => {
+      cancelled = true
+    }
+  }, [buildTreeFromRecords])
+
+  const selectedNode = useMemo(() => {
+    return findNodeById(materials, selectedNodeId)
+  }, [selectedNodeId, materials])
+
+  const selectedNodeReturnability = useMemo(() => {
+    return getNodeReturnabilityDisplay(materials, selectedNode)
+  }, [materials, selectedNode])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadAverageCost = async () => {
+      if (!selectedNode || selectedNode.type !== 'sub' || selectedNode.isNonStock) {
+        setSubMaterialAverageCost(0)
         return
       }
-      const nextWidth = Math.min(Math.max(event.clientX - 24, 320), 720)
-      setLeftWidth(nextWidth)
-    }
 
-    const handleMouseUp = () => setResizing(false)
+      try {
+        const balances = await inventoryService.getBalancesByMaterial(selectedNode.id)
+        if (cancelled) return
 
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [resizing])
-
-  const selectedNode = useMemo(() => findNodeById(tree, selectedNodeId) ?? null, [selectedNodeId, tree])
-
-  const visibleMatches = useMemo(() => {
-    const normalized = searchTerm.trim().toLowerCase()
-    if (!normalized) {
-      return []
-    }
-
-    const matches: string[] = []
-    const visit = (nodes: MaterialNode[]) => {
-      nodes.forEach((node) => {
-        const haystack = `${node.name} ${node.materialNumber}`.toLowerCase()
-        if (haystack.includes(normalized)) {
-          matches.push(node.id)
+        const totalQuantity = balances.reduce((sum, balance) => sum + Number(balance.quantity ?? 0), 0)
+        if (totalQuantity <= 0) {
+          setSubMaterialAverageCost(0)
+          return
         }
-        visit(node.children)
-      })
+
+        const weightedTotal = balances.reduce((sum, balance) => {
+          return sum + Number(balance.quantity ?? 0) * Number(balance.averageCost ?? 0)
+        }, 0)
+
+        setSubMaterialAverageCost(weightedTotal / totalQuantity)
+      } catch (error) {
+        console.error('FAILED_TO_LOAD_SUB_MATERIAL_AVERAGE_COST', error)
+        if (!cancelled) {
+          setSubMaterialAverageCost(0)
+        }
+      }
     }
 
-    visit(tree)
-    return matches
-  }, [searchTerm, tree])
+    void loadAverageCost()
 
-  const openAddDialog = (parentId: string, type: MaterialType) => {
-    const parent = findNodeById(tree, parentId)
-    if (!canAcceptChildren(parent)) {
-      setDialog({
-        open: true,
-        mode: 'message',
-        title: 'لا يمكن إضافة عناصر فرعية',
-        message: 'المواد الفرعية والمادة غير المخزنية لا تسمح بإضافة عناصر فرعية. يرجى اختيار مادة رئيسية أو الجذر لإضافة عنصر جديد.',
-      })
-      return
+    return () => {
+      cancelled = true
     }
+  }, [selectedNode])
 
+  const createNodeId = useCallback((type: MaterialType) => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `${type}-${crypto.randomUUID()}`
+    }
+    return `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  }, [])
+
+
+  // Validate form
+  const validateForm = useCallback(
+    (data: FormData, nodeType: 'main' | 'sub'): Record<string, string> => {
+      const errors: Record<string, string> = {}
+
+      if (!data.name.trim()) errors.name = 'اسم المادة مطلوب'
+      if (!data.materialNumber.trim()) errors.materialNumber = 'رقم المادة مطلوب'
+
+        if (nodeType === 'sub') {
+          if (typeof data.unit !== 'string' || !data.unit.trim()) errors.unit = 'الوحدة مطلوبة'
+          // opening warehouse required only when openingBalance > 0
+          const ob = typeof data.openingBalance === 'number' ? data.openingBalance : (data.openingBalance ? Number(data.openingBalance) : 0)
+          if (ob > 0 && !data.openingWarehouseId) errors.openingWarehouseId = 'يجب اختيار مخزن للرصد الافتتاحي.'
+        }
+
+      return errors
+    },
+    []
+  )
+
+  // Dialog handlers
+  const openAddMainDialog = useCallback(() => {
+    const parent = selectedNode
+    const parentId = parent ? parent.id : null
+    const returnability = parent ? `${parent.materialNumber}-${parent.name}` : ''
+
+    setFormData({ ...emptyForm, returnability })
+    setFormErrors({})
     setDialog({
       open: true,
-      mode: 'add',
-      title: type === 'main' ? 'إضافة مادة رئيسية' : type === 'sub' ? 'إضافة مادة فرعية' : 'إضافة مادة لا مخزنية',
-      subtitle: 'أدخل بيانات المادة الجديدة',
+      mode: 'add-main',
       parentId,
-      nodeType: type,
     })
-    setErrors([])
-    setFormValues({ ...emptyFormValues })
-  }
+  }, [selectedNode])
 
-  const openEditDialog = (node: MaterialNode) => {
+  const openAddSubDialog = useCallback(() => {
+    if (selectedNode?.type !== 'main') {
+      setErrorMessage('يجب تحديد مادة رئيسية أولاً لإضافة مادة فرعية.')
+      setDialog({ open: true, mode: 'error' })
+      return
+    }
+    const prefillReturnability = `${selectedNode.materialNumber}-${selectedNode.name}`
+    setFormData({ ...emptyForm, returnability: prefillReturnability })
+    setFormErrors({})
+    setDialog({
+      open: true,
+      mode: 'add-sub',
+      parentId: selectedNode.id,
+    })
+    // load warehouses for opening warehouse select
+    void (async () => {
+      try {
+        const wh = await inventoryService.listWarehouses()
+        setWarehouses(wh.filter(w => w.status === 'active'))
+      } catch (e) {
+        console.error('FAILED_TO_LOAD_WAREHOUSES', e)
+      }
+    })()
+  }, [selectedNode])
+
+  const openEditDialog = useCallback(() => {
+    if (!selectedNode) return
+
+    const data: FormData = {
+      returnability: getNodeReturnabilityDisplay(materials, selectedNode),
+      materialNumber: selectedNode.materialNumber,
+      name: selectedNode.name,
+      unit: selectedNode.unit || '',
+      openingBalance: selectedNode.openingBalance ?? '',
+      openingWarehouseId: selectedNode.openingWarehouseId ?? '',
+      costPrice: selectedNode.costPrice || '',
+      price1: selectedNode.price1 || '',
+      price2: selectedNode.price2 || '',
+      price3: selectedNode.price3 || '',
+      notes: selectedNode.notes || '',
+      isNonStock: selectedNode.isNonStock || false,
+    }
+
+    setFormData(data)
+    setFormErrors({})
     setDialog({
       open: true,
       mode: 'edit',
-      title: 'تعديل المادة',
-      subtitle: node.name,
-      node,
-      nodeType: node.type,
+      nodeId: selectedNodeId,
     })
-    setErrors([])
-    setFormValues(buildFormValues(node))
-  }
+  }, [materials, selectedNode, selectedNodeId])
 
-  const handleSubmit = () => {
-    const activeType = dialog.nodeType ?? selectedNode?.type ?? 'main'
-    const parentId = dialog.parentId ?? selectedNode?.id ?? 'root'
-    const currentNodeId = dialog.node?.id
+  const openDeleteDialog = useCallback(() => {
+    setDialog({
+      open: true,
+      mode: 'delete',
+      nodeId: selectedNodeId,
+    })
+  }, [selectedNodeId])
 
-    const validationErrors = validateForm(formValues, activeType, parentId, tree, currentNodeId)
-    if (validationErrors.length) {
-      setErrors(validationErrors)
+  // Form submission
+  const handleSaveMain = useCallback(async () => {
+    const errors = validateForm(formData, 'main')
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors)
       return
     }
 
-    if (dialog.mode === 'edit' && dialog.node) {
-      setTree((currentTree) => updateNodeInTree(currentTree, dialog.node!.id, (node) => ({ ...node, ...buildNodeFromValues(dialog.node!.type, formValues), id: node.id, children: node.children })))
-    } else {
-      const newNode = buildNodeFromValues(activeType, formValues)
-      setTree((currentTree) => addChildToParent(currentTree, parentId, newNode))
-      setSelectedNodeId(newNode.id)
-    }
-
-    setDialog({ open: false, mode: 'add', title: '' })
-    setErrors([])
-  }
-
-  const handleDelete = (nodeId: string) => {
-    setTree((currentTree) => removeNodeFromTree(currentTree, nodeId))
-    if (selectedNodeId === nodeId) {
-      setSelectedNodeId('root')
-    }
-  }
-
-  const handleCopy = (node: MaterialNode) => {
-    setClipboard({ node: cloneNode(node), mode: 'copy' })
-  }
-
-  const handleCut = (node: MaterialNode) => {
-    setClipboard({ node: cloneNode(node), mode: 'cut' })
-  }
-
-  const handlePaste = (targetId: string) => {
-    if (!clipboard) {
-      return
-    }
-    const targetNode = findNodeById(tree, targetId)
-    if (!canAcceptChildren(targetNode)) {
-      setDialog({
-        open: true,
-        mode: 'message',
-        title: 'لا يمكن لصق العنصر هنا',
-        message: 'لا يمكن إلحاق عناصر فرعية إلى هذا النوع من المواد. يرجى اختيار مادة رئيسية أو الجذر.',
-      })
+    if (
+      hasNegativeNumericValue(formData.openingBalance) ||
+      hasNegativeNumericValue(formData.costPrice) ||
+      hasNegativeNumericValue(formData.price1) ||
+      hasNegativeNumericValue(formData.price2) ||
+      hasNegativeNumericValue(formData.price3)
+    ) {
+      setErrorMessage('لا يمكن إدخال قيمة سالبة.')
+      setDialog({ open: true, mode: 'error' })
       return
     }
 
-    const clonedNode = cloneNode(clipboard.node)
-    const newId = `${clonedNode.type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-    const pastedNode = { ...clonedNode, id: newId }
-
-    setTree((currentTree) => addChildToParent(currentTree, targetId, pastedNode))
-    setSelectedNodeId(newId)
-
-    if (clipboard.mode === 'cut') {
-      setTree((currentTree) => removeNodeFromTree(currentTree, clipboard.node.id))
+    const payload = {
+      id: createNodeId('main'),
+      type: 'main' as const,
+      parentId: dialog.parentId ?? null,
+      returnability: formData.returnability,
+      materialNumber: formData.materialNumber,
+      name: formData.name,
+      notes: formData.notes,
+      isNonStock: false,
     }
-    setClipboard(null)
-    setContextMenu(null)
-  }
 
-  const handleRefresh = () => {
-    setSearchTerm('')
-    setExpandedIds(['root'])
-    setSelectedNodeId('root')
-  }
+    try {
+      const persisted = await materialsService.createMaterial(payload)
+      setMaterials(buildTreeFromRecords(persisted))
+      // Update unit suggestions only after successful save and persisted data
+      try {
+        const units = extractUnitsFromRecords(persisted)
+        setUnitOptionsState(units)
+      } catch (e) {
+        console.error('FAILED_TO_EXTRACT_UNITS_AFTER_CREATE', e)
+      }
+      if (payload.parentId) {
+        setExpandedIds((prev) => {
+          const next = new Set(prev)
+          next.add(payload.parentId as string)
+          return next
+        })
+      }
+      setSelectedNodeId(payload.id ?? null)
+      setDialog({ open: false, mode: null })
+      setFormErrors({})
+    } catch (error) {
+      console.error('FAILED_TO_CREATE_MAIN_MATERIAL', error)
+      setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حفظ المادة. يرجى المحاولة مرة أخرى.'))
+      setDialog({ open: true, mode: 'error' })
+    }
+  }, [formData, dialog, validateForm, createNodeId, buildTreeFromRecords, extractUnitsFromRecords])
 
-  const toggleNode = (nodeId: string) => {
-    setExpandedIds((current) => (current.includes(nodeId) ? current.filter((item) => item !== nodeId) : [...current, nodeId]))
-  }
+  const handleSaveSub = useCallback(async () => {
+    const errors = validateForm(formData, 'sub')
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors)
+      return
+    }
 
-  const expandAll = () => {
-    const allIds = collectNodeIds(tree)
-    setExpandedIds(allIds)
-  }
+    if (
+      hasNegativeNumericValue(formData.openingBalance) ||
+      hasNegativeNumericValue(formData.costPrice) ||
+      hasNegativeNumericValue(formData.price1) ||
+      hasNegativeNumericValue(formData.price2) ||
+      hasNegativeNumericValue(formData.price3)
+    ) {
+      setErrorMessage('لا يمكن إدخال قيمة سالبة.')
+      setDialog({ open: true, mode: 'error' })
+      return
+    }
 
-  const collapseAll = () => {
-    setExpandedIds([])
-  }
+    const payload = {
+      id: createNodeId('sub'),
+      type: 'sub' as const,
+      parentId: dialog.parentId ?? null,
+      returnability: formData.returnability,
+      materialNumber: formData.materialNumber,
+      name: formData.name,
+      unit: formData.unit,
+      openingBalance: formData.openingBalance === '' ? null : (typeof formData.openingBalance === 'number' ? formData.openingBalance : Number(formData.openingBalance)),
+      openingWarehouseId: formData.openingWarehouseId || null,
+      costPrice: formData.costPrice,
+      price1: formData.price1,
+      price2: formData.price2,
+      price3: formData.price3,
+      notes: formData.notes,
+      isNonStock: formData.isNonStock,
+    }
 
-  return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Paper sx={{ borderRadius: 4, p: 3, background: '#fff', boxShadow: '0 10px 20px rgba(15, 23, 42, 0.08)' }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, mb: 2.4 }}>
-          <Box>
-            <Typography sx={{ fontWeight: 800, fontSize: 17 }}>كتالوج المواد</Typography>
-            <Typography sx={{ color: 'text.secondary', fontSize: 13, mt: 0.3 }}>شجرة هرمية مع نموذج تحرير متقدم</Typography>
-          </Box>
-          <TreeToolbar onExpandAll={expandAll} onCollapseAll={collapseAll} onRefresh={handleRefresh} />
-        </Box>
+    try {
+      const persisted = await materialsService.createMaterial(payload)
+      setMaterials(buildTreeFromRecords(persisted))
+      if (payload.parentId) {
+        setExpandedIds((prev) => {
+          const next = new Set(prev)
+          next.add(payload.parentId as string)
+          return next
+        })
+      }
+      setSelectedNodeId(payload.id ?? null)
+      setDialog({ open: false, mode: null })
+      setFormErrors({})
+    } catch (error) {
+      console.error('FAILED_TO_CREATE_SUB_MATERIAL', error)
+      setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حفظ المادة. يرجى المحاولة مرة أخرى.'))
+      setDialog({ open: true, mode: 'error' })
+    }
+  }, [formData, dialog, validateForm, createNodeId, buildTreeFromRecords])
 
-        {loading ? (
-          <Box sx={{ display: 'flex', gap: 2 }}>
-            <Skeleton variant="rounded" height={280} sx={{ flex: 1, borderRadius: 3 }} />
-            <Skeleton variant="rounded" height={280} sx={{ flex: 1, borderRadius: 3 }} />
-          </Box>
-        ) : (
-          <Box sx={{ display: 'flex', gap: 2, alignItems: 'stretch', minHeight: 560 }}>
-            <Box sx={{ flex: `0 0 ${leftWidth}px`, minWidth: 320, maxWidth: 720, display: 'flex' }}>
-              <MaterialDetailsPanel
-                selectedNode={selectedNode}
-                onAddChild={openAddDialog}
-                onEdit={openEditDialog}
-                onDelete={handleDelete}
-                onCopy={handleCopy}
-                onCut={handleCut}
-                onPaste={handlePaste}
-                onRefresh={handleRefresh}
-                clipboard={clipboard}
-              />
-            </Box>
-            <Box
-              onMouseDown={() => setResizing(true)}
-              sx={{ width: 12, cursor: 'col-resize', position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
-              <Box sx={{ width: 3, height: '72%', borderRadius: 999, bgcolor: 'rgba(15,23,42,0.12)' }} />
-            </Box>
-            <Box sx={{ flex: 1, minWidth: 320 }}>
-              <MaterialTree
-                searchTerm={searchTerm}
-                onSearchChange={setSearchTerm}
-                tree={tree}
-                expandedIds={expandedIds}
-                toggleNode={toggleNode}
-                selectedNodeId={selectedNodeId}
-                setSelectedNodeId={setSelectedNodeId}
-                visibleMatches={visibleMatches}
-                onContextMenu={(event, nodeId) => {
-                  event.preventDefault()
-                  setContextMenu({ mouseX: event.clientX, mouseY: event.clientY, nodeId })
-                  setSelectedNodeId(nodeId)
-                }}
-                onAddChild={openAddDialog}
-                onEdit={openEditDialog}
-                onDelete={handleDelete}
-                onCopy={handleCopy}
-                onCut={handleCut}
-                onPaste={handlePaste}
-                onRefresh={handleRefresh}
-              />
-            </Box>
-          </Box>
-        )}
-      </Paper>
+  const handleSaveEdit = useCallback(async () => {
+    if (!dialog.nodeId) return
 
-      <MaterialDialog
-        open={dialog.open}
-        title={dialog.title}
-        subtitle={dialog.subtitle}
-        onClose={() => {
-          setDialog({ open: false, mode: 'add', title: '' })
-          setErrors([])
-        }}
-        onConfirm={handleSubmit}
-        confirmLabel={dialog.mode === 'message' ? 'حسناً' : 'حفظ'}
-      >
-        {dialog.mode === 'message' ? (
-          <Alert severity="info" sx={{ borderRadius: 3 }}>{dialog.message}</Alert>
-        ) : (
-          <>
-            {errors.length > 0 && <ValidationMessage messages={errors} />}
-            <MaterialForm
-              type={dialog.nodeType ?? 'main'}
-              values={formValues}
-              onChange={setFormValues}
-              priceLabels={priceLabels}
-            />
-          </>
-        )}
-      </MaterialDialog>
+    const node = findNodeById(materials, dialog.nodeId || null)
+    if (!node) return
 
-      <ContextMenu
-        anchor={{ x: contextMenu?.mouseX ?? 0, y: contextMenu?.mouseY ?? 0 }}
-        open={Boolean(contextMenu)}
-        onClose={() => setContextMenu(null)}
-        selectedNode={selectedNode}
-        onAddChild={openAddDialog}
-        onEdit={openEditDialog}
-        onDelete={handleDelete}
-        onCopy={handleCopy}
-        onCut={handleCut}
-        onPaste={handlePaste}
-        onRefresh={handleRefresh}
-        clipboard={clipboard}
-        nodeId={contextMenu?.nodeId ?? selectedNodeId}
-      />
-    </Box>
+    const errors = validateForm(formData, node.type)
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors)
+      return
+    }
+
+    const payload = {
+      returnability: formData.returnability,
+      materialNumber: formData.materialNumber,
+      name: formData.name,
+      notes: formData.notes,
+      type: node.type,
+      parentId: node.parentId ?? null,
+      isNonStock: node.type === 'sub' ? formData.isNonStock : false,
+      unit: formData.unit,
+      openingBalance: formData.openingBalance === '' ? null : (typeof formData.openingBalance === 'number' ? formData.openingBalance : Number(formData.openingBalance)),
+      openingWarehouseId: formData.openingWarehouseId || null,
+      costPrice: formData.costPrice,
+      price1: formData.price1,
+      price2: formData.price2,
+      price3: formData.price3,
+    }
+
+    try {
+      const persisted = await materialsService.updateMaterial(dialog.nodeId, payload)
+      setMaterials(buildTreeFromRecords(persisted))
+      try {
+        const units = extractUnitsFromRecords(persisted)
+        setUnitOptionsState(units)
+      } catch (e) {
+        console.error('FAILED_TO_EXTRACT_UNITS_AFTER_UPDATE', e)
+      }
+      setDialog({ open: false, mode: null })
+      setFormErrors({})
+    } catch (error) {
+      console.error('FAILED_TO_UPDATE_MATERIAL', error)
+      setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر تحديث المادة. يرجى المحاولة مرة أخرى.'))
+      setDialog({ open: true, mode: 'error' })
+    }
+  }, [dialog.nodeId, formData, validateForm, materials, buildTreeFromRecords, extractUnitsFromRecords])
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!dialog.nodeId) return
+
+    try {
+      const persisted = await materialsService.deleteMaterial(dialog.nodeId)
+      setMaterials(buildTreeFromRecords(persisted))
+      try {
+        const units = extractUnitsFromRecords(persisted)
+        setUnitOptionsState(units)
+      } catch (e) {
+        console.error('FAILED_TO_EXTRACT_UNITS_AFTER_DELETE', e)
+      }
+      setDialog({ open: false, mode: null })
+    } catch (error) {
+      console.error('FAILED_TO_DELETE_MATERIAL', error)
+      setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حذف المادة. يرجى المحاولة مرة أخرى.'))
+      setDialog({ open: true, mode: 'error' })
+    }
+  }, [dialog.nodeId, buildTreeFromRecords, extractUnitsFromRecords])
+
+  const handleFormChange = useCallback(
+    (field: keyof FormData, value: FormData[keyof FormData]) => {
+      setFormData((prev) => ({ ...prev, [field]: value }))
+      if (formErrors[field]) {
+        setFormErrors((prev) => {
+          const newErrors = { ...prev }
+          delete newErrors[field]
+          return newErrors
+        })
+      }
+    },
+    [formErrors]
   )
-}
 
-interface TreePanelProps {
-  searchTerm: string
-  onSearchChange: (value: string) => void
-  tree: MaterialNode[]
-  expandedIds: string[]
-  toggleNode: (nodeId: string) => void
-  selectedNodeId: string
-  setSelectedNodeId: (nodeId: string) => void
-  visibleMatches: string[]
-  onContextMenu: (event: React.MouseEvent<HTMLElement>, nodeId: string) => void
-  onAddChild: (parentId: string, type: MaterialType) => void
-  onEdit: (node: MaterialNode) => void
-  onDelete: (nodeId: string) => void
-  onCopy: (node: MaterialNode) => void
-  onCut: (node: MaterialNode) => void
-  onPaste: (nodeId: string) => void
-  onRefresh: () => void
-}
-
-interface TreeToolbarProps {
-  onExpandAll: () => void
-  onCollapseAll: () => void
-  onRefresh: () => void
-}
-
-function TreeToolbar({ onExpandAll, onCollapseAll, onRefresh }: TreeToolbarProps) {
-  const theme = useTheme()
-
-  return (
-    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-      <Tooltip title="توسيع الكل" placement="bottom">
-        <IconButton aria-label="توسيع الكل" onClick={onExpandAll} size="small" sx={{ bgcolor: 'rgba(37,99,235,0.08)', color: theme.palette.primary.main, border: '1px solid rgba(37, 99, 235, 0.12)' }}>
-          <FiMaximize2 size={16} />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="طي الكل" placement="bottom">
-        <IconButton aria-label="طي الكل" onClick={onCollapseAll} size="small" sx={{ bgcolor: 'rgba(15,23,42,0.04)', color: '#334155', border: '1px solid rgba(15, 23, 42, 0.08)' }}>
-          <FiMinimize2 size={16} />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="تحديث" placement="bottom">
-        <IconButton aria-label="تحديث" onClick={onRefresh} size="small" sx={{ bgcolor: 'rgba(15,23,42,0.04)', color: '#334155', border: '1px solid rgba(15, 23, 42, 0.08)' }}>
-          <FiRefreshCw size={16} />
-        </IconButton>
-      </Tooltip>
-    </Box>
+  const deleteCounts = useMemo(
+    () => (selectedNode ? countSubtree(selectedNode) : null),
+    [selectedNode]
   )
-}
 
-interface TreeNodeProps {
-  node: MaterialNode
-  depth: number
-  isExpanded: boolean
-  isSelected: boolean
-  isMatch: boolean
-  onToggle: (nodeId: string) => void
-  onSelect: (nodeId: string) => void
-  onContextMenu: (event: React.MouseEvent<HTMLElement>, nodeId: string) => void
-}
+  const toggleNode = useCallback((nodeId: string) => {
+    setExpandedIds((prev) => {
+      const newSet = new Set(prev)
+      if (newSet.has(nodeId)) {
+        newSet.delete(nodeId)
+      } else {
+        newSet.add(nodeId)
+      }
+      return newSet
+    })
+  }, [])
 
-function TreeNode({ node, depth, isExpanded, isSelected, isMatch, onToggle, onSelect, onContextMenu }: TreeNodeProps) {
-  const theme = useTheme()
-  const hasChildren = node.children.length > 0
-  const iconColor = node.type === 'main' ? theme.palette.primary.main : node.type === 'sub' ? '#0F766E' : '#64748B'
-  const indent = depth * 24
+  const canAddSubMaterial = selectedNode?.type === 'main'
 
-  return (
-    <Box sx={{ position: 'relative', pl: `${indent}px`, pr: 0.75, py: 0.15, width: '100%', minWidth: 0 }}>
-      {depth > 0 && (
-        <Box
-          sx={{
-            position: 'absolute',
-            top: -10,
-            bottom: 20,
-            left: 12 + (depth - 1) * 24,
-            width: 1,
-            // bgcolor: 'rgba(148, 163, 184, 0.32)',
-          }}
-        />
-      )}
-
-      <motion.div layout initial={{ opacity: 0, y: -3 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18, ease: 'easeOut' }}>
-        <Box
-          role="button"
-          tabIndex={0}
-          onClick={() => onSelect(node.id)}
-          onContextMenu={(event) => onContextMenu(event, node.id)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              onSelect(node.id)
-            }
-          }}
-          sx={{
-            position: 'relative',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            minHeight: 40,
-            px: 0.75,
-            borderRadius: 1.75,
-            bgcolor: isSelected ? 'rgba(37,99,235,0.12)' : 'transparent',
-            transition: 'all 0.18s ease',
-            cursor: 'pointer',
-            overflow: 'hidden',
-            width: '100%',
-            minWidth: 0,
-            '&:hover': {
-              bgcolor: isSelected ? ' rgba(37,99,235,0.05))' : 'rgba(37,99,235,0.05)',
-            },
-          }}
-        >
-          <Box sx={{ width: 20, minWidth: 20, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
-            {hasChildren ? (
-              <IconButton
-                aria-label={isExpanded ? 'طي الفرع' : 'توسيع الفرع'}
-                size="small"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onToggle(node.id)
-                }}
-                sx={{
-                  p: 0,
-                  minWidth: 18,
-                  width: 18,
-                  height: 18,
-                  color: '#334155',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 0,
-                  bgcolor: 'transparent',
-                  '&:hover': {
-                    bgcolor: 'transparent',
-                    color: theme.palette.primary.main,
-                  },
-                }}
-              >
-                <motion.span animate={{ rotate: isExpanded ? 90 : 0 }} transition={{ duration: 0.18, ease: 'easeOut' }}>
-                  <FiChevronRight size={18} />
-                </motion.span>
-              </IconButton>
-            ) : (
-              <Box sx={{ width: 18, height: 18, display: 'grid', placeItems: 'center' }}>
-                <Box sx={{ width: 4, height: 4, borderRadius: '50%', bgcolor: 'rgba(148,163,184,0.55)' }} />
-              </Box>
-            )}
-          </Box>
-
-          <Box
-            sx={{
-              width: 30,
-              height: 30,
-              display: 'grid',
-              placeItems: 'center',
-              color: iconColor,
-              flexShrink: 0,
-            }}
-          >
-            {getNodeIcon(node.type)}
-          </Box>
-
-          <Box sx={{ flexGrow: 1, minWidth: 0, overflow: 'hidden' }}>
-            <Typography sx={{ fontWeight: 700, fontSize: 13.2, lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.name}</Typography>
-            <Typography sx={{ fontSize: 11.6, color: 'text.secondary', mt: 0.05, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{node.materialNumber}</Typography>
-          </Box>
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0, ml: 0.2 }}>
-            {isMatch && <Chip label="نتيجة" size="small" color="primary" variant="outlined" />}
-          </Box>
-        </Box>
-      </motion.div>
-    </Box>
-  )
-}
-
-function MaterialTree({
-  searchTerm,
-  onSearchChange,
-  tree,
-  expandedIds,
-  toggleNode,
-  selectedNodeId,
-  setSelectedNodeId,
-  visibleMatches,
-  onContextMenu,
-}: TreePanelProps) {
   const renderTree = (nodes: MaterialNode[], depth = 0) => {
     return nodes.map((node) => {
-      const isExpanded = expandedIds.includes(node.id) || node.children.length === 0
-      const isMatch = visibleMatches.includes(node.id)
+      const nodeChildren = Array.isArray(node.children) ? node.children : []
+      const isExpanded = expandedIds.has(node.id)
       const isSelected = selectedNodeId === node.id
-      const hasChildren = node.children.length > 0
+      const hasChildren = nodeChildren.length > 0
       const showChildren = hasChildren && isExpanded
 
       return (
         <Box key={node.id}>
-          <TreeNode
-            node={node}
-            depth={depth}
-            isExpanded={isExpanded}
-            isSelected={isSelected}
-            isMatch={isMatch}
-            onToggle={toggleNode}
-            onSelect={setSelectedNodeId}
-            onContextMenu={onContextMenu}
-          />
+          <Box
+            sx={{
+              pl: `${depth * 24}px`,
+              py: 0.5,
+              pr: 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+            }}
+          >
+            {hasChildren ? (
+              <motion.button
+                onClick={(event) => {
+                  event.stopPropagation()
+                  toggleNode(node.id)
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 20,
+                  height: 20,
+                  color: theme.palette.primary.main,
+                }}
+                animate={{ rotate: isExpanded ? 90 : 0 }}
+                transition={{ duration: 0.15 }}
+              >
+                <FiChevronRight size={18} />
+              </motion.button>
+            ) : (
+              <Box sx={{ width: 20 }} />
+            )}
+
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              {node.type === 'main' && <FiFolder size={16} color={theme.palette.primary.main} />}
+              {node.type === 'sub' && !node.isNonStock && <FiBox size={16} color="#0F766E" />}
+              {node.type === 'sub' && node.isNonStock && <FiFileText size={16} color="#64748B" />}
+            </Box>
+
+            <Box
+              onClick={(event) => {
+                event.stopPropagation()
+                setSelectedNodeId(node.id)
+              }}
+              sx={{
+                flex: 1,
+                p: 1,
+                borderRadius: 1,
+                cursor: 'pointer',
+                bgcolor:
+                  isSelected
+                    ? 'rgba(37,99,235,0.12)'
+                    : 'transparent',
+                '&:hover': { bgcolor: 'rgba(37,99,235,0.06)' },
+              }}
+            >
+              <Typography
+                sx={{
+                  fontWeight: isSelected ? 700 : 600,
+                  fontSize: 13,
+                  lineHeight: 1.3,
+                }}
+              >
+                {node.name}
+              </Typography>
+              <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
+                {node.materialNumber}
+              </Typography>
+            </Box>
+          </Box>
+
           <AnimatePresence initial={false}>
             {showChildren && (
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.2, ease: 'easeOut' }}
+                transition={{ duration: 0.15 }}
               >
-                <Box sx={{ pt: 0.2, pb: 0.2 }}>{renderTree(node.children, depth + 1)}</Box>
+                {renderTree(nodeChildren, depth + 1)}
               </motion.div>
             )}
           </AnimatePresence>
@@ -885,328 +766,832 @@ function MaterialTree({
   }
 
   return (
-    <Box sx={{ borderRadius: 4, p: 2.2, bgcolor: 'rgba(248,250,252,0.92)', height: '100%', display: 'flex', flexDirection: 'column', border: '1px solid rgba(15, 23, 42, 0.06)', minWidth: 0 }}>
-      <SearchTree value={searchTerm} onChange={onSearchChange} />
-      <Box sx={{ padding: '16px', overflowY: 'auto', overflowX: 'hidden', flex: 1, pr: 0.5, py: 0.4, minWidth: 0 }}>
-        {tree.length === 0 ? (
-          <EmptyState title="لا توجد مواد بعد" description="ابدأ بإضافة مادة رئيسية أو فرعية" />
-        ) : (
-          <Box sx={{ width: '100%', minWidth: 0 }}>{renderTree(tree)}</Box>
-        )}
-      </Box>
-    </Box>
-  )
-}
-
-interface MaterialDetailsPanelProps {
-  selectedNode: MaterialNode | null
-  onAddChild: (parentId: string, type: MaterialType) => void
-  onEdit: (node: MaterialNode) => void
-  onDelete: (nodeId: string) => void
-  onCopy: (node: MaterialNode) => void
-  onCut: (node: MaterialNode) => void
-  onPaste: (nodeId: string) => void
-  onRefresh: () => void
-  clipboard: { node: MaterialNode; mode: 'copy' | 'cut' } | null
-}
-
-function MaterialDetailsPanel({ selectedNode, onAddChild, onEdit, onDelete, onCopy, onCut, onPaste, clipboard }: MaterialDetailsPanelProps) {
-  const canHaveChildren = selectedNode?.type === 'main' || !selectedNode
-
-  return (
-    <Box sx={{ borderRadius: 4, p: 3, bgcolor: 'rgba(248,250,252,0.92)', height: '100%', display: 'flex', flexDirection: 'column', gap: 2, border: '1px solid rgba(15, 23, 42, 0.06)' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
-        <Box>
-          <Typography sx={{ fontWeight: 800, fontSize: 16 }}>تفاصيل المادة</Typography>
-          <Typography sx={{ color: 'text.secondary', fontSize: 12, mt: 0.25 }}>اختر عقدة من الشجرة لتعديل أو إضافة عناصر جديدة</Typography>
-        </Box>
-      </Box>
-      {!selectedNode ? (
-        <EmptyState title="لم يتم اختيار مادة" description="حدد عقدة في الشجرة لعرض التفاصيل" />
-      ) : (
-        <>
-          <Paper sx={{ p: 2.5, borderRadius: 3, bgcolor: '#fff', border: '1px solid rgba(15, 23, 42, 0.06)', boxShadow: '0 12px 30px rgba(15, 23, 42, 0.04)' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, mb: 1.3 }}>
-              {getNodeIcon(selectedNode.type)}
-              <Typography sx={{ fontWeight: 800 }}>{selectedNode.name}</Typography>
-            </Box>
-            <Typography sx={{ color: 'text.secondary', fontSize: 13, mb: 1.2 }}>رقم المادة: {selectedNode.materialNumber}</Typography>
-            <Typography sx={{ color: 'text.secondary', fontSize: 13, mb: 1.2 }}>النوع: {getNodeLabel(selectedNode.type)}</Typography>
-            <Typography sx={{ color: 'text.secondary', fontSize: 13 }}>{selectedNode.notes || 'لا توجد ملاحظات'}</Typography>
-          </Paper>
-
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-            <Chip label={selectedNode.type === 'main' ? 'مادة رئيسية' : selectedNode.type === 'sub' ? 'مادة فرعية' : 'مادة لا مخزنية'} color="primary" variant="outlined" />
-            {clipboard && <Chip label={clipboard.mode === 'cut' ? 'تم قصه' : 'تم نسخه'} color="secondary" variant="outlined" />}
-          </Box>
-
-          <Divider />
-
-          <Box sx={{ display: 'grid', gap: 1 }}>
-            <Typography sx={{ fontWeight: 700, fontSize: 14 }}>الإجراءات</Typography>
-            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-              <ActionButton label="مادة رئيسية" icon={<FiFolder size={18} />} onClick={() => onAddChild(selectedNode.id, 'main')} disabled={!canHaveChildren} />
-              <ActionButton label="مادة فرعية" icon={<FiBox size={18} />} onClick={() => onAddChild(selectedNode.id, 'sub')} disabled={!canHaveChildren} />
-              <ActionButton label="تعديل" icon={<FiEdit2 size={18} />} onClick={() => onEdit(selectedNode)} />
-              <ActionButton label="حذف" icon={<FiTrash2 size={18} />} onClick={() => onDelete(selectedNode.id)} />
-              <ActionButton label="نسخ" icon={<FiCopy size={18} />} onClick={() => onCopy(selectedNode)} />
-              <ActionButton label="قص" icon={<FiScissors size={18} />} onClick={() => onCut(selectedNode)} />
-              <ActionButton label="لصق" icon={<FiClipboard size={18} />} onClick={() => onPaste(selectedNode.id)} disabled={!clipboard} />
-            </Box>
-          </Box>
-        </>
-      )}
-    </Box>
-  )
-}
-
-interface SearchTreeProps {
-  value: string
-  onChange: (value: string) => void
-}
-
-function SearchTree({ value, onChange }: SearchTreeProps) {
-  return (
-    <TextField
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      placeholder="ابحث في المواد"
-      fullWidth
-      slotProps={{
-        input: {
-          startAdornment: (
-            <InputAdornment position="start">
-              <FiSearch />
-            </InputAdornment>
-          ),
-        },
-      }}
+    <Box
       sx={{
-        bgcolor: '#fff',
-        borderRadius: 3,
-        '& .MuiOutlinedInput-root': {
-          borderRadius: 3,
-          minHeight: 46,
-          '& fieldset': { borderColor: 'rgba(15, 23, 42, 0.12)' },
-          '&:hover fieldset': { borderColor: 'rgba(37, 99, 235, 0.3)' },
-          '&.Mui-focused fieldset': { borderColor: '#2563EB', boxShadow: '0 0 0 3px rgba(37, 99, 235, 0.12)' },
-        },
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+        width: '100%',
+        overflow: 'hidden',
+        bgcolor: '#F7F8FA',
       }}
-    />
-  )
-}
-
-interface ContextMenuProps {
-  anchor: { x: number; y: number }
-  open: boolean
-  onClose: () => void
-  selectedNode: MaterialNode | null
-  onAddChild: (parentId: string, type: MaterialType) => void
-  onEdit: (node: MaterialNode) => void
-  onDelete: (nodeId: string) => void
-  onCopy: (node: MaterialNode) => void
-  onCut: (node: MaterialNode) => void
-  onPaste: (nodeId: string) => void
-  onRefresh: () => void
-  clipboard: { node: MaterialNode; mode: 'copy' | 'cut' } | null
-  nodeId: string
-}
-
-function ContextMenu({ anchor, open, onClose, selectedNode, onAddChild, onEdit, onDelete, onCopy, onCut, onPaste, onRefresh, clipboard, nodeId }: ContextMenuProps) {
-  const canAddChildren = !selectedNode || selectedNode.type === 'main'
-  return (
-    <Menu
-      open={open}
-      onClose={onClose}
-      anchorReference="anchorPosition"
-      anchorPosition={open ? { top: anchor.y, left: anchor.x } : undefined}
     >
-      <MenuItem disabled={!canAddChildren} onClick={() => { onAddChild(nodeId, 'main'); onClose() }}>
-        <FiFolder size={14} style={{ marginLeft: 8 }} /> إضافة مادة رئيسية
-      </MenuItem>
-      <MenuItem disabled={!canAddChildren} onClick={() => { onAddChild(nodeId, 'sub'); onClose() }}>
-        <FiBox size={14} style={{ marginLeft: 8 }} /> إضافة مادة فرعية
-      </MenuItem>
-      <Divider />
-      <MenuItem onClick={() => { if (selectedNode) { onEdit(selectedNode); onClose() } }}>
-        <FiEdit2 size={14} style={{ marginLeft: 8 }} /> تعديل
-      </MenuItem>
-      <MenuItem onClick={() => { if (selectedNode) { onDelete(selectedNode.id); onClose() } }}>
-        <FiTrash2 size={14} style={{ marginLeft: 8 }} /> حذف
-      </MenuItem>
-      <MenuItem onClick={() => { if (selectedNode) { onCopy(selectedNode); onClose() } }}>
-        <FiCopy size={14} style={{ marginLeft: 8 }} /> نسخ
-      </MenuItem>
-      <MenuItem onClick={() => { if (selectedNode) { onCut(selectedNode); onClose() } }}>
-        <FiScissors size={14} style={{ marginLeft: 8 }} /> قص
-      </MenuItem>
-      <MenuItem disabled={!clipboard} onClick={() => { onPaste(nodeId); onClose() }}>
-        <FiClipboard size={14} style={{ marginLeft: 8 }} /> لصق
-      </MenuItem>
-      <Divider />
-      <MenuItem onClick={() => { onRefresh(); onClose() }}>
-        <FiRefreshCw size={14} style={{ marginLeft: 8 }} /> تحديث
-      </MenuItem>
-    </Menu>
-  )
-}
+      {/* Toolbar */}
+      <Box
+        sx={{
+          display: 'flex',
+          gap: 2,
+          p: 2,
+          flexShrink: 0,
+          borderBottom: '1px solid',
+          borderColor: 'divider',
+          bgcolor: '#F7F8FA',
+        }}
+      >
+        <Button
+          variant="contained"
+          color="primary"
+          startIcon={<FiPlus />}
+          onClick={openAddMainDialog}
+        >
+          إضافة مادة رئيسية
+        </Button>
+        <Tooltip
+          title={canAddSubMaterial ? '' : 'يجب تحديد مادة رئيسية أولاً لإضافة مادة فرعية.'}
+          placement="bottom"
+          disableHoverListener={canAddSubMaterial}
+          disableFocusListener={canAddSubMaterial}
+        >
+          <span>
+            <Button
+              variant="outlined"
+              color="primary"
+              startIcon={<FiPlus />}
+              disabled={!canAddSubMaterial}
+              disableRipple={!canAddSubMaterial}
+              onClick={openAddSubDialog}
+              sx={{
+                '&.Mui-disabled': {
+                  cursor: 'not-allowed',
+                  pointerEvents: 'auto',
+                  opacity: 0.6,
+                  color: theme.palette.primary.main,
+                  borderColor: theme.palette.primary.main,
+                  '&:hover': {
+                    backgroundColor: 'transparent',
+                  },
+                },
+              }}
+            >
+              إضافة مادة فرعية
+            </Button>
+          </span>
+        </Tooltip>
 
-interface MaterialDialogProps {
-  open: boolean
-  title: string
-  subtitle?: string
-  onClose: () => void
-  onConfirm: () => void
-  confirmLabel?: string
-  children: React.ReactNode
-}
+        <Box sx={{ flex: 1 }} />
 
-function MaterialDialog({ open, title, subtitle, onClose, onConfirm, confirmLabel = 'حفظ', children }: MaterialDialogProps) {
-  return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md" slotProps={{ paper: { sx: { borderRadius: 4, p: 1, boxShadow: '0 24px 80px rgba(15, 23, 42, 0.16)' } } }}>
-      <DialogTitle sx={{ fontWeight: 800, fontSize: 20 }}>{title}</DialogTitle>
-      {subtitle && <Typography sx={{ px: 3, color: 'text.secondary' }}>{subtitle}</Typography>}
-      <DialogContent dividers>{children}</DialogContent>
-      <DialogActions sx={{ px: 3, pb: 2 }}>
-        <IconButton onClick={onClose} size="small"><FiMoreHorizontal /></IconButton>
-        <Box sx={{ flexGrow: 1 }} />
-        <IconButton onClick={onConfirm} color="primary" sx={{ bgcolor: 'rgba(37,99,235,0.08)', borderRadius: 2, px: 2 }}>
-          <FiPlus size={16} style={{ marginLeft: 6 }} />
-          <Typography sx={{ fontWeight: 700 }}>{confirmLabel}</Typography>
-        </IconButton>
-      </DialogActions>
-    </Dialog>
-  )
-}
 
-interface ValidationMessageProps {
-  messages: string[]
-}
-
-function ValidationMessage({ messages }: ValidationMessageProps) {
-  return (
-    <Alert severity="error" sx={{ mb: 2, borderRadius: 3 }}>
-      <Box component="ul" sx={{ m: 0, pr: 2 }}>
-        {messages.map((message) => (
-          <li key={message}>{message}</li>
-        ))}
       </Box>
-    </Alert>
-  )
-}
 
-interface MaterialFormProps {
-  type: MaterialType
-  values: FormValues
-  onChange: (values: FormValues) => void
-  priceLabels: Record<'priceLabel1' | 'priceLabel2' | 'priceLabel3', string>
-}
-
-function ActionButton({ label, icon, onClick, disabled = false }: { label: string; icon: React.ReactNode; onClick: () => void; disabled?: boolean }) {
-  return (
-    <Tooltip title={label} placement="bottom">
-      <span>
-        <IconButton
-          onClick={onClick}
-          disabled={disabled}
-          aria-label={label}
+      {/* Main Content */}
+      <Box
+        sx={{
+          display: 'flex',
+          minHeight: 0,
+          overflow: 'hidden',
+          gap: 0,
+          alignItems: 'stretch',
+        }}
+        data-resizable-container
+      >
+        {/* Tree Panel */}
+        <Paper
+          elevation={0}
+          onClick={() => setSelectedNodeId(null)}
           sx={{
-            minHeight: 42,
-            px: 1.4,
-            borderRadius: 2.2,
-            bgcolor: disabled ? 'rgba(15, 23, 42, 0.04)' : '#fff',
-            border: disabled ? '1px solid rgba(15, 23, 42, 0.06)' : '1px solid rgba(37, 99, 235, 0.16)',
-            color: disabled ? '#94A3B8' : '#1D4ED8',
-            boxShadow: disabled ? 'none' : '0 10px 24px rgba(37, 99, 235, 0.08)',
-            '&:hover': {
-              bgcolor: disabled ? 'rgba(15, 23, 42, 0.04)' : 'rgba(37, 99, 235, 0.09)',
-              transform: 'translateY(-1px)',
-            },
+            width: `${treeWidth}%`,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+              borderRadius: '12px',
+              backgroundColor: '#FFFFFF',
+              border: '1px solid #E2E8F0',
+              borderInlineEnd: '1px solid #E2E8F0',
+            p: 2,
+            m: 2,
+            boxSizing: 'border-box',
+              boxShadow: 'none',
+            flexShrink: 0,
           }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            {icon}
-            <Typography sx={{ fontSize: 13, fontWeight: 700 }}>{label}</Typography>
+          <Typography
+            sx={{
+              fontWeight: 700,
+              fontSize: 14,
+              mb: 2,
+              color: 'text.primary',
+              flexShrink: 0,
+            }}
+          >
+            شجرة المواد
+          </Typography>
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+            }}
+          >
+            {renderTree(materials)}
           </Box>
-        </IconButton>
-      </span>
-    </Tooltip>
-  )
-}
+        </Paper>
 
-function MaterialForm({ type, values, onChange, priceLabels }: MaterialFormProps) {
-  const updateField = (field: keyof FormValues, nextValue: string | boolean) => {
-    onChange({ ...values, [field]: nextValue })
-  }
+        {/* Resizable Divider */}
+        <Box
+          onMouseDown={(e) => {
+            e.preventDefault()
+            const startX = e.clientX
+            const startWidth = treeWidth
 
-  if (type === 'main') {
-    return <MainMaterialForm values={values} onChange={updateField} />
-  }
+            const handleMouseMove = (moveEvent: MouseEvent) => {
+              const container = document.querySelector(
+                '[data-resizable-container]'
+              ) as HTMLElement
+              if (!container) return
 
-  if (type === 'sub') {
-    return <SubMaterialForm values={values} onChange={updateField} priceLabels={priceLabels} />
-  }
+              const rect = container.getBoundingClientRect()
+              const deltaX = moveEvent.clientX - startX
+              const deltaPercent = (deltaX / rect.width) * 100
+              const newWidth = Math.max(30, Math.min(70, startWidth - deltaPercent))
 
-  return <NonStockMaterialForm values={values} onChange={updateField} />
-}
+              setTreeWidth(newWidth)
+            }
 
-interface MainMaterialFormProps {
-  values: FormValues
-  onChange: (field: keyof FormValues, value: string | boolean) => void
-}
+            const handleMouseUp = () => {
+              document.removeEventListener('mousemove', handleMouseMove)
+              document.removeEventListener('mouseup', handleMouseUp)
+            }
 
-function MainMaterialForm({ values, onChange }: MainMaterialFormProps) {
-  return (
-    <Box sx={{ display: 'grid', gap: 2 }}>
-      <TextField label="عائدية المادة" required value={values.returnability} onChange={(event) => onChange('returnability', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label="رقم المادة" required value={values.materialNumber} onChange={(event) => onChange('materialNumber', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label="اسم المادة" required value={values.name} onChange={(event) => onChange('name', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label="ملاحظات" multiline minRows={4} value={values.notes} onChange={(event) => onChange('notes', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }} />
+            document.addEventListener('mousemove', handleMouseMove)
+            document.addEventListener('mouseup', handleMouseUp)
+          }}
+          sx={{
+            width: 4,
+            flexShrink: 0,
+            alignSelf: 'center',
+            height: '80%',
+            maxHeight: '80%',
+            minHeight: 0,
+            cursor: 'col-resize',
+            bgcolor: 'divider',
+            transition: 'bgcolor 0.2s ease',
+            background: 'linear-gradient(135deg, #0a3697 0%, #0a6fcb 50%, #0cdbeb 100%)',
+            borderRadius: 999,
+          }}
+        />
+
+        {/* Form Panel */}
+        <Paper
+          elevation={0}
+          sx={{
+            width: `${100 - treeWidth}%`,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            borderRadius: '12px',
+            backgroundColor: '#FFFFFF',
+            border: '1px solid #E2E8F0',
+            p: 3,
+            m: 2,
+            boxSizing: 'border-box',
+            boxShadow: 'none',
+            paddingRight: 0,
+          }}
+        >
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+            }}
+          >
+            {!selectedNode ? (
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: '100%',
+                  color: '#475569',
+                }}
+              >
+                اختر مادة من القائمة
+              </Box>
+            ) : (
+              <Box sx={{ display: 'grid', gap: 2, flex: 1 }}>
+                <Typography sx={{ fontWeight: 700, fontSize: 16 }}>
+                  {selectedNode.name}
+                </Typography>
+
+                {(selectedNode.type === 'main' || selectedNode.type === 'sub') && (
+                  <>
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        عائدية المادة
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {selectedNodeReturnability}
+                      </Typography>
+                    </Box>
+
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        رقم المادة
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {selectedNode.materialNumber}
+                      </Typography>
+                    </Box>
+                  </>
+                )}
+
+                {selectedNode.type === 'sub' && (
+                  <>
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        الوحدة
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {selectedNode.unit}
+                      </Typography>
+                    </Box>
+
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        سعر التكلفة
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {selectedNode.costPrice}
+                      </Typography>
+                    </Box>
+
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        متوسط التكلفة
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {formatDisplayNumber(subMaterialAverageCost, 2)}
+                      </Typography>
+                    </Box>
+
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        سعر البيع الأول
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {selectedNode.price1}
+                      </Typography>
+                    </Box>
+
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        سعر البيع الثاني
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {selectedNode.price2}
+                      </Typography>
+                    </Box>
+
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        سعر البيع الثالث
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {selectedNode.price3}
+                      </Typography>
+                    </Box>
+
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                        مادة لا مخزنية
+                      </Typography>
+                      <Typography sx={{ color: '#475569' }}>
+                        {selectedNode.isNonStock ? 'نعم' : 'لا'}
+                      </Typography>
+                    </Box>
+                  </>
+                )}
+
+                <Box>
+                  <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                    ملاحظات
+                  </Typography>
+                  <Typography sx={{ color: '#475569', whiteSpace: 'pre-wrap' }}>
+                    {selectedNode.notes || 'لا توجد ملاحظات'}
+                  </Typography>
+                </Box>
+
+                <Box>
+                </Box>
+
+
+                {/* Action Buttons at Bottom */}
+                <Box sx={{ display: 'flex', gap: 1, pt: 2, mt: 2, borderTop: '1px solid #E2E8F0', position: 'sticky', bottom: 0, zIndex: 1, backgroundColor: '#FFFFFF' }}>
+                  <Button
+                    size="small"
+                    startIcon={<FiEdit2 size={16} />}
+                    onClick={openEditDialog}
+                    disabled={!selectedNode}
+                    sx={{
+                      textTransform: 'none',
+                      fontWeight: 600,
+                    }}
+                  >
+                    تعديل
+                  </Button>
+                  <Button
+                    size="small"
+                    startIcon={<FiTrash2 size={16} />}
+                    onClick={openDeleteDialog}
+                    disabled={!selectedNode}
+                    color="error"
+                    sx={{
+                      textTransform: 'none',
+                      fontWeight: 600,
+                    }}
+                  >
+                    حذف
+                  </Button>
+                </Box>
+              </Box>
+            )}
+          </Box>
+        </Paper>
+      </Box>
+
+      {/* Add Main Material Dialog */}
+      <Dialog
+        open={dialog.open && dialog.mode === 'add-main'}
+        onClose={() => setDialog({ open: false, mode: null })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>إضافة مادة رئيسية</DialogTitle>
+        <DialogContent sx={{ pt: '16px !important', display: 'grid', gap: 2 }}>
+          {formErrors.name && (
+            <Alert severity="error">{formErrors.name}</Alert>
+          )}
+          <TextField
+            label="عائدية المادة"
+            fullWidth
+            value={formData.returnability}
+            onChange={(e) => handleFormChange('returnability', e.target.value)}
+            error={!!formErrors.returnability}
+            helperText={formErrors.returnability}
+            slotProps={{
+              input: {
+                readOnly: true,
+              },
+            }}
+          />
+          <TextField
+            label="رقم المادة"
+            fullWidth
+            required
+            value={formData.materialNumber}
+            onChange={(e) => handleFormChange('materialNumber', e.target.value)}
+            error={!!formErrors.materialNumber}
+            helperText={formErrors.materialNumber}
+          />
+          <TextField
+            label="اسم المادة"
+            fullWidth
+            required
+            value={formData.name}
+            onChange={(e) => handleFormChange('name', e.target.value)}
+            error={!!formErrors.name}
+            helperText={formErrors.name}
+          />
+          <TextField
+            label="ملاحظات"
+            fullWidth
+            multiline
+            rows={4}
+            value={formData.notes}
+            onChange={(e) => handleFormChange('notes', e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDialog({ open: false, mode: null })}>
+            إلغاء
+          </Button>
+          <Button onClick={handleSaveMain} variant="contained" color="primary">
+            حفظ
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Add Sub Material Dialog */}
+      <Dialog
+        open={dialog.open && dialog.mode === 'add-sub'}
+        onClose={() => setDialog({ open: false, mode: null })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>إضافة مادة فرعية</DialogTitle>
+        <DialogContent sx={{ pt: '16px !important', display: 'grid', gap: 2 }}>
+          {Object.keys(formErrors).length > 0 && (
+            <Alert severity="error">
+              <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                {Object.values(formErrors).map((error) => (
+                  <li key={error}>{error}</li>
+                ))}
+              </Box>
+            </Alert>
+          )}
+          <TextField
+            label="عائدية المادة"
+            fullWidth
+            value={formData.returnability}
+            onChange={(e) => handleFormChange('returnability', e.target.value)}
+            error={!!formErrors.returnability}
+            slotProps={{
+              input: {
+                readOnly: true,
+              },
+            }}
+          />
+          <TextField
+            label="رقم المادة"
+            fullWidth
+            required
+            value={formData.materialNumber}
+            onChange={(e) => handleFormChange('materialNumber', e.target.value)}
+            error={!!formErrors.materialNumber}
+          />
+          <TextField
+            label="اسم المادة"
+            fullWidth
+            required
+            value={formData.name}
+            onChange={(e) => handleFormChange('name', e.target.value)}
+            error={!!formErrors.name}
+          />
+          <FormControl fullWidth error={!!formErrors.unit}>
+            <Autocomplete
+              freeSolo
+              options={unitOptionsState}
+              value={formData.unit}
+              onChange={(e, v) => handleFormChange('unit', (v ?? '') as string)}
+              onInputChange={(e, v) => handleFormChange('unit', v)}
+              renderInput={(params) => (
+                <TextField
+                    {...params}
+                    label="الوحدة"
+                    required
+                    error={!!formErrors.unit}
+                    helperText={formErrors.unit}
+                  />
+              )}
+            />
+          </FormControl>
+
+          {/* opening balance and warehouse - shown only for sub and stockable */}
+          {formData.isNonStock !== true && (
+            <>
+              <TextField
+                label="الرصيد الافتتاحي"
+                fullWidth
+                type="number"
+                value={formData.openingBalance ?? ''}
+                onChange={(e) => handleFormChange('openingBalance', e.target.value === '' ? '' : Number(e.target.value))}
+                slotProps={{ htmlInput: { min: 0 } }}
+                helperText={formErrors.openingBalance}
+              />
+
+              <FormControl fullWidth error={!!formErrors.openingWarehouseId}>
+                <InputLabel id="opening-warehouse-label" required={openingWarehouseRequired}>مخزن الرصيد الافتتاحي</InputLabel>
+                <Select
+                  labelId="opening-warehouse-label"
+                  value={formData.openingWarehouseId ?? ''}
+                  onChange={(e) => handleFormChange('openingWarehouseId', e.target.value)}
+                  label="مخزن الرصيد الافتتاحي"
+                >
+                  <MenuItem value="">
+                    <em>اختر مخزن</em>
+                  </MenuItem>
+                  {warehouses.map((w) => (
+                    <MenuItem key={w.id} value={w.id}>{w.name}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </>
+          )}
+          <TextField
+            label="سعر التكلفة"
+            fullWidth
+            type="number"
+            value={formData.costPrice}
+            onChange={(e) => handleFormChange('costPrice', e.target.value)}
+            error={!!formErrors.costPrice}
+            slotProps={{ htmlInput: { min: 0 } }}
+          />
+          <TextField
+            label="سعر البيع الأول"
+            fullWidth
+            type="number"
+            value={formData.price1}
+            onChange={(e) => handleFormChange('price1', e.target.value)}
+            slotProps={{ htmlInput: { min: 0 } }}
+          />
+          <TextField
+            label="سعر البيع الثاني"
+            fullWidth
+            type="number"
+            value={formData.price2}
+            onChange={(e) => handleFormChange('price2', e.target.value)}
+            slotProps={{ htmlInput: { min: 0 } }}
+          />
+          <TextField
+            label="سعر البيع الثالث"
+            fullWidth
+            type="number"
+            value={formData.price3}
+            onChange={(e) => handleFormChange('price3', e.target.value)}
+            slotProps={{ htmlInput: { min: 0 } }}
+          />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={formData.isNonStock}
+                onChange={(e) => handleFormChange('isNonStock', e.target.checked)}
+                color="primary"
+                sx={{
+                  overflow: 'visible',
+                  '& .MuiSwitch-switchBase': {
+                    padding: '8px',
+                  },
+                  '& .MuiSwitch-track': {
+                    width: '50px',
+                    backgroundColor: formData.isNonStock ? '#2563EB' : '#CBD5E1',
+                    opacity: 1,
+                  },
+                  '& .MuiSwitch-thumb': {
+                    width: '20px',
+                    height: '20px',
+                    boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
+                  },
+                  '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                    backgroundColor: '#2563EB',
+                  },
+                }}
+              />
+            }
+            label="مادة لا مخزنية"
+            sx={{
+              ml: 0,
+              mr: 0,
+              display: 'flex',
+              flexDirection: 'row-reverse',
+              justifyContent: 'flex-end',
+              gap: 2,
+            }}
+          />
+          <TextField
+            label="ملاحظات"
+            fullWidth
+            multiline
+            rows={4}
+            value={formData.notes}
+            onChange={(e) => handleFormChange('notes', e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDialog({ open: false, mode: null })}>
+            إلغاء
+          </Button>
+          <Button onClick={handleSaveSub} variant="contained" color="primary">
+            حفظ
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Edit Dialog */}
+      <Dialog
+        open={dialog.open && dialog.mode === 'edit'}
+        onClose={() => setDialog({ open: false, mode: null })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>تعديل المادة</DialogTitle>
+        <DialogContent sx={{ display: 'grid', gap: 2, paddingTop: '20px !important' }}>
+          {Object.keys(formErrors).length > 0 && (
+            <Alert severity="error">
+              <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                {Object.values(formErrors).map((error) => (
+                  <li key={error}>{error}</li>
+                ))}
+              </Box>
+            </Alert>
+          )}
+          <TextField
+            label="عائدية المادة"
+            fullWidth
+            value={formData.returnability}
+            onChange={(e) => handleFormChange('returnability', e.target.value)}
+            error={!!formErrors.returnability}
+            slotProps={{
+              input: {
+                readOnly: true,
+              },
+            }}
+          />
+          <TextField
+            label="رقم المادة"
+            fullWidth
+            required
+            value={formData.materialNumber}
+            onChange={(e) => handleFormChange('materialNumber', e.target.value)}
+            error={!!formErrors.materialNumber}
+          />
+          <TextField
+            label="اسم المادة"
+            fullWidth
+            required
+            value={formData.name}
+            onChange={(e) => handleFormChange('name', e.target.value)}
+            error={!!formErrors.name}
+          />
+
+          {selectedNode?.type === 'sub' && (
+            <>
+              <FormControl fullWidth error={!!formErrors.unit}>
+                <Autocomplete
+                  freeSolo
+                  options={unitOptionsState}
+                  value={formData.unit}
+                  onChange={(e, v) => handleFormChange('unit', (v ?? '') as string)}
+                  onInputChange={(e, v) => handleFormChange('unit', v)}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="الوحدة"
+                      required
+                      error={!!formErrors.unit}
+                      helperText={formErrors.unit}
+                    />
+                  )}
+                />
+              </FormControl>
+              <TextField
+                label="سعر التكلفة"
+                fullWidth
+                type="number"
+                value={formData.costPrice}
+                onChange={(e) => handleFormChange('costPrice', e.target.value)}
+                error={!!formErrors.costPrice}
+                required={false}
+                slotProps={{ htmlInput: { min: 0 } }}
+              />
+              <TextField
+                label="سعر البيع الأول"
+                fullWidth
+                type="number"
+                value={formData.price1}
+                onChange={(e) => handleFormChange('price1', e.target.value)}
+                slotProps={{ htmlInput: { min: 0 } }}
+              />
+              <TextField
+                label="سعر البيع الثاني"
+                fullWidth
+                type="number"
+                value={formData.price2}
+                onChange={(e) => handleFormChange('price2', e.target.value)}
+                slotProps={{ htmlInput: { min: 0 } }}
+              />
+              <TextField
+                label="سعر البيع الثالث"
+                fullWidth
+                type="number"
+                value={formData.price3}
+                onChange={(e) => handleFormChange('price3', e.target.value)}
+                slotProps={{ htmlInput: { min: 0 } }}
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={formData.isNonStock}
+                    onChange={(e) => handleFormChange('isNonStock', e.target.checked)}
+                    color="primary"
+                    sx={{
+                      '& .MuiSwitch-switchBase': {
+                        padding: '8px',
+                      },
+                      '& .MuiSwitch-track': {
+                        width: '50px',
+                        backgroundColor: formData.isNonStock ? '#2563EB' : '#CBD5E1',
+                        opacity: 1,
+                      },
+                      '& .MuiSwitch-thumb': {
+                        width: '20px',
+                        height: '20px',
+                        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
+                        transform: 'translateY(1px)'
+                      },
+                      '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                        backgroundColor: '#2563EB',
+                      },
+                    }}
+                  />
+                }
+                label="مادة لا مخزنية"
+                sx={{
+                  ml: 0,
+                  mr: 0,
+                  display: 'flex',
+                  flexDirection: 'row-reverse',
+                  justifyContent: 'flex-end',
+                  gap: 2,
+                }}
+              />
+              {/* when toggling non-stock, clear opening fields */}
+              {formData.isNonStock && (
+                (() => {
+                  if (formData.openingBalance !== '') handleFormChange('openingBalance', '')
+                  if (formData.openingWarehouseId) handleFormChange('openingWarehouseId', '')
+                  return null
+                })()
+              )}
+            </>
+          )}
+
+          <TextField
+            label="ملاحظات"
+            fullWidth
+            multiline
+            rows={4}
+            value={formData.notes}
+            onChange={(e) => handleFormChange('notes', e.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDialog({ open: false, mode: null })}>
+            إلغاء
+          </Button>
+          <Button onClick={handleSaveEdit} variant="contained" color="primary">
+            حفظ
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={dialog.open && dialog.mode === 'delete'}
+        onClose={() => setDialog({ open: false, mode: null })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>تأكيد الحذف</DialogTitle>
+        <DialogContent>
+          <Alert
+            severity="warning"
+            icon={<FiAlertCircle style={{ color: 'red' }} />}
+            sx={{ color: '#1F2937', background: '#fff', fontWeight: 'bold', border: 'none', fontSize: 16 }}
+          >
+            هل أنت متأكد من حذف هذه المادة؟
+            {deleteCounts && (
+              <Box sx={{ mt: 2, fontWeight: 500, fontSize: 14, lineHeight: 1.6 }}>
+                سيتم حذف هذه المادة وجميع المواد التابعة لها:
+                <Box sx={{ mt: 1, pl: 2, textAlign: 'left' }}>
+                  <Box sx={{ mt: 1, fontWeight: 700 }}>
+                    المجموع: {deleteCounts.total} مادة
+                  </Box>
+                </Box>
+              </Box>
+            )}
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDialog({ open: false, mode: null })}>
+            إلغاء
+          </Button>
+          <Button
+            onClick={handleConfirmDelete}
+            variant="contained"
+            color="error"
+          >
+            حذف
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Error Dialog */}
+      <Dialog
+        open={dialog.open && dialog.mode === 'error'}
+        onClose={() => setDialog({ open: false, mode: null })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>تعذر إتمام العملية</DialogTitle>
+        <DialogContent>
+          <Alert severity="error">{errorMessage}</Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => setDialog({ open: false, mode: null })}
+            variant="contained"
+            color="primary"
+          >
+            حسناً
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }
-
-interface SubMaterialFormProps {
-  values: FormValues
-  onChange: (field: keyof FormValues, value: string | boolean) => void
-  priceLabels: Record<'priceLabel1' | 'priceLabel2' | 'priceLabel3', string>
-}
-
-function SubMaterialForm({ values, onChange, priceLabels }: SubMaterialFormProps) {
-  return (
-    <Box sx={{ display: 'grid', gap: 2 }}>
-      <TextField label="عائدية المادة" required value={values.returnability} onChange={(event) => onChange('returnability', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label="رقم المادة" required value={values.materialNumber} onChange={(event) => onChange('materialNumber', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label="اسم المادة" required value={values.name} onChange={(event) => onChange('name', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label="الوحدة" required value={values.unit} onChange={(event) => onChange('unit', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label="سعر التكلفة" required value={values.costPrice} onChange={(event) => onChange('costPrice', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label={priceLabels.priceLabel1} value={values.price1} onChange={(event) => onChange('price1', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label={priceLabels.priceLabel2} value={values.price2} onChange={(event) => onChange('price2', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label={priceLabels.priceLabel3} value={values.price3} onChange={(event) => onChange('price3', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <FormControlLabel
-        control={<Switch checked={values.isNonStock} onChange={(event) => onChange('isNonStock', event.target.checked)} color="primary" />}
-        label="مادة لا مخزنية"
-        sx={{ mt: 0.5 }}
-      />
-      <TextField label="ملاحظات" multiline minRows={4} value={values.notes} onChange={(event) => onChange('notes', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }} />
-    </Box>
-  )
-}
-
-interface NonStockMaterialFormProps {
-  values: FormValues
-  onChange: (field: keyof FormValues, value: string | boolean) => void
-}
-
-function NonStockMaterialForm({ values, onChange }: NonStockMaterialFormProps) {
-  return (
-    <Box sx={{ display: 'grid', gap: 2 }}>
-      <TextField label="اسم المادة" required value={values.name} onChange={(event) => onChange('name', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5, minHeight: 48 } }} />
-      <TextField label="ملاحظات" multiline minRows={4} value={values.notes} onChange={(event) => onChange('notes', event.target.value)} sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2.5 } }} />
-    </Box>
-  )
-}
-
-export { MaterialCatalog }
 
 export default MaterialCatalog

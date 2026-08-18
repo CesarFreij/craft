@@ -11,7 +11,7 @@ export function SettingsPage() {
   return (
     <Box>
       <Grid container spacing={3}>
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <SectionCard title="السمات العامة" subtitle="تخصيص تجربة CRAFT">
             <Paper sx={{ p: 3, display: 'grid', gap: 2, background: '#F8FAFC', borderRadius: 3, border: '1px solid rgba(15, 23, 42, 0.06)' }}>
               <FormControl fullWidth>
@@ -55,7 +55,7 @@ export function SettingsPage() {
             </Paper>
           </SectionCard>
         </Grid>
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <SectionCard title="الوصول السريع" subtitle="روابط مفيدة للإدارة">
             <Box sx={{ minHeight: 240, display: 'grid', placeItems: 'center', color: '#64748B' }}>
               التحكم في السمات الآن متاح للتجربة المباشرة.

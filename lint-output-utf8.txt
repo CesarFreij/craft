@@ -1,0 +1,146 @@
+﻿
+> craft@0.0.0 lint
+> eslint .
+
+
+D:\Electron\craft\src\components\materials\MaterialCatalog.old.tsx
+  5:10  error  'MaterialToolbar' is defined but never used   @typescript-eslint/no-unused-vars
+  6:10  error  'ResizableDivider' is defined but never used  @typescript-eslint/no-unused-vars
+
+D:\Electron\craft\src\components\materials\components\MaterialDialogs.tsx
+  15:22  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\Electron\craft\src\components\materials\components\MaterialForm.tsx
+   3:29  error  'MaterialType' is defined but never used  @typescript-eslint/no-unused-vars
+   3:43  error  'FormValues' is defined but never used    @typescript-eslint/no-unused-vars
+  14:3   error  'onUpdate' is defined but never used      @typescript-eslint/no-unused-vars
+  15:3   error  'onDelete' is defined but never used      @typescript-eslint/no-unused-vars
+  16:3   error  'onEdit' is defined but never used        @typescript-eslint/no-unused-vars
+
+D:\Electron\craft\src\components\materials\components\MaterialTree.tsx
+   8:3   error  'Collapse' is defined but never used                 @typescript-eslint/no-unused-vars
+  10:3   error  'Tooltip' is defined but never used                  @typescript-eslint/no-unused-vars
+  14:29  error  'MaterialType' is defined but never used             @typescript-eslint/no-unused-vars
+  31:3   error  'onAddMain' is defined but never used                @typescript-eslint/no-unused-vars
+  32:3   error  'onAddSub' is defined but never used                 @typescript-eslint/no-unused-vars
+  33:3   error  'selectedNode' is defined but never used             @typescript-eslint/no-unused-vars
+  38:9   error  'visibleMatches' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+D:\Electron\craft\src\components\materials\components\ResizableDivider.tsx
+  10:3  error  'treeWidth' is defined but never used  @typescript-eslint/no-unused-vars
+
+D:\Electron\craft\src\components\materials\hooks\useDialogState.ts
+  49:6   error  'values' is defined but never used        @typescript-eslint/no-unused-vars
+  49:14  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  49:19  error  'handlers' is defined but never used      @typescript-eslint/no-unused-vars
+  49:29  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\Electron\craft\src\components\materials\hooks\useMaterialCatalog.ts
+  54:21  error  'setMaterials' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  61:40  error  'parentId' is defined but never used               @typescript-eslint/no-unused-vars
+  61:58  error  'node' is defined but never used                   @typescript-eslint/no-unused-vars
+  65:39  error  'parentId' is defined but never used               @typescript-eslint/no-unused-vars
+  65:57  error  'node' is defined but never used                   @typescript-eslint/no-unused-vars
+  69:39  error  'nodeId' is defined but never used                 @typescript-eslint/no-unused-vars
+  69:55  error  'updates' is defined but never used                @typescript-eslint/no-unused-vars
+  73:39  error  'nodeId' is defined but never used                 @typescript-eslint/no-unused-vars
+
+D:\Electron\craft\src\components\materials\utils\formUtils.ts
+  102:11  error  'allNodes' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+D:\Electron\craft\src\components\materials\utils\iconUtils.ts
+  9:25  error  Parsing error: '>' expected
+
+D:\Electron\craft\src\components\ui\DataTable.tsx
+  1:81  error  'Typography' is defined but never used  @typescript-eslint/no-unused-vars
+
+D:\Electron\craft\src\contexts\ThemeContext.tsx
+  101:17  error  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+D:\Electron\craft\src\pages\SettingsPage.tsx
+  9:41  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\Electron\craft\src\pages\StockBalancesPage.tsx
+   2:45  error    'Table' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  @typescript-eslint/no-unused-vars
+   2:52  error    'TableBody' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              @typescript-eslint/no-unused-vars
+   2:63  error    'TableCell' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              @typescript-eslint/no-unused-vars
+   2:74  error    'TableHead' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              @typescript-eslint/no-unused-vars
+   2:85  error    'TableRow' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               @typescript-eslint/no-unused-vars
+   2:95  error    'Button' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 @typescript-eslint/no-unused-vars
+   6:44  error    Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           @typescript-eslint/no-explicit-any
+   9:48  error    Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           @typescript-eslint/no-explicit-any
+  12:10  error    Error: Cannot access variable before it is declared
+
+`load` is accessed before it is declared, which prevents the earlier access from updating when this value changes over time.
+
+D:\Electron\craft\src\pages\StockBalancesPage.tsx:12:10
+  10 |
+  11 |   useEffect(() => {
+> 12 |     void load()
+     |          ^^^^ `load` accessed before it is declared
+  13 |   }, [warehouseFilter])
+  14 |
+  15 |   const load = async () => {
+
+D:\Electron\craft\src\pages\StockBalancesPage.tsx:15:3
+  13 |   }, [warehouseFilter])
+  14 |
+> 15 |   const load = async () => {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 16 |     const data = await inventoryService.getBalancesByWarehouse(warehouseFilter)
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 17 |     setBalances(data)
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 18 |     const w = await inventoryService.listWarehouses()
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 19 |     setWarehouses(w)
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 20 |   }
+     | ^^^^ `load` is declared here
+  21 |
+  22 |   const filtered = balances.filter(b => b.name.toLowerCase().includes(searchTerm.toLowerCase()) || b.materialNumber.toLowerCase().includes(searchTerm.toLowerCase()))
+  23 |  react-hooks/immutability
+  13:6   warning  React Hook useEffect has a missing dependency: 'load'. Either include it or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            react-hooks/exhaustive-deps
+
+D:\Electron\craft\src\pages\WarehousesPage.tsx
+   2:92   error  'Typography' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     @typescript-eslint/no-unused-vars
+   2:142  error  'Switch' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         @typescript-eslint/no-unused-vars
+   8:10   error  'DataTable' is defined but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      @typescript-eslint/no-unused-vars
+  12:48   error  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   @typescript-eslint/no-explicit-any
+  14:10   error  'editing' is assigned a value but never used                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               @typescript-eslint/no-unused-vars
+  21:10   error  Error: Cannot access variable before it is declared
+
+`load` is accessed before it is declared, which prevents the earlier access from updating when this value changes over time.
+
+D:\Electron\craft\src\pages\WarehousesPage.tsx:21:10
+  19 |
+  20 |   useEffect(() => {
+> 21 |     void load()
+     |          ^^^^ `load` accessed before it is declared
+  22 |   }, [])
+  23 |
+  24 |   const load = async () => {
+
+D:\Electron\craft\src\pages\WarehousesPage.tsx:24:3
+  22 |   }, [])
+  23 |
+> 24 |   const load = async () => {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 25 |     const data = await inventoryService.listWarehouses()
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 26 |     setWarehouses(data)
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 27 |   }
+     | ^^^^ `load` is declared here
+  28 |
+  29 |   const handleEditOpen = (w: any) => {
+  30 |     setEditing(w.id)  react-hooks/immutability
+  29:30   error  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   @typescript-eslint/no-explicit-any
+  35:40   error  Unexpected any. Specify a different type                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   @typescript-eslint/no-explicit-any
+
+D:\Electron\craft\src\services\inventoryService.ts
+  19:71  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  20:62  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+Γ£û 53 problems (52 errors, 1 warning)
+

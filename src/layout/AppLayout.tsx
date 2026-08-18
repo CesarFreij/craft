@@ -9,15 +9,17 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const sidebarOffset = collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_EXPANDED_WIDTH
 
   return (
-    <Box sx={{ minHeight: '100vh', background: '#fff' }}>
+    <Box sx={{ minHeight: '100vh', background: '#F7F8FA' }}>
       <TopBar sidebarOffset={sidebarOffset} />
       <Box
         component="main"
         sx={{
           pt: '70px',
-          minHeight: 'calc(100vh - 70px)',
+          height: '100vh',
+          minHeight: 0,
           overflow: 'hidden',
           display: 'flex',
+          alignItems: 'stretch',
           justifyContent: 'space-between',
         }}
       >
@@ -30,19 +32,29 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           transition={{ duration: 0.4, ease: 'easeOut' }}
           sx={{
             flex: 1,
-            p: { xs: 2, sm: 3, md: 4 },
-            overflowY: 'auto',
-            minHeight: 'calc(100vh - 86px)',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            minHeight: 0,
+            height: '100%',
             marginInlineStart: `${sidebarOffset}px`,
             transition: 'margin-inline-start 250ms ease',
             boxSizing: 'border-box',
             minWidth: 0,
-            overflowX: 'hidden',
             width: `calc(100% - ${sidebarOffset}px)`,
-            paddingRight: '0px !important',
           }}
         >
-          {children}
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              padding: '24px',
+            }}
+          >
+            {children}
+          </Box>
         </Box>
       </Box>
     </Box>

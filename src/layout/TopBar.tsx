@@ -76,13 +76,13 @@ export function TopBar({ sidebarOffset }: { sidebarOffset?: number }) {
           <Typography sx={{ fontWeight: 800, fontSize: 17, lineHeight: 1.1 }}>CRAFT</Typography>
           <Typography sx={{ color: 'text.secondary', fontSize: 12 }}>نظام إدارة المخازن والتصنيع</Typography>
         </Box>
-      </Box>
-
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.4, flexWrap: 'wrap' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.6, py: 1, borderRadius: 3, border: '1px solid rgba(37, 99, 235, 0.12)', background: 'rgba(255,255,255,0.9)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.6, py: 1, borderRadius: 3, border: '1px solid rgba(37, 99, 235, 0.12)', background: 'rgba(255,255,255,0.9)', transform: 'translateX(10px)' }}>
           <FiWifi size={17} color={badge.color} />
           <Typography sx={{ color: badge.color, fontWeight: 700, fontSize: 13 }}>{badge.label}</Typography>
         </Box>
+      </Box>
+
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.4, flexWrap: 'wrap' }}>
         <Box sx={{ textAlign: 'right', minWidth: 170, px: 0.5 }}>
           <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{formatDate(now)}</Typography>
           <Typography sx={{ color: 'text.secondary', fontSize: 12 }}>{formatTime(now)}</Typography>

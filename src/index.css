@@ -17,11 +17,13 @@ html,
 body,
 #root {
   min-height: 100%;
+  height: 100%;
 }
 
 body {
   margin: 0;
   background: #F4F7FA;
+  overflow: hidden;
 }
 
 button,

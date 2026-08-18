@@ -51,7 +51,9 @@ export function createCraftTheme(options: ThemeOptions) {
         main: '#22D3EE',
       },
       background: {
-        default: '#F4F7FA',
+        // App background: very light gray (global content background)
+        default: '#F7F8FA',
+        // Cards / papers remain white
         paper: '#FFFFFF',
       },
       text: {
@@ -76,18 +78,34 @@ export function createCraftTheme(options: ThemeOptions) {
       MuiCssBaseline: {
         styleOverrides: {
           body: {
-            background: '#F4F7FA',
+            background: '#F7F8FA',
           },
-          '*': {
-            scrollbarGutter: 'stable',
+          '#root, #app': {
+            background: '#F7F8FA',
+          },
+          table: {
+            borderCollapse: 'collapse',
+          },
+          'table th, table td': {
+            border: '1px solid #E2E8F0',
+            verticalAlign: 'middle',
+          },
+        },
+      },
+      MuiTable: {
+        styleOverrides: {
+          root: {
+            borderCollapse: 'collapse',
           },
         },
       },
       MuiPaper: {
         styleOverrides: {
           root: {
+            backgroundColor: '#FFFFFF',
             backgroundImage: 'none',
-            backdropFilter: 'blur(18px)',
+            boxShadow: 'none',
+            border: '1px solid #E2E8F0',
           },
         },
       },
@@ -95,7 +113,27 @@ export function createCraftTheme(options: ThemeOptions) {
         styleOverrides: {
           root: {
             borderRadius: radiusMap[options.borderRadius],
-            boxShadow: '0 28px 80px rgba(15, 23, 42, 0.08)',
+            backgroundColor: '#FFFFFF',
+            boxShadow: 'none',
+            border: '1px solid #E2E8F0',
+          },
+        },
+      },
+      MuiDialog: {
+        styleOverrides: {
+          paper: {
+            boxShadow: '0 2px 4px rgba(15, 23, 42, 0.05)',
+            border: '1px solid #E2E8F0',
+            backgroundColor: '#FFFFFF',
+          },
+        },
+      },
+      MuiPopover: {
+        styleOverrides: {
+          paper: {
+            boxShadow: '0 2px 4px rgba(15, 23, 42, 0.05)',
+            border: '1px solid #E2E8F0',
+            backgroundColor: '#FFFFFF',
           },
         },
       },
@@ -103,6 +141,19 @@ export function createCraftTheme(options: ThemeOptions) {
         styleOverrides: {
           root: {
             borderRadius: radiusMap[options.borderRadius],
+          },
+        },
+      },
+      MuiTableCell: {
+        styleOverrides: {
+          root: {
+            border: '1px solid #E2E8F0',
+            verticalAlign: 'middle',
+            textAlign: 'center',
+            textAlignLast: 'center',
+          },
+          head: {
+            fontWeight: 700,
           },
         },
       },

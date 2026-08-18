@@ -9,7 +9,7 @@ export function DashboardPage() {
   return (
     <Box>
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={6} lg={4}>
+        <Grid size={{ xs: 12, md: 6, lg: 4 }}>
           <DashboardCard
             title="عدد المواد"
             value="1,248"
@@ -18,7 +18,7 @@ export function DashboardPage() {
             icon={<FiDatabase size={24} />}
           />
         </Grid>
-        <Grid item xs={12} md={6} lg={4}>
+        <Grid size={{ xs: 12, md: 6, lg: 4 }}>
           <DashboardCard
             title="عدد المخازن"
             value="18"
@@ -27,7 +27,7 @@ export function DashboardPage() {
             icon={<FiBox size={24} />}
           />
         </Grid>
-        <Grid item xs={12} md={6} lg={4}>
+        <Grid size={{ xs: 12, md: 6, lg: 4 }}>
           <DashboardCard
             title="طلبات التصنيع"
             value="42"
@@ -36,7 +36,7 @@ export function DashboardPage() {
             icon={<FiLayers size={24} />}
           />
         </Grid>
-        <Grid item xs={12} md={6} lg={4}>
+        <Grid size={{ xs: 12, md: 6, lg: 4 }}>
           <DashboardCard
             title="فواتير المشتريات"
             value="152"
@@ -45,7 +45,7 @@ export function DashboardPage() {
             icon={<FiShoppingBag size={24} />}
           />
         </Grid>
-        <Grid item xs={12} md={6} lg={4}>
+        <Grid size={{ xs: 12, md: 6, lg: 4 }}>
           <DashboardCard
             title="فواتير المبيعات"
             value="98"
@@ -54,7 +54,7 @@ export function DashboardPage() {
             icon={<FiShoppingCart size={24} />}
           />
         </Grid>
-        <Grid item xs={12} md={6} lg={4}>
+        <Grid size={{ xs: 12, md: 6, lg: 4 }}>
           <DashboardCard
             title="آخر مزامنة"
             value="قبل 4 دقائق"
@@ -66,7 +66,7 @@ export function DashboardPage() {
       </Grid>
 
       <Grid container spacing={3}>
-        <Grid item xs={12} lg={7}>
+        <Grid size={{ xs: 12, lg: 7 }}>
           <SectionCard title="أنشطة حديثة" subtitle="أحدث التغييرات في النظام">
             <Box sx={{ display: 'grid', gap: 2 }}>
               {[
@@ -82,7 +82,7 @@ export function DashboardPage() {
             </Box>
           </SectionCard>
         </Grid>
-        <Grid item xs={12} lg={5}>
+        <Grid size={{ xs: 12, lg: 5 }}>
           <SectionCard title="تنبيه انخفاض المخزون" subtitle="أصناف تحتاج لتزويد عاجل">
             <Box sx={{ display: 'grid', gap: 2 }}>
               {['رأس برغي 10 مم', 'حشية مطاطية', 'لوح فولاذي', 'زيت تشحيم'].map((item) => (
@@ -94,7 +94,7 @@ export function DashboardPage() {
             </Box>
           </SectionCard>
         </Grid>
-        <Grid item xs={12} lg={4}>
+        <Grid size={{ xs: 12, lg: 4 }}>
           <SectionCard title="طلبات التصنيع المعلقة" subtitle="تشغيل الإنتاج القادم">
             <Box sx={{ display: 'grid', gap: 2 }}>
               {['طلب 041 - لوحة تحكم', 'طلب 042 - وحدة غيار', 'طلب 043 - حاوية تعبئة'].map((item) => (
@@ -106,7 +106,7 @@ export function DashboardPage() {
             </Box>
           </SectionCard>
         </Grid>
-        <Grid item xs={12} lg={4}>
+        <Grid size={{ xs: 12, lg: 4 }}>
           <SectionCard title="إجراءات سريعة" subtitle="أدوات الوصول المباشر">
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {['إنشاء فاتورة جديدة', 'طلب مورد جديد', 'بدء إنتاج', 'تصدير تقرير'].map((label) => (
@@ -115,7 +115,7 @@ export function DashboardPage() {
             </Box>
           </SectionCard>
         </Grid>
-        <Grid item xs={12} lg={4}>
+        <Grid size={{ xs: 12, lg: 4 }}>
           <SectionCard title="ملخص المخازن" subtitle="أداء السعة والتوافر">
             <StatisticCard title="المساحة المستخدمة" value="72%" subtitle="من إجمالي السعة" />
             <StatisticCard title="سعة الاستقبال" value="128" subtitle="طلبات جديدة ممكن استقبالها" />

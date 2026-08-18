@@ -1,15 +1,13 @@
 import { Box } from '@mui/material'
-import { SectionCard } from '../components/ui/SectionCard'
+import { useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 export function InventoryPage() {
-  return (
-    <Box>
+  const navigate = useNavigate()
 
-      <SectionCard title="حالة الجرد" subtitle="مؤشرات المخازن الرئيسية">
-        <Box sx={{ minHeight: 320, display: 'grid', placeItems: 'center', color: '#64748B' }}>
-          مخطط الجرد البياني سيتم عرضه هنا
-        </Box>
-      </SectionCard>
-    </Box>
-  )
+  useEffect(() => {
+    navigate('/inventory/warehouses', { replace: true })
+  }, [navigate])
+
+  return <Box />
 }

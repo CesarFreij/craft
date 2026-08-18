@@ -1,15 +1,21 @@
 import { InputAdornment, OutlinedInput, useTheme } from '@mui/material'
+import type { SxProps, Theme } from '@mui/material'
 import { FiSearch } from 'react-icons/fi'
 
 interface SearchFieldProps {
   placeholder?: string
+  value?: string
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void
+  sx?: SxProps<Theme>
 }
 
-export function SearchField({ placeholder = 'ابحث هنا...' }: SearchFieldProps) {
+export function SearchField({ placeholder = 'ابحث هنا...', value, onChange, sx }: SearchFieldProps) {
   const theme = useTheme()
   return (
     <OutlinedInput
       placeholder={placeholder}
+      value={value}
+      onChange={onChange}
       fullWidth
       sx={{
         borderRadius: 3,
@@ -18,6 +24,7 @@ export function SearchField({ placeholder = 'ابحث هنا...' }: SearchFieldP
         '& .MuiOutlinedInput-notchedOutline': {
           borderColor: 'rgba(15, 23, 42, 0.08)',
         },
+        ...sx,
       }}
       startAdornment={
         <InputAdornment position="start">
