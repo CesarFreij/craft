@@ -118,7 +118,30 @@ declare global {
       getByReference: (reference: string) => Promise<StockMovementDetails | null>
       create: (doc: StockMovementDocument) => Promise<{ reference: string }>
     }
+    craftAdjustmentsAPI?: {
+      list: (filter?: StockMovementFilter) => Promise<StockMovementListRow[]>
+      getByReference: (reference: string) => Promise<StockMovementDetails | null>
+      create: (payload: StockAdjustmentPayload) => Promise<{ reference: string }>
+      update: (reference: string, payload: StockAdjustmentPayload) => Promise<{ reference: string }>
+      delete: (reference: string) => Promise<StockMovementListRow[]>
+    }
   }
+}
+
+export interface StockAdjustmentItemPayload {
+  materialId: string
+  countedQuantity: number
+  unit?: string
+  unitCost?: number
+  notes?: string
+}
+
+export interface StockAdjustmentPayload {
+  reference?: string
+  date?: string
+  warehouseId: string
+  notes?: string
+  items: StockAdjustmentItemPayload[]
 }
 
 function getInventoryAPI() {
@@ -169,5 +192,28 @@ export const movementsService = {
   async create(doc: StockMovementDocument): Promise<{ reference: string }> {
     if (!window.craftMovementsAPI) throw new Error('Movements API not available')
     return window.craftMovementsAPI.create(doc)
+  },
+}
+
+export const adjustmentService = {
+  async list(filter?: StockMovementFilter): Promise<StockMovementListRow[]> {
+    if (!window.craftAdjustmentsAPI) return movementsService.list({ ...filter, type: 'adjustment' })
+    return window.craftAdjustmentsAPI.list(filter)
+  },
+  async getByReference(reference: string): Promise<StockMovementDetails | null> {
+    if (!window.craftAdjustmentsAPI) return movementsService.getByReference(reference)
+    return window.craftAdjustmentsAPI.getByReference(reference)
+  },
+  async create(payload: StockAdjustmentPayload): Promise<{ reference: string }> {
+    if (!window.craftAdjustmentsAPI) throw new Error('Adjustments API not available')
+    return window.craftAdjustmentsAPI.create(payload)
+  },
+  async update(reference: string, payload: StockAdjustmentPayload): Promise<{ reference: string }> {
+    if (!window.craftAdjustmentsAPI) throw new Error('Adjustments API not available')
+    return window.craftAdjustmentsAPI.update(reference, payload)
+  },
+  async delete(reference: string): Promise<StockMovementListRow[]> {
+    if (!window.craftAdjustmentsAPI) return []
+    return window.craftAdjustmentsAPI.delete(reference)
   },
 }

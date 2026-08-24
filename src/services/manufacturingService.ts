@@ -56,6 +56,7 @@ export interface ProductionOrderPayload {
   outputWarehouseId: string
   plannedOutputQuantity: number
   actualOutputQuantity: number
+  laborCost: number
   date?: string
   notes?: string
   items: ProductionOrderInputPayload[]
@@ -103,6 +104,7 @@ export interface ProductionOrderRecord {
   outputWarehouseName: string
   plannedOutputQuantity: number
   actualOutputQuantity: number
+  laborCost: number
   materialCostTotal: number
   totalProductionCost: number
   unitProductionCost: number
@@ -126,6 +128,7 @@ declare global {
       getProductionOrderById: (id: string) => Promise<ProductionOrderRecord | null>
       getNextProductionOrderNumber: () => Promise<string>
       createProductionOrder: (payload: ProductionOrderPayload) => Promise<ProductionOrderRecord | null>
+      updateProductionOrder: (orderId: string, payload: ProductionOrderPayload) => Promise<ProductionOrderRecord | null>
       deleteProductionOrder: (id: string) => Promise<ProductionOrderRecord[]>
     }
   }
@@ -180,6 +183,10 @@ export const manufacturingService = {
 
   async createProductionOrder(payload: ProductionOrderPayload): Promise<ProductionOrderRecord | null> {
     return getManufacturingAPI().createProductionOrder(payload)
+  },
+
+  async updateProductionOrder(orderId: string, payload: ProductionOrderPayload): Promise<ProductionOrderRecord | null> {
+    return getManufacturingAPI().updateProductionOrder(orderId, payload)
   },
 
   async deleteProductionOrder(id: string): Promise<ProductionOrderRecord[]> {

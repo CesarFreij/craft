@@ -125,7 +125,7 @@ export async function initDatabase() {
   }
 }
 
-function getDatabase() {
+export function getDatabase() {
   if (!dbInstance) {
     throw new Error('Database not initialized. Call initDatabase() from main before using repository functions.')
   }
@@ -229,6 +229,7 @@ function initializeSchema(db) {
       output_warehouse_id TEXT NOT NULL,
       planned_output_quantity REAL NOT NULL CHECK(planned_output_quantity > 0),
       actual_output_quantity REAL NOT NULL CHECK(actual_output_quantity > 0),
+      labor_cost REAL NOT NULL DEFAULT 0,
       material_cost_total REAL NOT NULL DEFAULT 0,
       total_production_cost REAL NOT NULL DEFAULT 0,
       unit_production_cost REAL NOT NULL DEFAULT 0,
@@ -298,6 +299,17 @@ function initializeSchema(db) {
     }
   } catch (e) {
     console.warn('Schema migration check for opening columns failed or skipped', e)
+  }
+
+  try {
+    const cols = db.exec(`PRAGMA table_info(production_orders)`)[0]?.values ?? []
+    const colNames = cols.map(c => c[1])
+    if (!colNames.includes('labor_cost')) {
+      db.run(`ALTER TABLE production_orders ADD COLUMN labor_cost REAL NOT NULL DEFAULT 0`)
+    }
+    db.run(`UPDATE production_orders SET labor_cost = 0 WHERE labor_cost IS NULL`)
+  } catch (e) {
+    console.warn('Schema migration check for production_orders labor_cost failed or skipped', e)
   }
   
   // Additional inventory schema: warehouses, stock_movements, stock_levels
@@ -2105,6 +2117,7 @@ export function updateApprovedSalesInvoice(invoiceId, payload) {
     if (header[5] !== 'completed') throw new Error('لا يمكن تعديل فاتورة غير معتمدة.')
 
     const invoiceNumber = String(header[1])
+    const previousWarehouseId = String(header[4] ?? '').trim()
     const previousItems = db.exec(
       `SELECT material_id, quantity, unit_price, unit, notes
        FROM sales_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
@@ -2112,11 +2125,42 @@ export function updateApprovedSalesInvoice(invoiceId, payload) {
     )[0]?.values ?? []
 
     const affectedMaterials = new Set(
-      previousItems.map((row) => String(row[0]))
+      previousItems
+        .map((row) => String(row[0] ?? '').trim())
+        .filter(Boolean)
     )
 
     db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [invoiceNumber])
     db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [invoiceNumber])
+
+    for (const row of previousItems) {
+      const materialId = String(row[0] ?? '').trim()
+      if (materialId) {
+        recalculateStockLevel(db, previousWarehouseId, materialId)
+      }
+    }
+
+    const validationWarehouseId = String(payload.warehouseId ?? previousWarehouseId ?? '').trim()
+    const requiredQuantities = new Map()
+    for (const item of Array.isArray(payload.items) ? payload.items : []) {
+      const materialId = String(item.materialId ?? '').trim()
+      const warehouseId = String(item.warehouseId ?? validationWarehouseId ?? previousWarehouseId ?? '').trim()
+      const quantity = Number(item.quantity ?? 0)
+      if (!materialId || !warehouseId || !Number.isFinite(quantity) || quantity <= 0) {
+        continue
+      }
+      const key = `${warehouseId}|${materialId}`
+      requiredQuantities.set(key, (requiredQuantities.get(key) ?? 0) + quantity)
+    }
+
+    for (const [key, totalQuantity] of requiredQuantities.entries()) {
+      const [warehouseId, materialId] = key.split('|')
+      if (!warehouseId || !materialId) continue
+      const available = computeAvailableQuantity(db, warehouseId, materialId)
+      if (available < totalQuantity) {
+        throw new Error(`الرصيد المتوفر في المخزن غير كافٍ لإتمام العملية. الكمية المطلوبة: ${totalQuantity}، الرصيد الحالي: ${available}.`)
+      }
+    }
 
     const validated = validateSalesInvoiceCore(db, payload)
     for (const item of validated.items) {
@@ -3275,6 +3319,57 @@ function getAverageCost(db, warehouseId, materialId) {
   return row ? Number(row[0] ?? 0) : 0
 }
 
+function buildAdjustmentReference(db) {
+  return generateSequentialReference(db, 'ADJ')
+}
+
+function parseAdjustmentSnapshot(rawNotes) {
+  if (!rawNotes) return null
+
+  try {
+    const parsed = JSON.parse(rawNotes)
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.snapshot && typeof parsed.snapshot === 'object') {
+        return parsed.snapshot
+      }
+      return parsed
+    }
+  } catch (error) {
+    return null
+  }
+
+  return null
+}
+
+function normalizeAdjustmentItemNotes(itemNotes, snapshot) {
+  const payload = {
+    snapshot,
+    lineNotes: typeof itemNotes === 'string' ? itemNotes.trim() : '',
+  }
+
+  return JSON.stringify(payload)
+}
+
+function parseAdjustmentMovementRow(row) {
+  const snapshot = parseAdjustmentSnapshot(row.notes)
+  return {
+    materialId: row.material_id,
+    materialNumber: row.material_number,
+    materialName: row.material_name,
+    warehouseId: row.warehouse_id,
+    warehouseName: row.warehouse_name,
+    quantityIn: Number(row.quantity_in ?? 0),
+    quantityOut: Number(row.quantity_out ?? 0),
+    unit: row.unit ?? '',
+    cost: row.cost == null ? null : Number(row.cost),
+    notes: snapshot && snapshot.lineNotes ? snapshot.lineNotes : row.notes ?? '',
+    systemQuantity: snapshot && Number.isFinite(Number(snapshot.systemQuantity)) ? Number(snapshot.systemQuantity) : 0,
+    countedQuantity: snapshot && Number.isFinite(Number(snapshot.countedQuantity)) ? Number(snapshot.countedQuantity) : 0,
+    difference: snapshot && Number.isFinite(Number(snapshot.difference)) ? Number(snapshot.difference) : 0,
+    unitCost: snapshot && Number.isFinite(Number(snapshot.unitCost)) ? Number(snapshot.unitCost) : 0,
+  }
+}
+
 function parseOpeningCost(value) {
   if (value === undefined || value === null || value === '') return null
   const num = Number(value)
@@ -3627,6 +3722,143 @@ export function createPurchaseReturn(payload = {}) {
   }
 }
 
+export function updatePurchaseReturn(returnId, payload = {}) {
+  const db = getDatabase()
+  const now = new Date().toISOString()
+  const current = db.exec(
+    `SELECT id, return_number, date, supplier_id, warehouse_id, purchase_invoice_id, notes
+     FROM purchase_returns WHERE id = ?`,
+    [returnId]
+  )[0]?.values?.[0]
+
+  if (!current) throw new Error('مرتجع الشراء غير موجود.')
+
+  const safePayload = payload && typeof payload === 'object' ? payload : {}
+  const items = Array.isArray(safePayload.items) ? safePayload.items : []
+  const allowedSupplierId = String(safePayload.supplierId ?? current[3] ?? '').trim() || String(current[3] ?? '').trim()
+  const allowedWarehouseId = String(safePayload.warehouseId ?? current[4] ?? '').trim() || String(current[4] ?? '').trim()
+  const allowedInvoiceId = String(safePayload.purchaseInvoiceId ?? current[5] ?? '').trim() || String(current[5] ?? '').trim()
+  const returnDate = String(safePayload.date ?? current[2] ?? '').trim() || now.slice(0, 10)
+  const originalReturnNumber = String(current[1] ?? '').trim()
+
+  if (!allowedSupplierId || !allowedWarehouseId || !allowedInvoiceId) {
+    throw new Error('بيانات مرتجع الشراء غير مكتملة.')
+  }
+  if (items.length === 0) {
+    throw new Error('يجب إدخال مادة واحدة على الأقل في المرتجع.')
+  }
+
+  const invoice = db.exec(
+    `SELECT id, invoice_number, warehouse_id, supplier_id, status FROM purchase_invoices WHERE id = ?`,
+    [allowedInvoiceId]
+  )[0]?.values?.[0]
+  if (!invoice) throw new Error('فاتورة الشراء الأصلية غير موجودة.')
+  if (invoice[4] !== 'completed') throw new Error('يمكن إنشاء المرتجعات فقط على فواتير مشتريات معتمدة.')
+  if (String(invoice[2]) !== allowedWarehouseId) throw new Error('المخزن المختار لا يطابق مخزن الفاتورة الأصلية.')
+  if (String(invoice[3]) !== allowedSupplierId) throw new Error('المورد المختار لا يطابق المورد في الفاتورة الأصلية.')
+
+  const existingItems = db.exec(
+    `SELECT material_id, quantity FROM purchase_return_items WHERE return_id = ?`,
+    [returnId]
+  )[0]?.values ?? []
+  const previousQuantities = new Map(existingItems.map((row) => [String(row[0] ?? '').trim(), Number(row[1] ?? 0)]))
+
+  const seen = new Set()
+  let subtotal = 0
+  const prepared = items.map((item) => {
+    const materialId = String(item.materialId ?? '').trim()
+    const quantity = Number(item.quantity ?? 0)
+    if (!materialId) throw new Error('المادة غير موجودة في المرتجع.')
+    if (seen.has(materialId)) throw new Error('المادة مكررة في المرتجع.')
+    seen.add(materialId)
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('كميات المرتجع يجب أن تكون أكبر من صفر.')
+
+    const invoiceItemRow = db.exec(
+      `SELECT quantity, unit, unit_price FROM purchase_invoice_items WHERE invoice_id = ? AND material_id = ?`,
+      [allowedInvoiceId, materialId]
+    )[0]?.values?.[0]
+    if (!invoiceItemRow) throw new Error('المادة غير موجودة في الفاتورة الأصلية.')
+
+    const invoicedQty = Number(invoiceItemRow[0] ?? 0)
+    const otherReturnsQty = Number(db.exec(
+      `SELECT COALESCE(SUM(pri.quantity), 0) FROM purchase_return_items pri JOIN purchase_returns pr ON pr.id = pri.return_id WHERE pr.purchase_invoice_id = ? AND pri.material_id = ? AND pr.id != ?`,
+      [allowedInvoiceId, materialId, returnId]
+    )[0]?.values?.[0]?.[0] ?? 0)
+    const currentQty = previousQuantities.get(materialId) ?? 0
+    const remainingQty = invoicedQty - otherReturnsQty
+    if (quantity > remainingQty + currentQty + 0.000001) {
+      throw new Error(`لا يمكن إرجاع أكثر من ${remainingQty + currentQty} وحدة من المادة ${materialId}.`)
+    }
+
+    const unitPrice = Number(item.unitPrice ?? getPurchaseInvoiceLineCost(db, allowedInvoiceId, materialId) ?? Number(invoiceItemRow[2] ?? 0))
+    const lineTotal = normalizeMoney(quantity * unitPrice)
+    subtotal += lineTotal
+
+    return {
+      materialId,
+      quantity,
+      unit: String(item.unit ?? invoiceItemRow[1] ?? '').trim(),
+      unitPrice,
+      lineTotal,
+      notes: String(item.notes ?? '').trim(),
+    }
+  })
+
+  try {
+    db.run('BEGIN')
+
+    const returnNotes = normalizeDocumentNote(safePayload.notes ?? current[6])
+    const netTotal = normalizeMoney(subtotal)
+
+    db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [originalReturnNumber])
+    db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [originalReturnNumber])
+    db.run(`DELETE FROM purchase_return_items WHERE return_id = ?`, [returnId])
+
+    const affectedMaterials = new Set()
+    for (const item of prepared) {
+      const itemId = `prti-${crypto.randomUUID()}`
+      db.run(
+        `INSERT INTO purchase_return_items (id, return_id, material_id, quantity, unit, unit_price, line_total, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)` ,
+        [itemId, returnId, item.materialId, item.quantity, item.unit || null, normalizeMoney(item.unitPrice), normalizeMoney(item.lineTotal), item.notes || null]
+      )
+
+      db.run(
+        `INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by)
+         VALUES (?, ?, 'purchase_return', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)` ,
+        [`${originalReturnNumber}-${item.materialId}`, originalReturnNumber, originalReturnNumber, allowedWarehouseId, item.materialId, item.quantity, item.unit || null, normalizeMoney(item.unitPrice), item.notes || null, now, 'purchases-module']
+      )
+
+      affectedMaterials.add(item.materialId)
+    }
+
+    db.run(
+      `UPDATE purchase_returns
+       SET date = ?, supplier_id = ?, warehouse_id = ?, purchase_invoice_id = ?, notes = ?, subtotal = ?, discount_amount = 0, net_total = ?, updated_at = ?
+       WHERE id = ?`,
+      [returnDate, allowedSupplierId, allowedWarehouseId, allowedInvoiceId, returnNotes, normalizeMoney(subtotal), netTotal, now, returnId]
+    )
+
+    db.run(
+      `INSERT INTO stock_movement_documents (id, reference, type, date, from_warehouse_id, to_warehouse_id, notes, created_by, created_at, status)
+       VALUES (?, ?, 'purchase_return', ?, ?, NULL, ?, ?, ?, 'completed')` ,
+      [`doc-${crypto.randomUUID()}`, originalReturnNumber, returnDate, allowedWarehouseId, returnNotes, 'purchases-module', now]
+    )
+
+    for (const materialId of affectedMaterials) {
+      recalculateStockLevel(db, allowedWarehouseId, materialId)
+    }
+
+    db.run('COMMIT')
+    persistDatabase(db)
+    return getPurchaseReturnById(returnId)
+  } catch (error) {
+    try { db.run('ROLLBACK') } catch (e) {}
+    console.error('UPDATE PURCHASE RETURN ERROR', error)
+    throw error
+  }
+}
+
 export function deletePurchaseReturn(returnId) {
   const db = getDatabase()
   try {
@@ -3903,6 +4135,162 @@ export function createSalesReturn(payload = {}) {
   }
 }
 
+export function updateSalesReturn(returnId, payload = {}) {
+  const db = getDatabase()
+  const now = new Date().toISOString()
+  const current = db.exec(
+    `SELECT id, return_number, date, customer_id, warehouse_id, sales_invoice_id, notes
+     FROM sales_returns WHERE id = ?`,
+    [returnId]
+  )[0]?.values?.[0]
+
+  if (!current) throw new Error('مرتجع البيع غير موجود.')
+
+  const safePayload = payload && typeof payload === 'object' ? payload : {}
+  const items = Array.isArray(safePayload.items) ? safePayload.items : []
+  const allowedCustomerId = String(safePayload.customerId ?? current[3] ?? '').trim() || String(current[3] ?? '').trim()
+  const allowedWarehouseId = String(safePayload.warehouseId ?? current[4] ?? '').trim() || String(current[4] ?? '').trim()
+  const allowedInvoiceId = String(safePayload.salesInvoiceId ?? current[5] ?? '').trim() || String(current[5] ?? '').trim()
+  const returnDate = String(safePayload.date ?? current[2] ?? '').trim() || now.slice(0, 10)
+  const originalReturnNumber = String(current[1] ?? '').trim()
+
+  if (!allowedCustomerId || !allowedWarehouseId || !allowedInvoiceId) {
+    throw new Error('بيانات مرتجع البيع غير مكتملة.')
+  }
+  if (items.length === 0) {
+    throw new Error('يجب إدخال مادة واحدة على الأقل في المرتجع.')
+  }
+
+  const invoice = db.exec(
+    `SELECT id, invoice_number, warehouse_id, customer_id, status, subtotal, discount_type, discount_value FROM sales_invoices WHERE id = ?`,
+    [allowedInvoiceId]
+  )[0]?.values?.[0]
+  if (!invoice) throw new Error('فاتورة البيع الأصلية غير موجودة.')
+  if (invoice[4] !== 'completed') throw new Error('يمكن إنشاء المرتجعات فقط على فواتير مبيعات معتمدة.')
+  if (String(invoice[2]) !== allowedWarehouseId) throw new Error('المخزن المختار لا يطابق مخزن الفاتورة الأصلية.')
+  if (String(invoice[3]) !== allowedCustomerId) throw new Error('العميل المختار لا يطابق العميل في الفاتورة الأصلية.')
+
+  const existingItems = db.exec(
+    `SELECT material_id, quantity FROM sales_return_items WHERE return_id = ?`,
+    [returnId]
+  )[0]?.values ?? []
+  const previousQuantities = new Map(existingItems.map((row) => [String(row[0] ?? '').trim(), Number(row[1] ?? 0)]))
+
+  const seen = new Set()
+  let subtotal = 0
+  const prepared = items.map((item) => {
+    const materialId = String(item.materialId ?? '').trim()
+    const quantity = Number(item.quantity ?? 0)
+    if (!materialId) throw new Error('المادة غير موجودة في المرتجع.')
+    if (seen.has(materialId)) throw new Error('المادة مكررة في المرتجع.')
+    seen.add(materialId)
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('كميات المرتجع يجب أن تكون أكبر من صفر.')
+
+    const invoiceItemRow = db.exec(
+      `SELECT quantity, unit, unit_price, line_total FROM sales_invoice_items WHERE invoice_id = ? AND material_id = ?`,
+      [allowedInvoiceId, materialId]
+    )[0]?.values?.[0]
+    if (!invoiceItemRow) throw new Error('المادة غير موجودة في الفاتورة الأصلية.')
+
+    const invoicedQty = Number(invoiceItemRow[0] ?? 0)
+    const otherReturnsQty = Number(db.exec(
+      `SELECT COALESCE(SUM(sri.quantity), 0) FROM sales_return_items sri JOIN sales_returns sr ON sr.id = sri.return_id WHERE sr.sales_invoice_id = ? AND sri.material_id = ? AND sr.id != ?`,
+      [allowedInvoiceId, materialId, returnId]
+    )[0]?.values?.[0]?.[0] ?? 0)
+    const currentQty = previousQuantities.get(materialId) ?? 0
+    const remainingQty = invoicedQty - otherReturnsQty
+    if (quantity > remainingQty + currentQty + 0.000001) {
+      throw new Error(`لا يمكن إرجاع أكثر من ${remainingQty + currentQty} وحدة من المادة ${materialId}.`)
+    }
+
+    const originalLineGross = Number(invoiceItemRow[3] ?? 0)
+    const originalQuantity = Number(invoiceItemRow[0] ?? 0)
+    const defaultUnitPrice = Number(invoiceItemRow[2] ?? 0)
+    const invoiceDiscountType = String(invoice[6] ?? 'none')
+    const invoiceDiscountValue = Number(invoice[7] ?? 0)
+    const invoiceSubtotal = Number(invoice[5] ?? 0)
+
+    let financialUnitPrice = defaultUnitPrice
+    if (invoiceDiscountType === 'percentage' && invoiceDiscountValue > 0) {
+      financialUnitPrice = normalizeMoney(defaultUnitPrice * (1 - invoiceDiscountValue / 100))
+    } else if (invoiceDiscountType === 'fixed' && invoiceDiscountValue > 0) {
+      const baseGross = Number(originalLineGross ?? 0)
+      const baseSubtotal = Number(invoiceSubtotal ?? 0)
+      const lineDiscount = baseSubtotal > 0 ? normalizeMoney((invoiceDiscountValue * baseGross) / baseSubtotal) : 0
+      const lineNet = normalizeMoney(baseGross - lineDiscount)
+      financialUnitPrice = originalQuantity > 0 ? normalizeMoney(lineNet / originalQuantity) : defaultUnitPrice
+    }
+
+    const inventoryCost = Number(item.unitPrice ?? getSalesInvoiceLineCost(db, allowedInvoiceId, materialId) ?? defaultUnitPrice)
+    const lineTotal = normalizeMoney(quantity * financialUnitPrice)
+    subtotal += lineTotal
+
+    return {
+      materialId,
+      quantity,
+      unit: String(item.unit ?? invoiceItemRow[1] ?? '').trim(),
+      unitPrice: financialUnitPrice,
+      lineTotal,
+      notes: String(item.notes ?? '').trim(),
+      inventoryCost,
+    }
+  })
+
+  try {
+    db.run('BEGIN')
+
+    const returnNotes = normalizeDocumentNote(safePayload.notes ?? current[6])
+    const netTotal = normalizeMoney(subtotal)
+
+    db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [originalReturnNumber])
+    db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [originalReturnNumber])
+    db.run(`DELETE FROM sales_return_items WHERE return_id = ?`, [returnId])
+
+    const affectedMaterials = new Set()
+    for (const item of prepared) {
+      const itemId = `sri-${crypto.randomUUID()}`
+      db.run(
+        `INSERT INTO sales_return_items (id, return_id, material_id, quantity, unit, unit_price, line_total, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)` ,
+        [itemId, returnId, item.materialId, item.quantity, item.unit || null, normalizeMoney(item.unitPrice), normalizeMoney(item.lineTotal), item.notes || null]
+      )
+
+      db.run(
+        `INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by)
+         VALUES (?, ?, 'sale_return', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)` ,
+        [`${originalReturnNumber}-${item.materialId}`, originalReturnNumber, originalReturnNumber, allowedWarehouseId, item.materialId, item.quantity, item.unit || null, normalizeMoney(item.inventoryCost), item.notes || null, now, 'sales-module']
+      )
+
+      affectedMaterials.add(item.materialId)
+    }
+
+    db.run(
+      `UPDATE sales_returns
+       SET date = ?, customer_id = ?, warehouse_id = ?, sales_invoice_id = ?, notes = ?, subtotal = ?, discount_amount = 0, net_total = ?, updated_at = ?
+       WHERE id = ?`,
+      [returnDate, allowedCustomerId, allowedWarehouseId, allowedInvoiceId, returnNotes, normalizeMoney(subtotal), netTotal, now, returnId]
+    )
+
+    db.run(
+      `INSERT INTO stock_movement_documents (id, reference, type, date, from_warehouse_id, to_warehouse_id, notes, created_by, created_at, status)
+       VALUES (?, ?, 'sale_return', ?, NULL, ?, ?, ?, ?, 'completed')` ,
+      [`doc-${crypto.randomUUID()}`, originalReturnNumber, returnDate, allowedWarehouseId, returnNotes, 'sales-module', now]
+    )
+
+    for (const materialId of affectedMaterials) {
+      recalculateStockLevel(db, allowedWarehouseId, materialId)
+    }
+
+    db.run('COMMIT')
+    persistDatabase(db)
+    return getSalesReturnById(returnId)
+  } catch (error) {
+    try { db.run('ROLLBACK') } catch (e) {}
+    console.error('UPDATE SALES RETURN ERROR', error)
+    throw error
+  }
+}
+
 export function deleteSalesReturn(returnId) {
   const db = getDatabase()
   try {
@@ -3933,6 +4321,299 @@ export function deleteSalesReturn(returnId) {
   } catch (error) {
     try { db.run('ROLLBACK') } catch (e) {}
     console.error('DELETE SALES RETURN ERROR', error)
+    throw error
+  }
+}
+
+export function createAdjustmentDocument(payload = {}) {
+  const db = getDatabase()
+  const now = new Date().toISOString()
+  const selectedWarehouseId = String(payload.warehouseId ?? '').trim()
+  const notes = typeof payload.notes === 'string' ? payload.notes.trim() : ''
+  const date = String(payload.date ?? '').trim() || now.slice(0, 10)
+  const items = Array.isArray(payload.items) ? payload.items : []
+
+  if (!selectedWarehouseId) {
+    throw new Error('يجب اختيار المخزن قبل اعتماد التسوية.')
+  }
+
+  if (!items.length) {
+    throw new Error('يجب إضافة بند واحد على الأقل للتسوية.')
+  }
+
+  const warehouseRow = db.exec(`SELECT id, status FROM warehouses WHERE id = ?`, [selectedWarehouseId])[0]?.values?.[0]
+  if (!warehouseRow || String(warehouseRow[1]) !== 'active') {
+    throw new Error('المخزن المحدد غير صالح أو غير نشط.')
+  }
+
+  const reference = (String(payload.reference ?? '').trim() || buildAdjustmentReference(db)).toUpperCase()
+  const existing = db.exec(`SELECT 1 FROM stock_movement_documents WHERE reference = ?`, [reference])[0]?.values?.[0]?.[0]
+  if (existing) {
+    throw new Error(`رقم التسوية ${reference} مستخدم مسبقاً.`)
+  }
+
+  try {
+    db.run('BEGIN')
+
+    const docId = `doc-${crypto.randomUUID()}`
+    db.run(
+      `INSERT INTO stock_movement_documents (id, reference, type, date, from_warehouse_id, to_warehouse_id, notes, created_by, created_at, status)
+       VALUES (?, ?, 'adjustment', ?, NULL, ?, ?, ?, ?, 'completed')`,
+      [docId, reference, date, selectedWarehouseId, notes || null, 'local-user', now]
+    )
+
+    const affectedMaterials = new Set()
+
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      const materialId = String(item.materialId ?? '').trim()
+      if (!materialId) {
+        throw new Error('توجد مادة غير محددة في تسوية الجرد.')
+      }
+      if (!ensureMaterialExists(db, materialId)) {
+        throw new Error(`المادة غير موجودة: ${materialId}`)
+      }
+
+      const materialRow = db.exec(`SELECT id, is_non_stock FROM materials WHERE id = ?`, [materialId])[0]?.values?.[0]
+      if (materialRow && Number(materialRow[1]) === 1) {
+        throw new Error(`المادة ${materialId} غير قابلة للحركة في المخزون.`)
+      }
+
+      const systemQuantity = Number(
+        db.exec(`SELECT COALESCE(quantity, 0) FROM stock_levels WHERE warehouse_id = ? AND material_id = ?`, [selectedWarehouseId, materialId])[0]?.values?.[0]?.[0] ?? 0
+      )
+      const countedQuantity = Number(item.countedQuantity ?? 0)
+      if (!Number.isFinite(countedQuantity) || countedQuantity < 0) {
+        throw new Error(`الكمية الفعلية غير صحيحة للمادة ${materialId}.`)
+      }
+
+      const difference = countedQuantity - systemQuantity
+      if (difference === 0) {
+        continue
+      }
+
+      const rawUnitCost = item.unitCost == null || item.unitCost === '' ? getAverageCost(db, selectedWarehouseId, materialId) : Number(item.unitCost)
+      const unitCost = Number.isFinite(rawUnitCost) ? Number(rawUnitCost) : 0
+
+      const isIncrease = difference > 0
+      const quantityIn = isIncrease ? Math.abs(difference) : 0
+      const quantityOut = isIncrease ? 0 : Math.abs(difference)
+      const movementType = isIncrease ? 'adjustment_in' : 'adjustment_out'
+      const snapshot = {
+        systemQuantity,
+        countedQuantity,
+        difference,
+        unitCost,
+      }
+
+      db.run(
+        `INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+        [`${reference}-${index}`, reference, movementType, reference, selectedWarehouseId, materialId, quantityIn, quantityOut, item.unit ?? null, unitCost, normalizeAdjustmentItemNotes(item.notes, snapshot), now, 'local-user']
+      )
+
+      affectedMaterials.add(materialId)
+    }
+
+    if (affectedMaterials.size === 0) {
+      db.run('ROLLBACK')
+      throw new Error('لا توجد فروق في الجرد لتسجيلها.')
+    }
+
+    for (const materialId of affectedMaterials) {
+      recalculateStockLevel(db, selectedWarehouseId, materialId)
+    }
+
+    db.run('COMMIT')
+    persistDatabase(db)
+    return { reference }
+  } catch (error) {
+    try { db.run('ROLLBACK') } catch (e) {}
+    console.error('CREATE ADJUSTMENT ERROR', error)
+    throw error
+  }
+}
+
+export function updateAdjustmentDocument(reference, payload = {}) {
+  const db = getDatabase()
+  const normalizedReference = String(reference ?? '').trim()
+  if (!normalizedReference) {
+    throw new Error('رقم التسوية غير موجود.')
+  }
+
+  const safePayload = payload && typeof payload === 'object' ? payload : {}
+  const items = Array.isArray(safePayload.items) ? safePayload.items : []
+
+  try {
+    const docRow = db.exec(
+      `SELECT id, reference, date, from_warehouse_id, to_warehouse_id, notes
+       FROM stock_movement_documents
+       WHERE reference = ? AND type = 'adjustment'`,
+      [normalizedReference]
+    )[0]?.values?.[0]
+
+    if (!docRow) {
+      throw new Error(`تسوية الجرد ${normalizedReference} غير موجودة.`)
+    }
+
+    const previousWarehouseId = String(docRow[3] ?? docRow[4] ?? '').trim()
+    const targetWarehouseId = String(safePayload.warehouseId ?? previousWarehouseId ?? '').trim() || previousWarehouseId
+    if (!targetWarehouseId) {
+      throw new Error('يجب اختيار المخزن قبل تعديل التسوية.')
+    }
+
+    const warehouseRow = db.exec(`SELECT id, status FROM warehouses WHERE id = ?`, [targetWarehouseId])[0]?.values?.[0]
+    if (!warehouseRow || String(warehouseRow[1]) !== 'active') {
+      throw new Error('المخزن المحدد غير صالح أو غير نشط.')
+    }
+
+    const previousItems = db.exec(
+      `SELECT material_id, quantity_in, quantity_out, unit, cost, notes
+       FROM stock_movements WHERE document_reference = ? ORDER BY rowid ASC`,
+      [normalizedReference]
+    )[0]?.values ?? []
+
+    const previousMaterials = [...new Set(previousItems.map((row) => String(row[0] ?? '').trim()).filter(Boolean))]
+
+    if (!items.length) {
+      throw new Error('يجب إضافة بند واحد على الأقل للتسوية.')
+    }
+
+    db.run('BEGIN')
+
+    // 1) Reverse the old adjustment completely by removing its movement rows.
+    db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [normalizedReference])
+    db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [normalizedReference])
+
+    // 2) Recalculate stock_levels after removing the old adjustment effect, returning to the state before that ADJ.
+    for (const materialId of previousMaterials) {
+      recalculateStockLevel(db, previousWarehouseId, materialId)
+    }
+
+    // 3) Recreate the document with the same reference and apply only the new adjustment effect.
+    const noteText = typeof safePayload.notes === 'string' ? safePayload.notes.trim() : (docRow[5] ?? '')
+    const documentDate = String(safePayload.date ?? docRow[2] ?? '').trim() || new Date().toISOString().slice(0, 10)
+    const documentId = `doc-${crypto.randomUUID()}`
+    db.run(
+      `INSERT INTO stock_movement_documents (id, reference, type, date, from_warehouse_id, to_warehouse_id, notes, created_by, created_at, status)
+       VALUES (?, ?, 'adjustment', ?, NULL, ?, ?, ?, ?, 'completed')`,
+      [documentId, normalizedReference, documentDate, targetWarehouseId, noteText || null, 'local-user', new Date().toISOString()]
+    )
+
+    const affectedMaterials = new Set()
+
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      const materialId = String(item.materialId ?? '').trim()
+      if (!materialId) {
+        throw new Error('توجد مادة غير محددة في تسوية الجرد.')
+      }
+      if (!ensureMaterialExists(db, materialId)) {
+        throw new Error(`المادة غير موجودة: ${materialId}`)
+      }
+
+      const materialRow = db.exec(`SELECT id, is_non_stock FROM materials WHERE id = ?`, [materialId])[0]?.values?.[0]
+      if (materialRow && Number(materialRow[1]) === 1) {
+        throw new Error(`المادة ${materialId} غير قابلة للحركة في المخزون.`)
+      }
+
+      const systemQuantity = Number(
+        db.exec(`SELECT COALESCE(quantity, 0) FROM stock_levels WHERE warehouse_id = ? AND material_id = ?`, [targetWarehouseId, materialId])[0]?.values?.[0]?.[0] ?? 0
+      )
+      const countedQuantity = Number(item.countedQuantity ?? 0)
+      if (!Number.isFinite(countedQuantity) || countedQuantity < 0) {
+        throw new Error(`الكمية الفعلية غير صحيحة للمادة ${materialId}.`)
+      }
+
+      const difference = countedQuantity - systemQuantity
+      if (difference === 0) {
+        continue
+      }
+
+      const rawUnitCost = item.unitCost == null || item.unitCost === ''
+        ? getAverageCost(db, targetWarehouseId, materialId)
+        : Number(item.unitCost)
+      const unitCost = Number.isFinite(rawUnitCost) ? Number(rawUnitCost) : 0
+      const isIncrease = difference > 0
+      const quantityIn = isIncrease ? Math.abs(difference) : 0
+      const quantityOut = isIncrease ? 0 : Math.abs(difference)
+      const movementType = isIncrease ? 'adjustment_in' : 'adjustment_out'
+      const snapshot = {
+        systemQuantity,
+        countedQuantity,
+        difference,
+        unitCost,
+      }
+
+      db.run(
+        `INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+        [`${normalizedReference}-${index}`, normalizedReference, movementType, normalizedReference, targetWarehouseId, materialId, quantityIn, quantityOut, item.unit ?? null, unitCost, normalizeAdjustmentItemNotes(item.notes, snapshot), new Date().toISOString(), 'local-user']
+      )
+
+      affectedMaterials.add(materialId)
+    }
+
+    if (affectedMaterials.size === 0) {
+      throw new Error('لا توجد فروق في الجرد لتسجيلها.')
+    }
+
+    for (const materialId of affectedMaterials) {
+      recalculateStockLevel(db, targetWarehouseId, materialId)
+    }
+
+    db.run('COMMIT')
+    persistDatabase(db)
+    return { reference: normalizedReference }
+  } catch (error) {
+    try { db.run('ROLLBACK') } catch (e) {}
+    console.error('UPDATE ADJUSTMENT ERROR', error)
+    throw error
+  }
+}
+
+export function deleteAdjustmentDocument(reference) {
+  const db = getDatabase()
+  const normalizedReference = String(reference ?? '').trim()
+  if (!normalizedReference) {
+    throw new Error('رقم التسوية غير موجود.')
+  }
+
+  try {
+    db.run('BEGIN')
+
+    const docRow = db.exec(
+      `SELECT id, reference, from_warehouse_id, to_warehouse_id
+       FROM stock_movement_documents
+       WHERE reference = ? AND type = 'adjustment'`,
+      [normalizedReference]
+    )[0]?.values?.[0]
+
+    if (!docRow) {
+      throw new Error(`تسوية الجرد ${normalizedReference} غير موجودة.`)
+    }
+
+    const warehouseId = String(docRow[2] ?? docRow[3] ?? '').trim()
+    const affectedMaterials = [...new Set((db.exec(
+      `SELECT material_id FROM stock_movements WHERE document_reference = ?`,
+      [normalizedReference]
+    )[0]?.values ?? []).map((row) => String(row[0] ?? '').trim()).filter(Boolean))]
+
+    db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [normalizedReference])
+    db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [normalizedReference])
+
+    if (warehouseId) {
+      for (const materialId of affectedMaterials) {
+        recalculateStockLevel(db, warehouseId, materialId)
+      }
+    }
+
+    db.run('COMMIT')
+    persistDatabase(db)
+    return listStockMovements({ type: 'adjustment' })
+  } catch (error) {
+    try { db.run('ROLLBACK') } catch (e) {}
+    console.error('DELETE ADJUSTMENT ERROR', error)
     throw error
   }
 }
@@ -4132,18 +4813,25 @@ export function getStockMovementByReference(ref) {
     createdBy: docRow[9],
     createdAt: docRow[10],
     partyName: docRow[11] || null,
-    items: items.map(r => ({
-      materialId: r[0],
-      materialNumber: r[1],
-      materialName: r[2],
-      quantityIn: Number(r[3] ?? 0),
-      quantityOut: Number(r[4] ?? 0),
-      warehouseId: r[5],
-      warehouseName: r[6],
-      unit: r[7],
-      cost: r[8],
-      notes: r[9],
-    }))
+    items: items.map((r) => {
+      const snapshot = parseAdjustmentSnapshot(r[9])
+      return {
+        materialId: r[0],
+        materialNumber: r[1],
+        materialName: r[2],
+        quantityIn: Number(r[3] ?? 0),
+        quantityOut: Number(r[4] ?? 0),
+        warehouseId: r[5],
+        warehouseName: r[6],
+        unit: r[7],
+        cost: r[8],
+        notes: snapshot && snapshot.lineNotes ? snapshot.lineNotes : (r[9] ?? ''),
+        systemQuantity: snapshot && Number.isFinite(Number(snapshot.systemQuantity)) ? Number(snapshot.systemQuantity) : 0,
+        countedQuantity: snapshot && Number.isFinite(Number(snapshot.countedQuantity)) ? Number(snapshot.countedQuantity) : 0,
+        difference: snapshot && Number.isFinite(Number(snapshot.difference)) ? Number(snapshot.difference) : 0,
+        unitCost: snapshot && Number.isFinite(Number(snapshot.unitCost)) ? Number(snapshot.unitCost) : (r[8] == null ? 0 : Number(r[8]))
+      }
+    })
   }
 }
 
@@ -4741,6 +5429,7 @@ export function listProductionOrders() {
       w.name,
       po.planned_output_quantity,
       po.actual_output_quantity,
+      po.labor_cost,
       po.material_cost_total,
       po.total_production_cost,
       po.unit_production_cost,
@@ -4766,12 +5455,13 @@ export function listProductionOrders() {
     outputWarehouseName: row[8] ?? '',
     plannedOutputQuantity: Number(row[9] ?? 0),
     actualOutputQuantity: Number(row[10] ?? 0),
-    materialCostTotal: Number(row[11] ?? 0),
-    totalProductionCost: Number(row[12] ?? 0),
-    unitProductionCost: Number(row[13] ?? 0),
-    notes: row[14] ?? '',
-    createdAt: row[15],
-    updatedAt: row[16],
+    laborCost: Number(row[11] ?? 0),
+    materialCostTotal: Number(row[12] ?? 0),
+    totalProductionCost: Number(row[13] ?? 0),
+    unitProductionCost: Number(row[14] ?? 0),
+    notes: row[15] ?? '',
+    createdAt: row[16],
+    updatedAt: row[17],
   }))
 }
 
@@ -4791,6 +5481,7 @@ export function getProductionOrderById(id) {
       w.name,
       po.planned_output_quantity,
       po.actual_output_quantity,
+      po.labor_cost,
       po.material_cost_total,
       po.total_production_cost,
       po.unit_production_cost,
@@ -4820,12 +5511,13 @@ export function getProductionOrderById(id) {
     outputWarehouseName: orderRow[8] ?? '',
     plannedOutputQuantity: Number(orderRow[9] ?? 0),
     actualOutputQuantity: Number(orderRow[10] ?? 0),
-    materialCostTotal: Number(orderRow[11] ?? 0),
-    totalProductionCost: Number(orderRow[12] ?? 0),
-    unitProductionCost: Number(orderRow[13] ?? 0),
-    notes: orderRow[14] ?? '',
-    createdAt: orderRow[15],
-    updatedAt: orderRow[16],
+    laborCost: Number(orderRow[11] ?? 0),
+    materialCostTotal: Number(orderRow[12] ?? 0),
+    totalProductionCost: Number(orderRow[13] ?? 0),
+    unitProductionCost: Number(orderRow[14] ?? 0),
+    notes: orderRow[15] ?? '',
+    createdAt: orderRow[16],
+    updatedAt: orderRow[17],
   }
 
   const inputRows = db.exec(`
@@ -4935,11 +5627,15 @@ export function createProductionOrder(payload) {
 
   const plannedOutputQuantity = Number(payload.plannedOutputQuantity)
   const actualOutputQuantity = Number(payload.actualOutputQuantity)
+  const laborCost = Number(payload.laborCost ?? 0)
   if (!Number.isFinite(plannedOutputQuantity) || plannedOutputQuantity <= 0) {
     throw new Error('يجب أن تكون الكمية المخططة أكبر من صفر.')
   }
   if (!Number.isFinite(actualOutputQuantity) || actualOutputQuantity <= 0) {
     throw new Error('يجب أن تكون الكمية الناتجة فعلياً أكبر من صفر.')
+  }
+  if (!Number.isFinite(laborCost) || laborCost < 0) {
+    throw new Error('تكلفة الأجور يجب أن تكون صفراً أو قيمة موجبة.')
   }
 
   const recipeItems = db.exec(`
@@ -5013,13 +5709,14 @@ export function createProductionOrder(payload) {
         output_warehouse_id,
         planned_output_quantity,
         actual_output_quantity,
+        labor_cost,
         material_cost_total,
         total_production_cost,
         unit_production_cost,
         notes,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       orderId,
       orderNumber,
@@ -5029,6 +5726,7 @@ export function createProductionOrder(payload) {
       outputWarehouseId,
       plannedOutputQuantity,
       actualOutputQuantity,
+      laborCost,
       0,
       0,
       0,
@@ -5080,18 +5778,19 @@ export function createProductionOrder(payload) {
       ])
     }
 
-    const totalProductionCost = materialCostTotal
+    const totalProductionCost = materialCostTotal + laborCost
     const unitProductionCost = actualOutputQuantity > 0 ? totalProductionCost / actualOutputQuantity : 0
 
     db.run(`
       UPDATE production_orders
       SET
+        labor_cost = ?,
         material_cost_total = ?,
         total_production_cost = ?,
         unit_production_cost = ?,
         updated_at = ?
       WHERE id = ?
-    `, [materialCostTotal, totalProductionCost, unitProductionCost, now, orderId])
+    `, [laborCost, materialCostTotal, totalProductionCost, unitProductionCost, now, orderId])
 
     const outputId = crypto.randomUUID()
     db.run(`
@@ -5175,7 +5874,7 @@ export function createProductionOrder(payload) {
         inputRecord.qty,
         inputRecord.unitCost ? getRecipeMaterialRecord(db, inputRecord.materialId)?.unit ?? null : null,
         inputRecord.unitCost,
-        `إستهلاك مادة في ${orderNumber}`,
+        inputRecord.notes?.trim() || null,
         now,
         null,
       ])
@@ -5211,7 +5910,7 @@ export function createProductionOrder(payload) {
       0,
       outputUnit,
       unitProductionCost,
-      `إنتاج منتج نهائي ${orderNumber}`,
+      null,
       now,
       null,
     ])
@@ -5223,6 +5922,398 @@ export function createProductionOrder(payload) {
   } catch (error) {
     try { db.run('ROLLBACK') } catch (_) {}
     console.error('CREATE PRODUCTION ORDER ERROR:', error)
+    throw error
+  }
+}
+
+export function updateProductionOrder(orderId, payload) {
+  const db = getDatabase()
+  const now = new Date().toISOString()
+
+  try {
+    db.run('BEGIN')
+
+    const existingHeader = db.exec(`
+      SELECT
+        po.id,
+        po.order_number,
+        po.date,
+        po.recipe_id,
+        po.product_material_id,
+        po.output_warehouse_id,
+        po.planned_output_quantity,
+        po.actual_output_quantity,
+        po.labor_cost,
+        po.notes
+      FROM production_orders po
+      WHERE po.id = ?
+    `, [orderId])[0]?.values?.[0]
+
+    if (!existingHeader) {
+      throw new Error('أمر الإنتاج غير موجود.')
+    }
+
+    const previousOrderNumber = String(existingHeader[1] ?? '').trim()
+    const previousRecipeId = String(existingHeader[3] ?? '').trim()
+    const previousProductMaterialId = String(existingHeader[4] ?? '').trim()
+    const previousOutputWarehouseId = String(existingHeader[5] ?? '').trim()
+    const previousActualOutputQuantity = Number(existingHeader[7] ?? 0)
+
+    if (previousProductMaterialId && previousOutputWarehouseId && previousActualOutputQuantity > 0) {
+      const availableToReverse = computeAvailableQuantity(db, previousOutputWarehouseId, previousProductMaterialId)
+      if (availableToReverse < previousActualOutputQuantity) {
+        throw new Error('لا يمكن تعديل الأمر لأن رصيد المنتج النهائي لا يسمح بعكس الكمية القديمة.')
+      }
+    }
+
+    const recipeId = String(payload.recipeId ?? previousRecipeId ?? '').trim()
+    if (!recipeId) {
+      throw new Error('يجب اختيار نموذج التصنيع.')
+    }
+
+    const recipeRow = db.exec(`
+      SELECT id, name, product_material_id, standard_output_quantity, status
+      FROM manufacturing_recipes
+      WHERE id = ?
+    `, [recipeId])[0]?.values?.[0]
+
+    if (!recipeRow) {
+      throw new Error('نموذج التصنيع غير موجود أو غير فعال.')
+    }
+
+    if (String(recipeRow[4] ?? '') !== 'active') {
+      throw new Error('نموذج التصنيع غير فعال.')
+    }
+
+    const productMaterialId = String(recipeRow[2] ?? '').trim()
+    const productMaterial = getRecipeMaterialRecord(db, productMaterialId)
+    if (!productMaterial || productMaterial.type !== 'sub' || productMaterial.isNonStock || productMaterial.status !== 'active') {
+      throw new Error('المنتج الناتج غير صالح للتصنيع.')
+    }
+
+    const outputWarehouseId = String(payload.outputWarehouseId ?? previousOutputWarehouseId ?? '').trim()
+    const outputWarehouse = ensureWarehouseExists(db, outputWarehouseId)
+    if (!outputWarehouse || outputWarehouse.status !== 'active') {
+      throw new Error('مخزن المنتج النهائي غير موجود أو غير فعال.')
+    }
+
+    const plannedOutputQuantity = Number(payload.plannedOutputQuantity)
+    const actualOutputQuantity = Number(payload.actualOutputQuantity)
+    const previousLaborCost = Number(existingHeader[8] ?? 0)
+    const nextLaborCost = Number(payload.laborCost ?? previousLaborCost ?? 0)
+    if (!Number.isFinite(plannedOutputQuantity) || plannedOutputQuantity <= 0) {
+      throw new Error('يجب أن تكون الكمية المخططة أكبر من صفر.')
+    }
+    if (!Number.isFinite(actualOutputQuantity) || actualOutputQuantity <= 0) {
+      throw new Error('يجب أن تكون الكمية الناتجة فعلياً أكبر من صفر.')
+    }
+    if (!Number.isFinite(nextLaborCost) || nextLaborCost < 0) {
+      throw new Error('تكلفة الأجور يجب أن تكون صفراً أو قيمة موجبة.')
+    }
+
+    const previousInputs = db.exec(`
+      SELECT material_id, warehouse_id, actual_quantity
+      FROM production_order_inputs
+      WHERE production_order_id = ?
+      ORDER BY sort_order ASC, id ASC
+    `, [orderId])[0]?.values ?? []
+
+    const previousOutputs = db.exec(`
+      SELECT material_id, warehouse_id, quantity
+      FROM production_order_outputs
+      WHERE production_order_id = ?
+      ORDER BY id ASC
+    `, [orderId])[0]?.values ?? []
+
+    const reverseTargets = new Set()
+    for (const row of previousInputs) {
+      const materialId = String(row[0] ?? '').trim()
+      const warehouseId = String(row[1] ?? '').trim()
+      if (materialId && warehouseId) {
+        reverseTargets.add(`${warehouseId}|${materialId}`)
+      }
+    }
+    for (const row of previousOutputs) {
+      const materialId = String(row[0] ?? '').trim()
+      const warehouseId = String(row[1] ?? '').trim()
+      if (materialId && warehouseId) {
+        reverseTargets.add(`${warehouseId}|${materialId}`)
+      }
+    }
+
+    db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [previousOrderNumber])
+    db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [previousOrderNumber])
+
+    for (const key of reverseTargets) {
+      const [warehouseId, materialId] = key.split('|')
+      if (warehouseId && materialId) {
+        recalculateStockLevel(db, warehouseId, materialId)
+      }
+    }
+
+    const rawItems = Array.isArray(payload.items) ? payload.items : []
+    if (rawItems.length === 0) {
+      throw new Error('يجب إضافة مادة أولية واحدة على الأقل.')
+    }
+
+    const aggregated = new Map()
+    for (const item of rawItems) {
+      const materialId = String(item.materialId ?? '').trim()
+      const warehouseId = String(item.warehouseId ?? '').trim()
+      const qty = Number(item.actualQuantity ?? 0)
+
+      if (!materialId) {
+        throw new Error('توجد مادة أولية غير محددة.')
+      }
+      if (!warehouseId) {
+        throw new Error('كل مادة أولية تحتاج إلى مخزن صرف.')
+      }
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw new Error('يجب أن تكون الكمية الفعلية أكبر من صفر.')
+      }
+
+      const material = getRecipeMaterialRecord(db, materialId)
+      if (!material || material.type !== 'sub' || material.isNonStock || material.status !== 'active') {
+        throw new Error('إحدى المواد الأولية غير موجودة أو غير صالحة.')
+      }
+
+      const warehouse = ensureWarehouseExists(db, warehouseId)
+      if (!warehouse || warehouse.status !== 'active') {
+        throw new Error('إحدى مخازن الصرف غير موجودة أو غير فعالة.')
+      }
+
+      const storageKey = `${materialId}|${warehouseId}`
+      const existing = aggregated.get(storageKey) ?? 0
+      const nextTotal = existing + qty
+      aggregated.set(storageKey, nextTotal)
+
+      const available = computeAvailableQuantity(db, warehouseId, materialId)
+      if (available < nextTotal) {
+        throw new Error(`الرصيد المتوفر من مادة ${material.name} في مخزن المواد الخام هو ${available} فقط.`)
+      }
+    }
+
+    let materialCostTotal = 0
+    const inputRecords = []
+
+    db.run(`DELETE FROM production_order_inputs WHERE production_order_id = ?`, [orderId])
+    db.run(`DELETE FROM production_order_outputs WHERE production_order_id = ?`, [orderId])
+
+    for (let index = 0; index < rawItems.length; index++) {
+      const item = rawItems[index]
+      const materialId = String(item.materialId ?? '').trim()
+      const warehouseId = String(item.warehouseId ?? '').trim()
+      const qty = Number(item.actualQuantity ?? 0)
+      const unitCost = Number(getAverageCost(db, warehouseId, materialId) ?? 0)
+      const totalCost = qty * unitCost
+      materialCostTotal += totalCost
+
+      const inputId = crypto.randomUUID()
+      inputRecords.push({
+        id: inputId,
+        materialId,
+        warehouseId,
+        unitCost,
+        totalCost,
+        qty,
+        notes: String(item.notes ?? '').trim(),
+        sortOrder: index,
+      })
+
+      db.run(`
+        INSERT INTO production_order_inputs (
+          id,
+          production_order_id,
+          recipe_item_id,
+          material_id,
+          warehouse_id,
+          unit,
+          planned_quantity,
+          actual_quantity,
+          unit_cost,
+          total_cost,
+          notes,
+          sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        inputId,
+        orderId,
+        item.recipeItemId ?? null,
+        materialId,
+        warehouseId,
+        item.unit ?? getRecipeMaterialRecord(db, materialId)?.unit ?? '',
+        Number(item.plannedQuantity ?? qty),
+        qty,
+        unitCost,
+        totalCost,
+        String(item.notes ?? '').trim(),
+        index,
+      ])
+    }
+
+    const totalProductionCost = materialCostTotal + nextLaborCost
+    const unitProductionCost = actualOutputQuantity > 0 ? totalProductionCost / actualOutputQuantity : 0
+
+    db.run(`
+      UPDATE production_orders
+      SET
+        date = ?,
+        recipe_id = ?,
+        product_material_id = ?,
+        output_warehouse_id = ?,
+        planned_output_quantity = ?,
+        actual_output_quantity = ?,
+        labor_cost = ?,
+        material_cost_total = ?,
+        total_production_cost = ?,
+        unit_production_cost = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE id = ?
+    `, [
+      payload.date || existingHeader[2],
+      recipeId,
+      productMaterialId,
+      outputWarehouseId,
+      plannedOutputQuantity,
+      actualOutputQuantity,
+      nextLaborCost,
+      materialCostTotal,
+      totalProductionCost,
+      unitProductionCost,
+      payload.notes ?? existingHeader[9] ?? '',
+      now,
+      orderId,
+    ])
+
+    const outputId = crypto.randomUUID()
+    db.run(`
+      INSERT INTO production_order_outputs (
+        id,
+        production_order_id,
+        material_id,
+        warehouse_id,
+        unit,
+        quantity,
+        unit_cost,
+        total_cost
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      outputId,
+      orderId,
+      productMaterialId,
+      outputWarehouseId,
+      productMaterial.unit ?? '',
+      actualOutputQuantity,
+      unitProductionCost,
+      actualOutputQuantity * unitProductionCost,
+    ])
+
+    const docId = `doc-${crypto.randomUUID()}`
+    db.run(`
+      INSERT INTO stock_movement_documents (
+        id,
+        reference,
+        type,
+        date,
+        from_warehouse_id,
+        to_warehouse_id,
+        notes,
+        created_by,
+        created_at,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      docId,
+      previousOrderNumber,
+      'production',
+      payload.date || existingHeader[2],
+      null,
+      outputWarehouseId,
+      payload.notes ?? null,
+      null,
+      now,
+      'completed',
+    ])
+
+    let movementIndex = 0
+    for (const inputRecord of inputRecords) {
+      const movementId = `${previousOrderNumber}-out-${movementIndex}`
+      db.run(`
+        INSERT INTO stock_movements (
+          id,
+          document_reference,
+          type,
+          reference,
+          warehouse_id,
+          material_id,
+          quantity_in,
+          quantity_out,
+          unit,
+          cost,
+          notes,
+          created_at,
+          created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        movementId,
+        previousOrderNumber,
+        'production_out',
+        previousOrderNumber,
+        inputRecord.warehouseId,
+        inputRecord.materialId,
+        0,
+        inputRecord.qty,
+        getRecipeMaterialRecord(db, inputRecord.materialId)?.unit ?? null,
+        inputRecord.unitCost,
+        inputRecord.notes?.trim() || null,
+        now,
+        null,
+      ])
+      recalculateStockLevel(db, inputRecord.warehouseId, inputRecord.materialId)
+      movementIndex += 1
+    }
+
+    const outputMovementId = `${previousOrderNumber}-in-${movementIndex}`
+    db.run(`
+      INSERT INTO stock_movements (
+        id,
+        document_reference,
+        type,
+        reference,
+        warehouse_id,
+        material_id,
+        quantity_in,
+        quantity_out,
+        unit,
+        cost,
+        notes,
+        created_at,
+        created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      outputMovementId,
+      previousOrderNumber,
+      'production_in',
+      previousOrderNumber,
+      outputWarehouseId,
+      productMaterialId,
+      actualOutputQuantity,
+      0,
+      productMaterial.unit ?? '',
+      unitProductionCost,
+      null,
+      now,
+      null,
+    ])
+    recalculateStockLevel(db, outputWarehouseId, productMaterialId)
+
+    db.run('COMMIT')
+    persistDatabase(db)
+    return getProductionOrderById(orderId)
+  } catch (error) {
+    try { db.run('ROLLBACK') } catch (_) {}
+    console.error('UPDATE PRODUCTION ORDER ERROR:', error)
     throw error
   }
 }

@@ -1,6 +1,11 @@
 import type { PaletteMode } from '@mui/material'
 import { createTheme } from '@mui/material/styles'
-import type { BorderRadiusOption, FontSizeOption, SidebarStyleOption } from '../contexts/ThemeContext'
+
+import type {
+  BorderRadiusOption,
+  FontSizeOption,
+  SidebarStyleOption,
+} from '../contexts/ThemeContext'
 
 interface ThemeOptions {
   mode: PaletteMode
@@ -13,20 +18,42 @@ interface ThemeOptions {
 const paletteVariants = {
   blue: {
     main: '#1D4ED8',
-    light: '#2563EB',
-    accent: '#06B6D4',
+    light: '#60A5FA',
+    accent: '#22D3EE',
   },
   cyan: {
     main: '#0EA5E9',
-    light: '#22D3EE',
-    accent: '#2DD4BF',
+    light: '#67E8F9',
+    accent: '#22D3EE',
   },
 }
 
-const radiusMap: Record<BorderRadiusOption, number> = {
-  small: 12,
-  medium: 18,
-  large: 26,
+/*
+ * مهم:
+ * هاي القيمة هي BASE UNIT للـ sx.
+ * borderRadius: 3 في sx = 3 × shape.borderRadius.
+ *
+ * لذلك لازم تضل صغيرة.
+ */
+const shapeRadiusMap: Record<BorderRadiusOption, number> = {
+  small: 4,
+  medium: 6,
+  large: 8,
+}
+
+/*
+ * هاي للـcomponents مباشرة، وبتنكتب px صريحة.
+ */
+const componentRadiusMap: Record<BorderRadiusOption, string> = {
+  small: '10px',
+  medium: '14px',
+  large: '18px',
+}
+
+const popupRadiusMap: Record<BorderRadiusOption, string> = {
+  small: '8px',
+  medium: '12px',
+  large: '16px',
 }
 
 const fontSizeMap: Record<FontSizeOption, number> = {
@@ -37,61 +64,348 @@ const fontSizeMap: Record<FontSizeOption, number> = {
 
 export function createCraftTheme(options: ThemeOptions) {
   const palette = paletteVariants[options.primaryColor]
-  const primary = {
-    main: palette.main,
-    light: palette.light,
-  }
 
   return createTheme({
     direction: 'rtl',
+
     palette: {
       mode: options.mode,
-      primary,
+
+      primary: {
+        main: palette.main,
+        light: palette.light,
+      },
+
       secondary: {
         main: '#22D3EE',
       },
+
       background: {
-        // App background: very light gray (global content background)
-        default: '#F7F8FA',
-        // Cards / papers remain white
-        paper: '#FFFFFF',
+        default: '#06142F',
+        paper: '#0F1F3A',
       },
+
       text: {
-        primary: '#111827',
-        secondary: '#4B5563',
+        primary: '#F8FAFC',
+        secondary: '#CBD5E1',
       },
     },
+
     shape: {
-      borderRadius: radiusMap[options.borderRadius],
+      borderRadius: shapeRadiusMap[options.borderRadius],
     },
+
     typography: {
       fontFamily: "'Inter', 'Noto Kufi Arabic', 'Segoe UI', sans-serif",
-      fontSize: fontSizeMap[options.fontSize], 
+      fontSize: fontSizeMap[options.fontSize],
+
       button: {
         textTransform: 'none',
       },
-      allVariants: {
-        color: '#1F2937',
-      },
     },
+
     components: {
       MuiCssBaseline: {
         styleOverrides: {
           body: {
-            background: '#F7F8FA',
+            background: '#06142F',
+            color: '#F8FAFC',
           },
+
           '#root, #app': {
-            background: '#F7F8FA',
+            minHeight: '100vh',
           },
+
           table: {
             borderCollapse: 'collapse',
           },
-          'table th, table td': {
-            border: '1px solid #E2E8F0',
-            verticalAlign: 'middle',
+
+          /*
+           * Scrollbar عام لكل البرنامج:
+           * صفحات، جداول، Dialogs، Menus وأي عنصر فيه overflow.
+           */
+          '*': {
+            scrollbarWidth: 'thin',
+            scrollbarColor: '#38BDF8 rgba(148, 163, 184, 0.18)',
+          },
+
+          '*::-webkit-scrollbar': {
+            width: '9px',
+            height: '9px',
+          },
+
+          '*::-webkit-scrollbar-track': {
+            background: 'rgba(148, 163, 184, 0.18)',
+            borderRadius: '999px',
+          },
+
+          '*::-webkit-scrollbar-thumb': {
+            background: '#38BDF8',
+            borderRadius: '999px',
+            border: '2px solid transparent',
+            backgroundClip: 'padding-box',
+          },
+
+          '*::-webkit-scrollbar-thumb:hover': {
+            background: '#0EA5E9',
+            backgroundClip: 'padding-box',
+          },
+
+          '*::-webkit-scrollbar-corner': {
+            background: 'transparent',
           },
         },
       },
+
+      MuiPaper: {
+        styleOverrides: {
+          root: {
+            backgroundImage: 'none',
+          },
+        },
+      },
+
+      MuiButton: {
+        styleOverrides: {
+          root: {
+            borderRadius: componentRadiusMap[options.borderRadius],
+            textTransform: 'none',
+          },
+        },
+      },
+
+      MuiIconButton: {
+        styleOverrides: {
+          root: {
+            borderRadius: popupRadiusMap[options.borderRadius],
+          },
+        },
+      },
+
+      MuiOutlinedInput: {
+        styleOverrides: {
+          root: {
+            borderRadius: componentRadiusMap[options.borderRadius],
+          },
+        },
+      },
+
+      MuiInputLabel: {
+        styleOverrides: {
+          root: {
+            color: 'rgba(255,255,255,0.68)',
+
+            '&.Mui-focused': {
+              color: '#67E8F9',
+            },
+          },
+        },
+      },
+
+      /*
+       * SELECT / MENU
+       */
+      MuiMenu: {
+        styleOverrides: {
+          paper: {
+            marginTop: 6,
+
+            borderRadius: popupRadiusMap[options.borderRadius],
+
+            background: 'rgba(8, 22, 48, 0.96)',
+
+            backdropFilter: 'blur(22px) saturate(125%)',
+            WebkitBackdropFilter: 'blur(22px) saturate(125%)',
+
+            border: '1px solid rgba(255,255,255,0.12)',
+
+            boxShadow:
+              '0 20px 50px rgba(2,6,23,0.38)',
+
+            overflow: 'hidden',
+          },
+
+          list: {
+            padding: '6px',
+          },
+        },
+      },
+
+      MuiMenuItem: {
+        styleOverrides: {
+          root: {
+            minHeight: 40,
+
+            margin: '2px 0',
+
+            borderRadius: popupRadiusMap[options.borderRadius],
+
+            color: 'rgba(255,255,255,0.88)',
+
+            '&:hover': {
+              backgroundColor: 'rgba(56,189,248,0.10)',
+              color: '#FFFFFF',
+            },
+
+            '&.Mui-selected': {
+              backgroundColor: 'rgba(34,211,238,0.13)',
+              color: '#67E8F9',
+            },
+
+            '&.Mui-selected:hover': {
+              backgroundColor: 'rgba(34,211,238,0.18)',
+            },
+          },
+        },
+      },
+
+      /*
+       * POPOVER
+       */
+      MuiPopover: {
+        styleOverrides: {
+          paper: {
+            borderRadius: popupRadiusMap[options.borderRadius],
+
+            background: 'rgba(8,22,48,0.96)',
+
+            backdropFilter: 'blur(22px) saturate(125%)',
+            WebkitBackdropFilter: 'blur(22px) saturate(125%)',
+
+            border: '1px solid rgba(255,255,255,0.12)',
+
+            boxShadow:
+              '0 20px 50px rgba(2,6,23,0.38)',
+
+            color: '#F8FAFC',
+          },
+        },
+      },
+
+      /*
+       * AUTOCOMPLETE POPUP
+       */
+      MuiAutocomplete: {
+        styleOverrides: {
+          paper: {
+            borderRadius: popupRadiusMap[options.borderRadius],
+
+            background: 'rgba(8,22,48,0.96)',
+
+            backdropFilter: 'blur(22px) saturate(125%)',
+            WebkitBackdropFilter: 'blur(22px) saturate(125%)',
+
+            border: '1px solid rgba(255,255,255,0.12)',
+
+            boxShadow:
+              '0 20px 50px rgba(2,6,23,0.38)',
+
+            color: '#F8FAFC',
+          },
+
+          listbox: {
+            padding: 6,
+
+            '& .MuiAutocomplete-option': {
+              marginBlock: 2,
+
+              borderRadius: popupRadiusMap[options.borderRadius],
+
+              color: 'rgba(255,255,255,0.88)',
+
+              '&[aria-selected="true"]': {
+                backgroundColor: 'rgba(34,211,238,0.13)',
+                color: '#67E8F9',
+              },
+
+              '&.Mui-focused': {
+                backgroundColor: 'rgba(56,189,248,0.10)',
+              },
+            },
+          },
+
+          noOptions: {
+            color: 'rgba(255,255,255,0.68)',
+          },
+
+          loading: {
+            color: 'rgba(255,255,255,0.68)',
+          },
+        },
+      },
+
+      /*
+       * TOOLTIP
+       */
+      MuiTooltip: {
+        styleOverrides: {
+          tooltip: {
+            background: 'rgba(15,23,42,0.96)',
+            color: '#F8FAFC',
+
+            border: '1px solid rgba(255,255,255,0.10)',
+
+            borderRadius: popupRadiusMap[options.borderRadius],
+
+            fontSize: 12,
+          },
+        },
+      },
+
+      /*
+       * DIALOG
+       *
+       * نخليه Light Glass لأن هاد النمط الحالي الموجود بالثيم.
+       */
+      MuiDialog: {
+        styleOverrides: {
+          paper: {
+            borderRadius: componentRadiusMap[options.borderRadius],
+
+            background: 'rgba(248,250,252,0.94)',
+
+            backdropFilter: 'blur(18px) saturate(120%)',
+            WebkitBackdropFilter: 'blur(18px) saturate(120%)',
+
+            border: '1px solid rgba(255,255,255,0.62)',
+
+            boxShadow:
+              '0 26px 65px rgba(2,6,23,0.28)',
+
+            color: '#0F172A',
+
+            backgroundImage: 'none',
+          },
+        },
+      },
+
+      MuiDialogTitle: {
+        styleOverrides: {
+          root: {
+            color: '#0F172A',
+          },
+        },
+      },
+
+      MuiDialogContent: {
+        styleOverrides: {
+          root: {
+            color: '#0F172A',
+          },
+        },
+      },
+
+      MuiDialogActions: {
+        styleOverrides: {
+          root: {
+            padding: '16px 24px 20px',
+          },
+        },
+      },
+
+      /*
+       * TABLE
+       */
       MuiTable: {
         styleOverrides: {
           root: {
@@ -99,61 +413,36 @@ export function createCraftTheme(options: ThemeOptions) {
           },
         },
       },
-      MuiPaper: {
-        styleOverrides: {
-          root: {
-            backgroundColor: '#FFFFFF',
-            backgroundImage: 'none',
-            boxShadow: 'none',
-            border: '1px solid #E2E8F0',
-          },
-        },
-      },
-      MuiCard: {
-        styleOverrides: {
-          root: {
-            borderRadius: radiusMap[options.borderRadius],
-            backgroundColor: '#FFFFFF',
-            boxShadow: 'none',
-            border: '1px solid #E2E8F0',
-          },
-        },
-      },
-      MuiDialog: {
-        styleOverrides: {
-          paper: {
-            boxShadow: '0 2px 4px rgba(15, 23, 42, 0.05)',
-            border: '1px solid #E2E8F0',
-            backgroundColor: '#FFFFFF',
-          },
-        },
-      },
-      MuiPopover: {
-        styleOverrides: {
-          paper: {
-            boxShadow: '0 2px 4px rgba(15, 23, 42, 0.05)',
-            border: '1px solid #E2E8F0',
-            backgroundColor: '#FFFFFF',
-          },
-        },
-      },
-      MuiButton: {
-        styleOverrides: {
-          root: {
-            borderRadius: radiusMap[options.borderRadius],
-          },
-        },
-      },
+
       MuiTableCell: {
         styleOverrides: {
           root: {
-            border: '1px solid #E2E8F0',
             verticalAlign: 'middle',
+
             textAlign: 'center',
             textAlignLast: 'center',
+
+            borderColor: 'rgba(255,255,255,0.10)',
           },
+
           head: {
             fontWeight: 700,
+          },
+        },
+      },
+
+      MuiTablePagination: {
+        styleOverrides: {
+          root: {
+            border: 'none',
+          },
+        },
+      },
+
+      MuiDivider: {
+        styleOverrides: {
+          root: {
+            borderColor: 'rgba(255,255,255,0.10)',
           },
         },
       },

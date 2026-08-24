@@ -3,6 +3,7 @@ import { Avatar, Box, IconButton, Typography } from '@mui/material'
 import { FiBell, FiSettings, FiWifi } from 'react-icons/fi'
 import { motion } from 'framer-motion'
 import { SIDEBAR_EXPANDED_WIDTH } from './Sidebar'
+import craftImage from '../assets/craft-removebg-preview.png'
 
 const statusMap = {
   online: { label: 'متصل', color: '#22C55E' },
@@ -69,20 +70,18 @@ export function TopBar({ sidebarOffset }: { sidebarOffset?: number }) {
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <Box sx={{ width: 44, height: 44, borderRadius: 2.2, background: 'linear-gradient(135deg, #2563EB 0%, #06B6D4 100%)', display: 'grid', placeItems: 'center', color: '#fff', fontWeight: 700, boxShadow: '0 16px 42px rgba(37, 99, 235, 0.16)' }}>
-          C
-        </Box>
+        <Box component="img" src={craftImage} sx={{ width: 44, height: 44, borderRadius: 2.2, background: 'transparent' }} />
         <Box>
           <Typography sx={{ fontWeight: 800, fontSize: 17, lineHeight: 1.1 }}>CRAFT</Typography>
           <Typography sx={{ color: 'text.secondary', fontSize: 12 }}>نظام إدارة المخازن والتصنيع</Typography>
         </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.6, py: 1, borderRadius: 3, border: '1px solid rgba(37, 99, 235, 0.12)', background: 'rgba(255,255,255,0.9)', transform: 'translateX(10px)' }}>
-          <FiWifi size={17} color={badge.color} />
-          <Typography sx={{ color: badge.color, fontWeight: 700, fontSize: 13 }}>{badge.label}</Typography>
-        </Box>
       </Box>
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.4, flexWrap: 'wrap' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.6, py: 1, borderRadius: 3, border: '1px solid rgba(37, 99, 235, 0.12)', background: 'rgba(255,255,255,0.9)' }}>
+          <FiWifi size={17} color={badge.color} />
+          <Typography sx={{ color: badge.color, fontWeight: 700, fontSize: 13 }}>{badge.label}</Typography>
+        </Box>
         <Box sx={{ textAlign: 'right', minWidth: 170, px: 0.5 }}>
           <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{formatDate(now)}</Typography>
           <Typography sx={{ color: 'text.secondary', fontSize: 12 }}>{formatTime(now)}</Typography>

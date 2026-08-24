@@ -7,7 +7,6 @@ interface ResizableDividerProps {
 }
 
 export const ResizableDivider: React.FC<ResizableDividerProps> = ({
-  treeWidth,
   onTreeWidthChange,
 }) => {
   const [isDragging, setIsDragging] = useState(false)
@@ -44,11 +43,21 @@ export const ResizableDivider: React.FC<ResizableDividerProps> = ({
       onMouseDown={() => setIsDragging(true)}
       sx={{
         width: 4,
+        flexShrink: 0,
         cursor: 'col-resize',
-        bgcolor: isDragging ? 'primary.main' : 'divider',
-        transition: isDragging ? 'none' : 'bgcolor 0.2s ease',
+        borderRadius: '999px',
+        bgcolor: isDragging
+          ? '#67E8F9'
+          : 'rgba(255, 255, 255, 0.16)',
+        boxShadow: isDragging
+          ? '0 0 0 3px rgba(34, 211, 238, 0.10)'
+          : 'none',
+        transition: isDragging
+          ? 'none'
+          : 'background-color 160ms ease, box-shadow 160ms ease',
         '&:hover': {
-          bgcolor: 'primary.main',
+          bgcolor: '#67E8F9',
+          boxShadow: '0 0 0 3px rgba(34, 211, 238, 0.08)',
         },
       }}
     />

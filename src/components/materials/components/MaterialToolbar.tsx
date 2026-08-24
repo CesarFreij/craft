@@ -17,10 +17,11 @@ export const MaterialToolbar: React.FC<MaterialToolbarProps> = ({
     <Box
       sx={{
         display: 'flex',
-        gap: 2,
+        gap: 1.5,
         p: 2,
-        borderBottom: '1px solid',
-        borderColor: 'divider',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.14)',
+        alignItems: 'center',
+        flexWrap: 'wrap',
       }}
     >
       <Button
@@ -29,9 +30,10 @@ export const MaterialToolbar: React.FC<MaterialToolbarProps> = ({
         startIcon={<FiPlus />}
         onClick={onAddMain}
         sx={{
-          borderRadius: 1.5,
+          borderRadius: '12px',
           textTransform: 'none',
-          fontWeight: 600,
+          fontWeight: 700,
+          px: 2.25,
         }}
       >
         إضافة مادة رئيسية
@@ -44,9 +46,21 @@ export const MaterialToolbar: React.FC<MaterialToolbarProps> = ({
         onClick={onAddSub}
         disabled={!canAddSub}
         sx={{
-          borderRadius: 1.5,
+          borderRadius: '12px',
           textTransform: 'none',
-          fontWeight: 600,
+          fontWeight: 700,
+          px: 2.25,
+          color: '#93C5FD',
+          borderColor: 'rgba(96, 165, 250, 0.46)',
+          '&:hover': {
+            borderColor: '#60A5FA',
+            background: 'rgba(96, 165, 250, 0.10)',
+          },
+          '&.Mui-disabled': {
+            background: 'rgba(148, 163, 184, 0.08)',
+            color: 'rgba(203, 213, 225, 0.38)',
+            borderColor: 'rgba(148, 163, 184, 0.16)',
+          },
         }}
       >
         إضافة مادة فرعية

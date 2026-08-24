@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Box, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, IconButton, InputAdornment, TextField, MenuItem, Table, TableHead, TableRow, TableCell, TableBody, TablePagination } from '@mui/material'
+import { Alert, Box, Button, CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions, IconButton, InputAdornment, TextField, MenuItem, Table, TableHead, TableRow, TableCell, TableBody, TablePagination } from '@mui/material'
 import { FiPlus, FiCalendar } from 'react-icons/fi'
 import { inventoryService, movementsService, type WarehouseRecord, type StockMovementDocument } from '../services/inventoryService'
 import { materialsService, type MaterialRecord } from '../services/materialsService'
@@ -8,6 +8,367 @@ import { SectionCard } from '../components/ui/SectionCard'
 import { PageHeader } from '../components/ui/PageHeader'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
+
+
+const darkPopupPaperSx = {
+  mt: 0.75,
+  borderRadius: '12px',
+  background: 'rgba(8, 22, 48, 0.97)',
+  backdropFilter: 'blur(22px) saturate(125%)',
+  WebkitBackdropFilter: 'blur(22px) saturate(125%)',
+  border: '1px solid rgba(255, 255, 255, 0.14)',
+  boxShadow: '0 20px 50px rgba(2, 6, 23, 0.38)',
+  color: 'rgba(255, 255, 255, 0.92)',
+  backgroundImage: 'none',
+  '& .MuiMenuItem-root, & .MuiAutocomplete-option': {
+    color: 'rgba(255, 255, 255, 0.88)',
+    borderRadius: '8px',
+    mx: 0.5,
+    my: 0.25,
+    '&:hover': {
+      background: 'rgba(56, 189, 248, 0.10)',
+    },
+    '&.Mui-selected, &[aria-selected="true"]': {
+      color: '#67E8F9',
+      background: 'rgba(34, 211, 238, 0.13)',
+    },
+  },
+}
+
+const darkSelectSlotProps = {
+  select: {
+    MenuProps: {
+      slotProps: {
+        paper: {
+          sx: darkPopupPaperSx,
+        },
+      },
+    },
+  },
+}
+
+const craftPageGlassSx = {
+  '& .MuiPaper-root:not(.MuiAlert-root)': {
+    background: 'rgba(248, 250, 252, 0.10) !important',
+    backdropFilter: 'blur(36px) saturate(120%)',
+    WebkitBackdropFilter: 'blur(18px) saturate(120%)',
+    boxShadow: '0 18px 45px rgba(2, 6, 23, 0.16) !important',
+    border: 'none !important',
+    borderRadius: '18px',
+    color: 'rgba(255, 255, 255, 0.92)',
+    backgroundImage: 'none !important',
+  },
+
+  '& .MuiTypography-root': {
+    color: 'rgba(255, 255, 255, 0.92)',
+  },
+
+  '& .MuiInputBase-root': {
+    background: 'rgba(255, 255, 255, 0.07)',
+    color: 'rgba(255, 255, 255, 0.92)',
+    borderRadius: '14px',
+  },
+
+  '& .MuiInputBase-input': {
+    color: 'rgba(255, 255, 255, 0.92)',
+    WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+  },
+
+  '& .MuiInputBase-input::placeholder': {
+    color: 'rgba(255, 255, 255, 0.58)',
+    opacity: 1,
+  },
+
+  '& .MuiInputLabel-root': {
+    color: 'rgba(255, 255, 255, 0.72)',
+  },
+
+  '& .MuiInputLabel-root.Mui-focused': {
+    color: '#67E8F9',
+  },
+
+  '& .MuiOutlinedInput-notchedOutline': {
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline': {
+    borderColor: 'rgba(103, 232, 249, 0.55)',
+  },
+
+  '& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline': {
+    borderColor: '#67E8F9',
+    borderWidth: 1.5,
+  },
+
+  '& .MuiSelect-icon, & .MuiAutocomplete-popupIndicator, & .MuiAutocomplete-clearIndicator': {
+    color: 'rgba(255, 255, 255, 0.78)',
+  },
+
+  '& .MuiInputAdornment-root .MuiIconButton-root': {
+    color: 'rgba(255, 255, 255, 0.82)',
+  },
+
+  '& .MuiTable-root': {
+    background: 'transparent',
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiTableHead-root .MuiTableRow-root': {
+    background: 'rgba(255, 255, 255, 0.055)',
+  },
+
+  '& .MuiTableBody-root .MuiTableRow-root': {
+    background: 'rgba(255, 255, 255, 0.022)',
+  },
+
+  '& .MuiTableBody-root .MuiTableRow-root:hover': {
+    background: 'rgba(255, 255, 255, 0.055)',
+  },
+
+  '& .MuiTableCell-root': {
+    color: 'rgba(255, 255, 255, 0.88)',
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiTableHead-root .MuiTableCell-root': {
+    color: 'rgba(255, 255, 255, 0.94)',
+    fontWeight: 700,
+  },
+
+  '& .MuiTablePagination-root': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': {
+    color: 'rgba(255, 255, 255, 0.92)',
+    fontWeight: 600,
+  },
+
+  '& .MuiTablePagination-select, & .MuiTablePagination-selectIcon': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-actions .MuiIconButton-root': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-actions .MuiIconButton-root.Mui-disabled': {
+    color: 'rgba(255, 255, 255, 0.32)',
+  },
+
+  '& .MuiIconButton-colorPrimary': {
+    color: '#60A5FA',
+  },
+
+  '& .MuiButton-outlined': {
+    color: '#93C5FD',
+    borderColor: 'rgba(96, 165, 250, 0.46)',
+  },
+
+  '& .MuiButton-outlined:hover': {
+    borderColor: '#60A5FA',
+    background: 'rgba(96, 165, 250, 0.10)',
+  },
+
+  '& .MuiCircularProgress-root': {
+    color: '#67E8F9',
+  },
+}
+
+const craftDialogSlotProps = {
+  backdrop: {
+    sx: {
+      backgroundColor: 'rgba(2, 6, 23, 0.62)',
+      backdropFilter: 'blur(5px)',
+      WebkitBackdropFilter: 'blur(5px)',
+    },
+  },
+
+  paper: {
+    sx: {
+      borderRadius: '18px',
+      background:
+        'linear-gradient(145deg, rgba(10, 27, 61, 0.97) 0%, rgba(8, 45, 78, 0.95) 100%)',
+      backdropFilter: 'blur(28px) saturate(125%)',
+      WebkitBackdropFilter: 'blur(28px) saturate(125%)',
+      border: '1px solid rgba(148, 197, 255, 0.16)',
+      boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
+      color: 'rgba(255, 255, 255, 0.92)',
+      backgroundImage: 'none',
+      overflow: 'hidden',
+
+      '& .MuiDialogTitle-root': {
+        color: 'rgba(255, 255, 255, 0.96)',
+        fontWeight: 800,
+        px: 3,
+        pt: 2.5,
+        pb: 1.2,
+      },
+
+      '& .MuiDialogContent-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+      },
+
+      '& .MuiTypography-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+      },
+
+      '& strong': {
+        color: 'rgba(255, 255, 255, 0.96)',
+      },
+
+      '& .MuiOutlinedInput-root': {
+        borderRadius: '14px',
+        background: 'rgba(255, 255, 255, 0.07)',
+        color: 'rgba(255, 255, 255, 0.92)',
+
+        '&:hover': {
+          background: 'rgba(255, 255, 255, 0.09)',
+        },
+
+        '&:hover .MuiOutlinedInput-notchedOutline': {
+          borderColor: 'rgba(103, 232, 249, 0.55)',
+        },
+
+        '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+          borderColor: '#67E8F9',
+          borderWidth: 1.5,
+        },
+      },
+
+      '& .MuiOutlinedInput-notchedOutline': {
+        borderColor: 'rgba(203, 213, 225, 0.22)',
+      },
+
+      '& .MuiInputBase-input': {
+        color: 'rgba(255, 255, 255, 0.92)',
+        WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+      },
+
+      '& .MuiInputBase-input.Mui-disabled': {
+        WebkitTextFillColor: 'rgba(255, 255, 255, 0.48)',
+      },
+
+      '& .MuiInputBase-input::placeholder': {
+        color: 'rgba(255, 255, 255, 0.56)',
+        opacity: 1,
+      },
+
+      '& .MuiInputLabel-root': {
+        color: 'rgba(226, 232, 240, 0.72)',
+      },
+
+      '& .MuiInputLabel-root.Mui-focused': {
+        color: '#67E8F9',
+      },
+
+      '& .MuiSelect-icon, & .MuiAutocomplete-popupIndicator, & .MuiAutocomplete-clearIndicator': {
+        color: 'rgba(255, 255, 255, 0.78)',
+      },
+
+      '& .MuiInputAdornment-root .MuiIconButton-root': {
+        color: 'rgba(255, 255, 255, 0.82)',
+      },
+
+      '& input[type="number"]': {
+        colorScheme: 'dark',
+      },
+
+      '& input[type="number"]::-webkit-inner-spin-button, & input[type="number"]::-webkit-outer-spin-button': {
+        opacity: 0.88,
+        cursor: 'pointer',
+      },
+
+      '& .MuiDialogContent-root .MuiPaper-root:not(.MuiAlert-root)': {
+        background: 'rgba(255, 255, 255, 0.045) !important',
+        border: '1px solid rgba(255, 255, 255, 0.14) !important',
+        boxShadow: 'none !important',
+        color: 'rgba(255, 255, 255, 0.92)',
+        backgroundImage: 'none !important',
+      },
+
+      '& .MuiTable-root': {
+        background: 'transparent',
+        border: '1px solid rgba(255, 255, 255, 0.18)',
+      },
+
+      '& .MuiTableHead-root .MuiTableRow-root': {
+        background: 'rgba(255, 255, 255, 0.055)',
+      },
+
+      '& .MuiTableBody-root .MuiTableRow-root': {
+        background: 'rgba(255, 255, 255, 0.022)',
+      },
+
+      '& .MuiTableBody-root .MuiTableRow-root:hover': {
+        background: 'rgba(255, 255, 255, 0.055)',
+      },
+
+      '& .MuiTableCell-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+        border: '1px solid rgba(255, 255, 255, 0.18)',
+      },
+
+      '& .MuiTableHead-root .MuiTableCell-root': {
+        color: 'rgba(255, 255, 255, 0.94)',
+        fontWeight: 700,
+      },
+
+      '& .MuiButton-outlined': {
+        color: '#93C5FD',
+        borderColor: 'rgba(96, 165, 250, 0.46)',
+      },
+
+      '& .MuiButton-outlined:hover': {
+        borderColor: '#60A5FA',
+        background: 'rgba(96, 165, 250, 0.10)',
+      },
+
+      '& .MuiButton-text': {
+        color: '#CBD5E1',
+      },
+
+      '& .MuiButton-text.MuiButton-colorError': {
+        color: '#FCA5A5',
+      },
+
+      '& .MuiCircularProgress-root': {
+        color: '#67E8F9',
+      },
+    },
+  },
+}
+
+const craftErrorAlertSx = {
+  background: 'rgb(92 18 18 / 50%) !important',
+  backgroundColor: 'rgb(92 18 18 / 50%) !important',
+  color: '#FEE2E2 !important',
+  border: '1px solid rgba(248, 113, 113, 0.58)',
+  borderRadius: '14px',
+  '& .MuiAlert-icon': {
+    color: '#FCA5A5',
+  },
+  '& .MuiAlert-message': {
+    color: '#FEE2E2',
+    fontWeight: 700,
+  },
+}
+
+function getNextTransferReference(rows: Array<{ reference?: string }>): string {
+  let maxNumber = 0
+
+  for (const row of rows) {
+    const match = String(row.reference ?? '').match(/^TRF-(\d+)$/i)
+    if (!match) continue
+
+    const value = Number(match[1])
+    if (Number.isFinite(value) && value > maxNumber) {
+      maxNumber = value
+    }
+  }
+
+  return `TRF-${String(maxNumber + 1).padStart(6, '0')}`
+}
 
 type MovementType =
   | 'purchase'
@@ -92,7 +453,15 @@ function getMovementWarehouseLabel(name: string | null | undefined): string {
   return name?.trim() ? name : '__'
 }
 
-function DateFilterField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function DateFilterField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
   const [focused, setFocused] = useState(false)
   const nativeDateInputRef = useRef<HTMLInputElement>(null)
   const shrink = Boolean(value) || focused
@@ -100,10 +469,12 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
   const openDatePicker = () => {
     const input = nativeDateInputRef.current
     if (!input) return
+
     if (typeof input.showPicker === 'function') {
       input.showPicker()
     } else {
       input.focus()
+      input.click()
     }
   }
 
@@ -119,6 +490,14 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
         onBlur={() => setFocused(false)}
         onClick={openDatePicker}
         placeholder="DD/MM/YYYY"
+        sx={{
+          '& .MuiInputBase-input': {
+            textAlign: 'end',
+            direction: 'ltr',
+            color: 'rgba(255, 255, 255, 0.92)',
+            WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+          },
+        }}
         slotProps={{
           htmlInput: {
             inputMode: 'numeric',
@@ -126,7 +505,6 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
           },
           inputLabel: {
             shrink,
-            // keep the rest-state label clear of the reserved calendar icon zone
             sx: {
               '&:not(.MuiInputLabel-shrink)': {
                 transform: 'translate(46px, 16px) scale(1)',
@@ -135,8 +513,24 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
           },
           input: {
             startAdornment: (
-              <InputAdornment position="start" sx={{ marginInlineEnd: 1 }}>
-                <IconButton size="small" onClick={openDatePicker} edge="start" aria-label="اختيار التاريخ" sx={{ color: '#0F172A' }}>
+              <InputAdornment position="start" sx={{ marginInlineEnd: 0 }}>
+                <IconButton
+                  size="small"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    openDatePicker()
+                  }}
+                  edge="start"
+                  aria-label="اختيار التاريخ"
+                  sx={{
+                    color: '#E2E8F0',
+                    background: 'transparent',
+                    '&:hover': {
+                      color: '#67E8F9',
+                      background: 'transparent',
+                    },
+                  }}
+                >
                   <FiCalendar />
                 </IconButton>
               </InputAdornment>
@@ -144,12 +538,22 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
           },
         }}
       />
+
       <input
         ref={nativeDateInputRef}
         type="date"
         value={value || ''}
         onChange={(event) => onChange(event.target.value)}
-        style={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, opacity: 0, pointerEvents: 'none' }}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: 0,
+          height: 0,
+          opacity: 0,
+          pointerEvents: 'none',
+          colorScheme: 'dark',
+        }}
         tabIndex={-1}
         aria-hidden="true"
       />
@@ -328,7 +732,7 @@ export default function MovementsPage() {
   }
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box sx={craftPageGlassSx}>
       <PageHeader title="حركات المخازن" breadcrumb="سجل الحركات الجردية وإدارة الحركات المخزنية" />
 
       <SectionCard title="سجل الحركات" actions={
@@ -336,16 +740,16 @@ export default function MovementsPage() {
       }>
         <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', mb: 2 }}>
           <SearchField placeholder="بحث بالمرجع" value={search} onChange={(e) => { setSearch(e.target.value); setPage(0) }} />
-          <TextField select label="النوع" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(0) }}>
+          <TextField select label="النوع" value={typeFilter} onChange={(e) => { setTypeFilter(e.target.value); setPage(0) }} slotProps={darkSelectSlotProps}>
             {movementTypeFilterOptions.map((option) => (
               <MenuItem key={option.value || 'all'} value={option.value}>{option.label}</MenuItem>
             ))}
           </TextField>
-          <TextField select label="المخزن" value={warehouseFilter} onChange={(e) => { setWarehouseFilter(e.target.value); setPage(0) }}>
+          <TextField select label="المخزن" value={warehouseFilter} onChange={(e) => { setWarehouseFilter(e.target.value); setPage(0) }} slotProps={darkSelectSlotProps}>
             <MenuItem value="">الكل</MenuItem>
             {warehouses.map((w) => <MenuItem key={w.id} value={w.id}>{w.name}</MenuItem>)}
           </TextField>
-          <TextField select label="المادة" value={materialFilter} onChange={(e) => { setMaterialFilter(e.target.value); setPage(0) }}>
+          <TextField select label="المادة" value={materialFilter} onChange={(e) => { setMaterialFilter(e.target.value); setPage(0) }} slotProps={darkSelectSlotProps}>
             <MenuItem value="">الكل</MenuItem>
             {materialOptions.map((m) => <MenuItem key={m.id} value={m.id}>{m.materialNumber} - {m.name}</MenuItem>)}
           </TextField>
@@ -368,34 +772,34 @@ export default function MovementsPage() {
           {loading ? (
             <Box sx={{ display: 'grid', placeItems: 'center', p: 4 }}><CircularProgress /></Box>
           ) : (
-            <Table sx={{ minWidth: 1000, border: '1px solid #E2E8F0', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <Table sx={{ minWidth: 1000, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <TableHead>
-                <TableRow sx={{ background: '#F8FAFC' }}>
-                  <TableCell sx={{ fontWeight: 700, color: '#0F172A', textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>التاريخ</TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#0F172A', textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>المرجع</TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#0F172A', textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>نوع الحركة</TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#0F172A', textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>عدد البنود</TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#0F172A', textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>المخزن</TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#0F172A', textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>الجهة</TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#0F172A', textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>ملاحظات</TableCell>
-                  <TableCell sx={{ fontWeight: 700, color: '#0F172A', textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>الإجراءات</TableCell>
+                <TableRow>
+                  <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>التاريخ</TableCell>
+                  <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>المرجع</TableCell>
+                  <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>نوع الحركة</TableCell>
+                  <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>عدد البنود</TableCell>
+                  <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>المخزن</TableCell>
+                  <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>الجهة</TableCell>
+                  <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>ملاحظات</TableCell>
+                  <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>الإجراءات</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {filteredRows.map((row) => (
-                  <TableRow key={row.reference} hover sx={{ background: '#FFFFFF' }}>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0', color: '#475569' }}>{formatDateDMY(row.date)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0', color: '#0F172A', fontWeight: 600 }}>{row.reference}</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>
-                      <Box component="span" sx={{ display: 'inline-flex', px: 1.2, py: 0.6, borderRadius: 999, background: row.type === 'sale' ? 'rgba(254,226,226,.3)' : row.type === 'purchase' ? 'rgba(219,234,254,.5)' : row.type === 'production' || row.type === 'production_in' || row.type === 'production_out' ? 'rgba(236,252,203,.7)' : row.type === 'transfer' || row.type === 'transfer_in' || row.type === 'transfer_out' ? 'rgba(224,231,255,.7)' : 'rgba(242,211,255,.7)', color: '#0F172A', fontSize: 12, fontWeight: 700, textAlign: 'center' }}>
+                  <TableRow key={row.reference} hover>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{formatDateDMY(row.date)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', fontWeight: 600 }}>{row.reference}</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                      <Box component="span" sx={{ display: 'inline-flex', px: 1.2, py: 0.6, borderRadius: 999, background: row.type === 'sale' ? 'rgba(248, 113, 113, 0.15)' : row.type === 'purchase' ? 'rgba(96, 165, 250, 0.16)' : row.type === 'production' || row.type === 'production_in' || row.type === 'production_out' ? 'rgba(34, 211, 238, 0.14)' : row.type === 'transfer' || row.type === 'transfer_in' || row.type === 'transfer_out' ? 'rgba(129, 140, 248, 0.16)' : 'rgba(192, 132, 252, 0.15)', color: row.type === 'sale' ? '#FCA5A5' : row.type === 'purchase' ? '#93C5FD' : row.type === 'production' || row.type === 'production_in' || row.type === 'production_out' ? '#67E8F9' : row.type === 'transfer' || row.type === 'transfer_in' || row.type === 'transfer_out' ? '#C7D2FE' : '#D8B4FE', border: '1px solid rgba(255, 255, 255, 0.10)', fontSize: 12, fontWeight: 700, textAlign: 'center' }}>
                         {getMovementTypeLabel(row.type, row.reference)}
                       </Box>
                     </TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0', color: '#0F172A' }}>{row.itemCount ?? 0}</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0', color: '#475569' }}>{row.warehouseSummary || '__'}</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0', color: '#475569' }}>{getMovementParty({ ...row, partyName: row.partyName ?? undefined } as MovementRow)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0', color: '#475569' }}>{row.documentNotes?.trim() ? row.documentNotes : '__'}</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{row.itemCount ?? 0}</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{row.warehouseSummary || '__'}</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{getMovementParty({ ...row, partyName: row.partyName ?? undefined } as MovementRow)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{row.documentNotes?.trim() ? row.documentNotes : '__'}</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>
                       <Button size="small" variant="outlined" onClick={() => openMovementDetails(row.reference)}>عرض التفاصيل</Button>
                     </TableCell>
                   </TableRow>
@@ -422,6 +826,73 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
   const [notes, setNotes] = useState('')
   const [items, setItems] = useState<MovementLineItem[]>([{ materialId: '', quantity: '', unit: '', notes: '' }])
   const [saving, setSaving] = useState(false)
+  const [transferReference, setTransferReference] = useState('')
+  const [loadingReference, setLoadingReference] = useState(false)
+  const [formError, setFormError] = useState('')
+  const dialogContentRef = useRef<HTMLDivElement | null>(null)
+
+  const handleClose = useCallback(() => {
+    setFormError('')
+    onClose()
+  }, [onClose])
+
+  const showFormError = useCallback((message: string) => {
+    setFormError(message)
+
+    const scrollToTop = () => {
+      const content = dialogContentRef.current
+      if (!content) return
+
+      content.scrollTop = 0
+      content.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+
+      const dialogPaper = content.closest<HTMLElement>('.MuiDialog-paper')
+      if (dialogPaper) {
+        dialogPaper.scrollTop = 0
+        dialogPaper.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+      }
+    }
+
+    window.requestAnimationFrame(() => {
+      scrollToTop()
+      window.requestAnimationFrame(scrollToTop)
+    })
+
+    window.setTimeout(scrollToTop, 80)
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+
+    let active = true
+
+    const loadReference = async () => {
+      try {
+        setLoadingReference(true)
+        const transferRows = await movementsService.list({ type: 'transfer' })
+
+        if (active) {
+          setTransferReference(getNextTransferReference(transferRows))
+        }
+      } catch (error) {
+        console.error('LOAD NEXT TRANSFER REFERENCE FAILED', error)
+
+        if (active) {
+          setTransferReference('')
+        }
+      } finally {
+        if (active) {
+          setLoadingReference(false)
+        }
+      }
+    }
+
+    void loadReference()
+
+    return () => {
+      active = false
+    }
+  }, [open])
 
   const updateItem = (index: number, partial: Partial<MovementLineItem>) => {
     setItems((prev) => prev.map((item, idx) => idx === index ? { ...item, ...partial } : item))
@@ -436,32 +907,43 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
   }
 
   async function submit() {
+    if (!transferReference) {
+      showFormError('تعذر تجهيز رقم التحويل. أغلق النافذة وأعد فتحها ثم حاول مرة أخرى.')
+      return
+    }
     if (!fromWarehouse) {
-      return alert('اختر المخزن المصدر.')
+      showFormError('اختر المخزن المصدر.')
+      return
     }
     if (!toWarehouse) {
-      return alert('اختر المخزن الهدف.')
+      showFormError('اختر المخزن الهدف.')
+      return
     }
     if (fromWarehouse === toWarehouse) {
-      return alert('المخزن المصدر والهدف يجب أن يختلفا.')
+      showFormError('المخزن المصدر والهدف يجب أن يختلفا.')
+      return
     }
     if (!items.length) {
-      return alert('يجب إضافة مادة واحدة على الأقل.')
+      showFormError('يجب إضافة مادة واحدة على الأقل.')
+      return
     }
 
     const invalid = items.find(
       (item) => !item.materialId || item.quantity === '' || Number.isNaN(Number(item.quantity)) || Number(item.quantity) <= 0,
     )
     if (invalid) {
-      return alert('تأكد من اختيار جميع المواد وإدخال كميات أكبر من صفر.')
+      showFormError('تأكد من اختيار جميع المواد وإدخال كميات أكبر من صفر.')
+      return
     }
 
     const selectedMaterialIds = items.map((item) => item.materialId).filter(Boolean)
     if (new Set(selectedMaterialIds).size !== selectedMaterialIds.length) {
-      return alert('لا يمكن إضافة نفس المادة أكثر من مرة في التحويل نفسه.')
+      showFormError('لا يمكن إضافة نفس المادة أكثر من مرة في التحويل نفسه.')
+      return
     }
 
     const doc: StockMovementDocument = {
+      reference: transferReference,
       type: 'transfer',
       date: new Date().toISOString(),
       fromWarehouseId: fromWarehouse,
@@ -479,27 +961,35 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
 
     try {
       setSaving(true)
+      setFormError('')
       await movementsService.create(doc)
-      onClose()
+      handleClose()
       setFromWarehouse('')
       setToWarehouse('')
       setNotes('')
       setItems([{ materialId: '', quantity: '', unit: '', notes: '' }])
+      setTransferReference('')
     } catch (error) {
       console.error('CREATE TRANSFER FAILED', error)
-      alert(getUserFriendlyErrorMessage(error, 'تعذر تنفيذ التحويل بين المخازن. يرجى المحاولة مرة أخرى.'))
+      showFormError(getUserFriendlyErrorMessage(error, 'تعذر تنفيذ التحويل بين المخازن. يرجى المحاولة مرة أخرى.'))
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="lg">
+    <Dialog open={open} onClose={handleClose} fullWidth maxWidth="lg" slotProps={craftDialogSlotProps}>
       <DialogTitle sx={{ paddingBottom: 0 }}>تحويل بين المخازن</DialogTitle>
-      <DialogContent sx={{ display: 'grid', gap: 2, paddingTop: '20px !important' }}>
+      <DialogContent
+        ref={dialogContentRef}
+        sx={{ display: 'grid', gap: 2, paddingTop: '20px !important' }}
+      >
+        {formError ? <Alert severity="error" sx={craftErrorAlertSx}>{formError}</Alert> : null}
+
         <TextField
           label="رقم التحويل"
-          value="يُنشأ تلقائياً"
+          value={loadingReference ? '' : transferReference}
+          placeholder={loadingReference ? 'جارٍ تجهيز الرقم...' : ''}
           slotProps={{ input: { readOnly: true } }}
           fullWidth
         />
@@ -512,6 +1002,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
             onChange={(e) => setFromWarehouse(e.target.value)}
             fullWidth
             required
+            slotProps={darkSelectSlotProps}
           >
             <MenuItem value="">اختر المخزن المصدر</MenuItem>
             {warehouses
@@ -526,6 +1017,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
             onChange={(e) => setToWarehouse(e.target.value)}
             fullWidth
             required
+            slotProps={darkSelectSlotProps}
           >
             <MenuItem value="">اختر المخزن الهدف</MenuItem>
             {warehouses
@@ -545,9 +1037,9 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
 
         <SectionCard title="مواد التحويل">
           <Box sx={{ overflowX: 'auto' }}>
-            <Table sx={{ minWidth: 850, border: '1px solid #E2E8F0', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <Table sx={{ minWidth: 850, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <TableHead>
-                <TableRow sx={{ background: '#F8FAFC' }}>
+                <TableRow>
                   <TableCell sx={{ width: '34%', textAlign: 'center', fontWeight: 700 }}>المادة</TableCell>
                   <TableCell sx={{ width: '14%', textAlign: 'center', fontWeight: 700 }}>الوحدة</TableCell>
                   <TableCell sx={{ width: '18%', textAlign: 'center', fontWeight: 700 }}>الكمية</TableCell>
@@ -565,22 +1057,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
                         onChange={(e) => handleMaterialChange(index, e.target.value)}
                         fullWidth
                         size="small"
-                        sx={{
-                          '& .MuiOutlinedInput-root': {
-                            backgroundColor: '#FFFFFF',
-                            '& fieldset': {
-                              borderColor: '#94A3B8',
-                              borderWidth: 1,
-                            },
-                            '&:hover fieldset': {
-                              borderColor: '#64748B',
-                            },
-                            '&.Mui-focused fieldset': {
-                              borderColor: '#2563EB',
-                              borderWidth: 1.5,
-                            },
-                          },
-                        }}
+                        slotProps={darkSelectSlotProps}
                       >
                         <MenuItem value="">اختر مادة</MenuItem>
                         {materials.map((material) => (
@@ -594,11 +1071,6 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
                         fullWidth
                         size="small"
                         slotProps={{ input: { readOnly: true } }}
-                        sx={{
-                          '& .MuiOutlinedInput-root': {
-                            backgroundColor: '#F8FAFC',
-                          },
-                        }}
                       />
                     </TableCell>
                     <TableCell>
@@ -608,23 +1080,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
                         onChange={(e) => updateItem(index, { quantity: e.target.value === '' ? '' : Number(e.target.value) })}
                         fullWidth
                         size="small"
-                        slotProps={{ htmlInput: { min: 0, step: 'any' } }}
-                        sx={{
-                          '& .MuiOutlinedInput-root': {
-                            backgroundColor: '#FFFFFF',
-                            '& fieldset': {
-                              borderColor: '#94A3B8',
-                              borderWidth: 1,
-                            },
-                            '&:hover fieldset': {
-                              borderColor: '#64748B',
-                            },
-                            '&.Mui-focused fieldset': {
-                              borderColor: '#2563EB',
-                              borderWidth: 1.5,
-                            },
-                          },
-                        }}
+                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
                       />
                     </TableCell>
                     <TableCell>
@@ -633,22 +1089,6 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
                         onChange={(e) => updateItem(index, { notes: e.target.value })}
                         fullWidth
                         size="small"
-                        sx={{
-                          '& .MuiOutlinedInput-root': {
-                            backgroundColor: '#FFFFFF',
-                            '& fieldset': {
-                              borderColor: '#94A3B8',
-                              borderWidth: 1,
-                            },
-                            '&:hover fieldset': {
-                              borderColor: '#64748B',
-                            },
-                            '&.Mui-focused fieldset': {
-                              borderColor: '#2563EB',
-                              borderWidth: 1.5,
-                            },
-                          },
-                        }}
                       />
                     </TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>
@@ -666,7 +1106,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
         </SectionCard>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>إلغاء</Button>
+        <Button onClick={handleClose}>إلغاء</Button>
         <Button variant="contained" onClick={submit} disabled={saving}>
           {saving ? <CircularProgress size={20} /> : 'اعتماد التحويل'}
         </Button>
@@ -677,7 +1117,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
 
 function MovementDetailsDialog({ open, onClose, details }: { open: boolean; onClose: () => void; details: MovementDetails | null }) {
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md" slotProps={craftDialogSlotProps}>
       <DialogTitle>تفاصيل الحركة</DialogTitle>
       <DialogContent sx={{ display: 'grid', gap: 2 }}>
         {!details ? (
@@ -691,28 +1131,28 @@ function MovementDetailsDialog({ open, onClose, details }: { open: boolean; onCl
             <Box>إلى مخزن: {getMovementWarehouseLabel(details.toWarehouseName)}</Box>
             <Box>الجهة: {details.partyName || '__'}</Box>
             <Box>
-              <Table sx={{ border: '1px solid #E2E8F0', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+              <Table sx={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <TableHead>
-                  <TableRow sx={{ background: '#F8FAFC' }}>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>المادة</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>المخزن</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>وارد</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>صادر</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>الوحدة</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>التكلفة</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>ملاحظات</TableCell>
+                  <TableRow>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>المادة</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>المخزن</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>وارد</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>صادر</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>الوحدة</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>التكلفة</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>ملاحظات</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {details.items?.map((item: MovementDetailItem, index: number) => (
-                    <TableRow key={index} sx={{ background: '#FFFFFF' }}>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>{item.materialNumber ? `${item.materialNumber} - ${item.materialName ?? ''}` : item.materialName ?? '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>{item.warehouseName || '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>{Number(item.quantityIn ?? 0) > 0 ? formatDisplayNumber(item.quantityIn ?? 0, 2) : '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>{Number(item.quantityOut ?? 0) > 0 ? formatDisplayNumber(item.quantityOut ?? 0, 2) : '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>{item.unit || '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>{item.cost !== null && item.cost !== undefined ? formatDisplayNumber(item.cost, 2) : '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', border: '1px solid #E2E8F0' }}>{item.notes?.trim() ? item.notes : '__'}</TableCell>
+                    <TableRow key={index}>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.materialNumber ? `${item.materialNumber} - ${item.materialName ?? ''}` : item.materialName ?? '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.warehouseName || '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityIn ?? 0) > 0 ? formatDisplayNumber(item.quantityIn ?? 0, 2) : '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityOut ?? 0) > 0 ? formatDisplayNumber(item.quantityOut ?? 0, 2) : '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.unit || '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.cost !== null && item.cost !== undefined ? formatDisplayNumber(item.cost, 2) : '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.notes?.trim() ? item.notes : '__'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

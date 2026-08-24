@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { DashboardPage } from '../pages/DashboardPage'
+import HomePage from '../pages/HomePage'
 import { MaterialsPage } from '../pages/MaterialsPage'
 import { InventoryPage } from '../pages/InventoryPage'
 import { WarehousesPage } from '../pages/WarehousesPage'
@@ -19,7 +19,7 @@ import { ManufacturingRecipesPage } from '../pages/ManufacturingRecipesPage'
 export default function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<DashboardPage />} />
+      <Route path="/" element={<HomePage />} />
       <Route path="/materials" element={<MaterialsPage />} />
       <Route path="/inventory" element={<InventoryPage />} />
       <Route path="/inventory/warehouses" element={<WarehousesPage />} />

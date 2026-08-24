@@ -42,6 +42,353 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
 
+
+const darkPopupPaperSx = {
+  mt: 0.75,
+  borderRadius: '12px',
+  background: 'rgba(8, 22, 48, 0.97)',
+  backdropFilter: 'blur(22px) saturate(125%)',
+  WebkitBackdropFilter: 'blur(22px) saturate(125%)',
+  border: '1px solid rgba(255, 255, 255, 0.14)',
+  boxShadow: '0 20px 50px rgba(2, 6, 23, 0.38)',
+  color: 'rgba(255, 255, 255, 0.92)',
+  backgroundImage: 'none',
+  '& .MuiMenuItem-root, & .MuiAutocomplete-option': {
+    color: 'rgba(255, 255, 255, 0.88)',
+    borderRadius: '8px',
+    mx: 0.5,
+    my: 0.25,
+    '&:hover': {
+      background: 'rgba(56, 189, 248, 0.10)',
+    },
+    '&.Mui-selected, &[aria-selected="true"]': {
+      color: '#67E8F9',
+      background: 'rgba(34, 211, 238, 0.13)',
+    },
+  },
+}
+
+const darkSelectSlotProps = {
+  select: {
+    MenuProps: {
+      slotProps: {
+        paper: {
+          sx: darkPopupPaperSx,
+        },
+      },
+    },
+  },
+}
+
+const craftPageGlassSx = {
+  '& .MuiPaper-root:not(.MuiAlert-root)': {
+    background: 'rgba(248, 250, 252, 0.10) !important',
+    backdropFilter: 'blur(36px) saturate(120%)',
+    WebkitBackdropFilter: 'blur(18px) saturate(120%)',
+    boxShadow: '0 18px 45px rgba(2, 6, 23, 0.16) !important',
+    border: 'none !important',
+    borderRadius: '18px',
+    color: 'rgba(255, 255, 255, 0.92)',
+    backgroundImage: 'none !important',
+  },
+
+  '& .MuiTypography-root': {
+    color: 'rgba(255, 255, 255, 0.92)',
+  },
+
+  '& .MuiInputBase-root': {
+    background: 'rgba(255, 255, 255, 0.07)',
+    color: 'rgba(255, 255, 255, 0.92)',
+    borderRadius: '14px',
+  },
+
+  '& .MuiInputBase-input': {
+    color: 'rgba(255, 255, 255, 0.92)',
+    WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+  },
+
+  '& .MuiInputBase-input::placeholder': {
+    color: 'rgba(255, 255, 255, 0.58)',
+    opacity: 1,
+  },
+
+  '& .MuiInputLabel-root': {
+    color: 'rgba(255, 255, 255, 0.72)',
+  },
+
+  '& .MuiInputLabel-root.Mui-focused': {
+    color: '#67E8F9',
+  },
+
+  '& .MuiOutlinedInput-notchedOutline': {
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline': {
+    borderColor: 'rgba(103, 232, 249, 0.55)',
+  },
+
+  '& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline': {
+    borderColor: '#67E8F9',
+    borderWidth: 1.5,
+  },
+
+  '& .MuiSelect-icon, & .MuiAutocomplete-popupIndicator, & .MuiAutocomplete-clearIndicator': {
+    color: 'rgba(255, 255, 255, 0.78)',
+  },
+
+  '& .MuiInputAdornment-root .MuiIconButton-root': {
+    color: 'rgba(255, 255, 255, 0.82)',
+  },
+
+  '& .MuiTable-root': {
+    background: 'transparent',
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiTableHead-root .MuiTableRow-root': {
+    background: 'rgba(255, 255, 255, 0.055)',
+  },
+
+  '& .MuiTableBody-root .MuiTableRow-root': {
+    background: 'rgba(255, 255, 255, 0.022)',
+  },
+
+  '& .MuiTableBody-root .MuiTableRow-root:hover': {
+    background: 'rgba(255, 255, 255, 0.055)',
+  },
+
+  '& .MuiTableCell-root': {
+    color: 'rgba(255, 255, 255, 0.88)',
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiTableHead-root .MuiTableCell-root': {
+    color: 'rgba(255, 255, 255, 0.94)',
+    fontWeight: 700,
+  },
+
+  '& .MuiTablePagination-root': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': {
+    color: 'rgba(255, 255, 255, 0.92)',
+    fontWeight: 600,
+  },
+
+  '& .MuiTablePagination-select, & .MuiTablePagination-selectIcon': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-actions .MuiIconButton-root': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-actions .MuiIconButton-root.Mui-disabled': {
+    color: 'rgba(255, 255, 255, 0.32)',
+  },
+
+  '& .MuiIconButton-colorPrimary': {
+    color: '#60A5FA',
+  },
+
+  '& .MuiButton-outlined': {
+    color: '#93C5FD',
+    borderColor: 'rgba(96, 165, 250, 0.46)',
+  },
+
+  '& .MuiButton-outlined:hover': {
+    borderColor: '#60A5FA',
+    background: 'rgba(96, 165, 250, 0.10)',
+  },
+
+  '& .MuiCircularProgress-root': {
+    color: '#67E8F9',
+  },
+}
+
+const craftDialogSlotProps = {
+  backdrop: {
+    sx: {
+      backgroundColor: 'rgba(2, 6, 23, 0.62)',
+      backdropFilter: 'blur(5px)',
+      WebkitBackdropFilter: 'blur(5px)',
+    },
+  },
+
+  paper: {
+    sx: {
+      borderRadius: '18px',
+      background:
+        'linear-gradient(145deg, rgba(10, 27, 61, 0.97) 0%, rgba(8, 45, 78, 0.95) 100%)',
+      backdropFilter: 'blur(28px) saturate(125%)',
+      WebkitBackdropFilter: 'blur(28px) saturate(125%)',
+      border: '1px solid rgba(148, 197, 255, 0.16)',
+      boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
+      color: 'rgba(255, 255, 255, 0.92)',
+      backgroundImage: 'none',
+      overflow: 'hidden',
+
+      '& .MuiDialogTitle-root': {
+        color: 'rgba(255, 255, 255, 0.96)',
+        fontWeight: 800,
+        px: 3,
+        pt: 2.5,
+        pb: 1.2,
+      },
+
+      '& .MuiDialogContent-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+      },
+
+      '& .MuiTypography-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+      },
+
+      '& strong': {
+        color: 'rgba(255, 255, 255, 0.96)',
+      },
+
+      '& .MuiOutlinedInput-root': {
+        borderRadius: '14px',
+        background: 'rgba(255, 255, 255, 0.07)',
+        color: 'rgba(255, 255, 255, 0.92)',
+
+        '&:hover': {
+          background: 'rgba(255, 255, 255, 0.09)',
+        },
+
+        '&:hover .MuiOutlinedInput-notchedOutline': {
+          borderColor: 'rgba(103, 232, 249, 0.55)',
+        },
+
+        '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+          borderColor: '#67E8F9',
+          borderWidth: 1.5,
+        },
+      },
+
+      '& .MuiOutlinedInput-notchedOutline': {
+        borderColor: 'rgba(203, 213, 225, 0.22)',
+      },
+
+      '& .MuiInputBase-input': {
+        color: 'rgba(255, 255, 255, 0.92)',
+        WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+      },
+
+      '& .MuiInputBase-input.Mui-disabled': {
+        WebkitTextFillColor: 'rgba(255, 255, 255, 0.48)',
+      },
+
+      '& .MuiInputBase-input::placeholder': {
+        color: 'rgba(255, 255, 255, 0.56)',
+        opacity: 1,
+      },
+
+      '& .MuiInputLabel-root': {
+        color: 'rgba(226, 232, 240, 0.72)',
+      },
+
+      '& .MuiInputLabel-root.Mui-focused': {
+        color: '#67E8F9',
+      },
+
+      '& .MuiSelect-icon, & .MuiAutocomplete-popupIndicator, & .MuiAutocomplete-clearIndicator': {
+        color: 'rgba(255, 255, 255, 0.78)',
+      },
+
+      '& .MuiInputAdornment-root .MuiIconButton-root': {
+        color: 'rgba(255, 255, 255, 0.82)',
+      },
+
+      '& input[type="number"]': {
+        colorScheme: 'dark',
+      },
+
+      '& input[type="number"]::-webkit-inner-spin-button, & input[type="number"]::-webkit-outer-spin-button': {
+        opacity: 0.88,
+        cursor: 'pointer',
+      },
+
+      '& .MuiDialogContent-root .MuiPaper-root:not(.MuiAlert-root)': {
+        background: 'rgba(255, 255, 255, 0.045) !important',
+        border: '1px solid rgba(255, 255, 255, 0.14) !important',
+        boxShadow: 'none !important',
+        color: 'rgba(255, 255, 255, 0.92)',
+        backgroundImage: 'none !important',
+      },
+
+      '& .MuiTable-root': {
+        background: 'transparent',
+        border: '1px solid rgba(255, 255, 255, 0.18)',
+      },
+
+      '& .MuiTableHead-root .MuiTableRow-root': {
+        background: 'rgba(255, 255, 255, 0.055)',
+      },
+
+      '& .MuiTableBody-root .MuiTableRow-root': {
+        background: 'rgba(255, 255, 255, 0.022)',
+      },
+
+      '& .MuiTableBody-root .MuiTableRow-root:hover': {
+        background: 'rgba(255, 255, 255, 0.055)',
+      },
+
+      '& .MuiTableCell-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+        border: '1px solid rgba(255, 255, 255, 0.18)',
+      },
+
+      '& .MuiTableHead-root .MuiTableCell-root': {
+        color: 'rgba(255, 255, 255, 0.94)',
+        fontWeight: 700,
+      },
+
+      '& .MuiButton-outlined': {
+        color: '#93C5FD',
+        borderColor: 'rgba(96, 165, 250, 0.46)',
+      },
+
+      '& .MuiButton-outlined:hover': {
+        borderColor: '#60A5FA',
+        background: 'rgba(96, 165, 250, 0.10)',
+      },
+
+      '& .MuiButton-text': {
+        color: '#CBD5E1',
+      },
+
+      '& .MuiButton-text.MuiButton-colorError': {
+        color: '#FCA5A5',
+      },
+
+      '& .MuiCircularProgress-root': {
+        color: '#67E8F9',
+      },
+    },
+  },
+}
+
+const craftInvoiceDialogSlotProps = craftDialogSlotProps
+
+const craftErrorAlertSx = {
+  background: 'rgb(92 18 18 / 50%) !important',
+  backgroundColor: 'rgb(92 18 18 / 50%) !important',
+  color: '#FEE2E2 !important',
+  border: '1px solid rgba(248, 113, 113, 0.58)',
+  borderRadius: '14px',
+  '& .MuiAlert-icon': {
+    color: '#FCA5A5',
+  },
+  '& .MuiAlert-message': {
+    color: '#FEE2E2',
+    fontWeight: 700,
+  },
+}
+
 type InvoiceLine = {
   key: string
   materialId: string
@@ -114,7 +461,20 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
           input: {
             startAdornment: (
               <InputAdornment position="start" sx={{ marginInlineEnd: 1 }}>
-                <IconButton size="small" onClick={openDatePicker} edge="start" aria-label="اختيار التاريخ" sx={{ color: '#0F172A' }}>
+                <IconButton
+                  size="small"
+                  onClick={openDatePicker}
+                  edge="start"
+                  aria-label="اختيار التاريخ"
+                  sx={{
+                    color: '#E2E8F0',
+                    background: 'transparent',
+                    '&:hover': {
+                      color: '#67E8F9',
+                      background: 'transparent',
+                    },
+                  }}
+                >
                   <FiCalendar />
                 </IconButton>
               </InputAdornment>
@@ -127,7 +487,7 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
         type="date"
         value={value || ''}
         onChange={(event) => onChange(event.target.value)}
-        style={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, opacity: 0, pointerEvents: 'none' }}
+        style={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, opacity: 0, pointerEvents: 'none', colorScheme: 'dark' }}
         tabIndex={-1}
         aria-hidden="true"
       />
@@ -181,6 +541,8 @@ export function PurchasesPage() {
 
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
+  const [supplierPage, setSupplierPage] = useState(0)
+  const [supplierRowsPerPage, setSupplierRowsPerPage] = useState(10)
 
   const [suppliersOpen, setSuppliersOpen] = useState(false)
   const [supplierFormOpen, setSupplierFormOpen] = useState(false)
@@ -225,6 +587,43 @@ export function PurchasesPage() {
     paymentDate: string
     paymentAmount: number
   } | null>(null)
+
+  const invoiceDialogContentRef = useRef<HTMLDivElement | null>(null)
+
+  const scrollInvoiceDialogToTop = useCallback(() => {
+    const scrollToTop = () => {
+      const content = invoiceDialogContentRef.current
+
+      if (content) {
+        content.scrollTop = 0
+        content.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+
+        const dialogPaper = content.closest<HTMLElement>('.MuiDialog-paper')
+        if (dialogPaper) {
+          dialogPaper.scrollTop = 0
+          dialogPaper.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+        }
+      }
+
+      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+    }
+
+    window.requestAnimationFrame(() => {
+      scrollToTop()
+
+      window.requestAnimationFrame(scrollToTop)
+    })
+
+    window.setTimeout(scrollToTop, 80)
+  }, [])
+
+  useEffect(() => {
+    if (!invoiceDialogOpen || !invoiceFormError) {
+      return
+    }
+
+    scrollInvoiceDialogToTop()
+  }, [invoiceDialogOpen, invoiceFormError, scrollInvoiceDialogToTop])
 
   const subtotal = useMemo(() => {
     return invoiceLines.reduce((sum, line) => {
@@ -384,8 +783,9 @@ export function PurchasesPage() {
     } catch (error) {
       console.error('OPEN CREATE INVOICE DIALOG FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر فتح شاشة الفاتورة.'))
+      scrollInvoiceDialogToTop()
     }
-  }, [resetInvoiceForm])
+  }, [resetInvoiceForm, scrollInvoiceDialogToTop])
 
   const openEditInvoiceDialog = useCallback(async (invoiceId: string) => {
     try {
@@ -417,14 +817,16 @@ export function PurchasesPage() {
     } catch (error) {
       console.error('OPEN EDIT INVOICE DIALOG FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر فتح بيانات الفاتورة.'))
+      scrollInvoiceDialogToTop()
       setInvoiceDialogOpen(true)
     }
-  }, [])
+  }, [scrollInvoiceDialogToTop])
 
   const saveDraft = useCallback(async () => {
     const validationError = validateInvoiceForm()
     if (validationError) {
       setInvoiceFormError(validationError)
+      scrollInvoiceDialogToTop()
       return
     }
 
@@ -446,15 +848,17 @@ export function PurchasesPage() {
     } catch (error) {
       console.error('SAVE PURCHASE DRAFT FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر حفظ مسودة الفاتورة. يرجى المحاولة مرة أخرى.'))
+      scrollInvoiceDialogToTop()
     } finally {
       setSaving(false)
     }
-  }, [validateInvoiceForm, buildInvoicePayload, editingInvoiceId, editingInvoiceStatus, loadData])
+  }, [validateInvoiceForm, buildInvoicePayload, editingInvoiceId, editingInvoiceStatus, loadData, scrollInvoiceDialogToTop])
 
   const completeDraft = useCallback(async () => {
     const validationError = validateInvoiceForm()
     if (validationError) {
       setInvoiceFormError(validationError)
+      scrollInvoiceDialogToTop()
       return
     }
 
@@ -475,10 +879,11 @@ export function PurchasesPage() {
     } catch (error) {
       console.error('APPROVE PURCHASE FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر اعتماد الفاتورة. يرجى مراجعة البيانات والمحاولة مرة أخرى.'))
+      scrollInvoiceDialogToTop()
     } finally {
       setSaving(false)
     }
-  }, [validateInvoiceForm, editingInvoiceId, buildInvoicePayload, loadData])
+  }, [validateInvoiceForm, editingInvoiceId, buildInvoicePayload, loadData, scrollInvoiceDialogToTop])
 
   const deleteDraft = useCallback(async (invoiceId: string) => {
     try {
@@ -601,7 +1006,7 @@ export function PurchasesPage() {
   const selectedWarehouse = activeWarehouses.find((item) => item.id === invoiceWarehouseId) ?? null
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box sx={craftPageGlassSx}>
       <PageHeader
         title={isSuppliersPage ? 'الموردين' : 'المشتريات والموردين'}
         breadcrumb={isSuppliersPage ? 'إدارة الموردين' : 'إدارة الموردين وفواتير المشتريات'}
@@ -614,7 +1019,7 @@ export function PurchasesPage() {
           <Box sx={{ overflowX: 'auto' }}>
             <Table sx={{ minWidth: 800 }}>
               <TableHead>
-                <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell>رقم المورد</TableCell>
                   <TableCell>اسم المورد</TableCell>
                   <TableCell>الهاتف</TableCell>
@@ -624,7 +1029,12 @@ export function PurchasesPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {suppliers.map((supplier) => (
+                {suppliers
+                  .slice(
+                    supplierPage * supplierRowsPerPage,
+                    supplierPage * supplierRowsPerPage + supplierRowsPerPage,
+                  )
+                  .map((supplier) => (
                   <TableRow key={supplier.id} sx={{ textAlignLast: 'center' }}>
                     <TableCell>{supplier.code}</TableCell>
                     <TableCell>{supplier.name}</TableCell>
@@ -661,6 +1071,20 @@ export function PurchasesPage() {
               </TableBody>
             </Table>
           </Box>
+
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+            <TablePagination
+              component="div"
+              count={suppliers.length}
+              page={supplierPage}
+              onPageChange={(_, newPage) => setSupplierPage(newPage)}
+              rowsPerPage={supplierRowsPerPage}
+              onRowsPerPageChange={(event) => {
+                setSupplierRowsPerPage(Number(event.target.value))
+                setSupplierPage(0)
+              }}
+            />
+          </Box>
         </SectionCard>
       ) : (
         <SectionCard title="سجل فواتير المشتريات" actions={
@@ -688,13 +1112,13 @@ export function PurchasesPage() {
             value={toDate}
             onChange={(value) => { setToDate(toInternalDate(value)); setPage(0) }}
           />
-          <TextField select label="المورد" value={supplierFilter} onChange={(e) => { setSupplierFilter(e.target.value); setPage(0) }}>
+          <TextField select label="المورد" value={supplierFilter} onChange={(e) => { setSupplierFilter(e.target.value); setPage(0) }} slotProps={darkSelectSlotProps}>
             <MenuItem value="">الكل</MenuItem>
             {suppliers.map((supplier) => (
               <MenuItem key={supplier.id} value={supplier.id}>{supplier.code} - {supplier.name}</MenuItem>
             ))}
           </TextField>
-          <TextField select label="المخزن" value={warehouseFilter} onChange={(e) => { setWarehouseFilter(e.target.value); setPage(0) }}>
+          <TextField select label="المخزن" value={warehouseFilter} onChange={(e) => { setWarehouseFilter(e.target.value); setPage(0) }} slotProps={darkSelectSlotProps}>
             <MenuItem value="">الكل</MenuItem>
             {activeWarehouses.map((warehouse) => (
               <MenuItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</MenuItem>
@@ -722,7 +1146,7 @@ export function PurchasesPage() {
           ) : (
             <Table sx={{ minWidth: 1100 }}>
               <TableHead>
-                <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>التاريخ</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم الفاتورة</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم فاتورة المورد</TableCell>
@@ -802,6 +1226,7 @@ export function PurchasesPage() {
         onClose={() => setConfirmAction(null)}
         maxWidth="sm"
         fullWidth
+        slotProps={craftDialogSlotProps}
       >
         <DialogTitle>
           {confirmAction?.type === 'deleteDraft' ? 'تأكيد حذف المسودة' : 'تأكيد حذف الفاتورة'}
@@ -834,7 +1259,7 @@ export function PurchasesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={suppliersOpen} onClose={() => setSuppliersOpen(false)} maxWidth="lg" fullWidth>
+      <Dialog open={suppliersOpen} onClose={() => setSuppliersOpen(false)} maxWidth="lg" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>دليل الموردين</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
@@ -853,7 +1278,7 @@ export function PurchasesPage() {
           </Box>
           <Table>
             <TableHead>
-              <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+              <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                 <TableCell>رقم المورد</TableCell>
                 <TableCell>اسم المورد</TableCell>
                 <TableCell>الهاتف</TableCell>
@@ -913,10 +1338,10 @@ export function PurchasesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(supplierToDelete)} onClose={() => { setSupplierToDelete(null); setSupplierDeleteError('') }} maxWidth="sm" fullWidth>
+      <Dialog open={Boolean(supplierToDelete)} onClose={() => { setSupplierToDelete(null); setSupplierDeleteError('') }} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>تأكيد حذف المورد</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
-          {supplierDeleteError ? <Alert severity="error">{supplierDeleteError}</Alert> : null}
+          {supplierDeleteError ? <Alert severity="error" sx={craftErrorAlertSx}>{supplierDeleteError}</Alert> : null}
           <Typography>
             {supplierToDelete ? `هل أنت متأكد من حذف المورد «${supplierToDelete.name}» رقم ${supplierToDelete.code}؟ لا يمكن التراجع عن الحذف.` : ''}
           </Typography>
@@ -945,16 +1370,16 @@ export function PurchasesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={supplierFormOpen} onClose={() => setSupplierFormOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={supplierFormOpen} onClose={() => setSupplierFormOpen(false)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>{supplierForm.id ? 'تعديل مورد' : 'إضافة مورد'}</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-          {supplierFormError ? <Alert severity="error">{supplierFormError}</Alert> : null}
+          {supplierFormError ? <Alert severity="error" sx={craftErrorAlertSx}>{supplierFormError}</Alert> : null}
           <TextField label="رقم المورد" value={supplierForm.code} onChange={(event) => setSupplierForm((prev) => ({ ...prev, code: event.target.value }))} required />
           <TextField label="اسم المورد" value={supplierForm.name} onChange={(event) => setSupplierForm((prev) => ({ ...prev, name: event.target.value }))} required />
           <TextField label="الهاتف" value={supplierForm.phone} onChange={(event) => setSupplierForm((prev) => ({ ...prev, phone: event.target.value }))} />
           <TextField label="العنوان" value={supplierForm.address} onChange={(event) => setSupplierForm((prev) => ({ ...prev, address: event.target.value }))} />
           <TextField label="ملاحظات" value={supplierForm.notes} onChange={(event) => setSupplierForm((prev) => ({ ...prev, notes: event.target.value }))} multiline minRows={2} />
-          <TextField select label="الحالة" value={supplierForm.status} onChange={(event) => setSupplierForm((prev) => ({ ...prev, status: event.target.value as 'active' | 'inactive' }))}>
+          <TextField select label="الحالة" value={supplierForm.status} onChange={(event) => setSupplierForm((prev) => ({ ...prev, status: event.target.value as 'active' | 'inactive' }))} slotProps={darkSelectSlotProps}>
             <MenuItem value="active">فعال</MenuItem>
             <MenuItem value="inactive">غير فعال</MenuItem>
           </TextField>
@@ -1001,10 +1426,13 @@ export function PurchasesPage() {
         setInvoiceDialogOpen(false)
         setEditingInvoiceStatus(null)
         setEditingInvoiceId(null)
-      }} fullWidth maxWidth="lg">
+      }} fullWidth maxWidth="lg" slotProps={craftInvoiceDialogSlotProps}>
         <DialogTitle>{editingInvoiceId ? 'تعديل مسودة فاتورة شراء' : 'فاتورة شراء جديدة'}</DialogTitle>
-        <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-          {invoiceFormError ? <Alert severity="error">{invoiceFormError}</Alert> : null}
+        <DialogContent
+          ref={invoiceDialogContentRef}
+          sx={{ display: 'grid', gap: 2, pt: '12px !important' }}
+        >
+          {invoiceFormError ? <Alert severity="error" sx={craftErrorAlertSx}>{invoiceFormError}</Alert> : null}
 
           <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
             <TextField label="رقم الفاتورة" value={invoiceNumber} slotProps={{ input: { readOnly: true } }} />
@@ -1028,6 +1456,7 @@ export function PurchasesPage() {
               getOptionLabel={(option) => `${option.code} - ${option.name}`}
               value={selectedSupplier}
               onChange={(_, value) => setInvoiceSupplierId(value?.id ?? '')}
+              slotProps={{ paper: { sx: darkPopupPaperSx } }}
               renderInput={(params) => <TextField {...params} label="المورد" required />}
             />
             <Autocomplete
@@ -1035,6 +1464,7 @@ export function PurchasesPage() {
               getOptionLabel={(option) => option.name}
               value={selectedWarehouse}
               onChange={(_, value) => setInvoiceWarehouseId(value?.id ?? '')}
+              slotProps={{ paper: { sx: darkPopupPaperSx } }}
               renderInput={(params) => <TextField {...params} label="المخزن" required />}
             />
           </Box>
@@ -1048,7 +1478,12 @@ export function PurchasesPage() {
                 const lineTotal = (typeof line.quantity === 'number' ? line.quantity : 0) * (typeof line.unitPrice === 'number' ? line.unitPrice : 0)
 
                 return (
-                  <Box key={line.key} sx={{ p: 2, borderRadius: 3, border: '1px solid rgba(15, 23, 42, 0.08)' }}>
+                  <Box key={line.key} sx={{
+                      p: 2,
+                      borderRadius: '14px',
+                      border: '1px solid rgba(255, 255, 255, 0.14)',
+                      background: 'rgba(255, 255, 255, 0.035)',
+                    }}>
                     <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', alignItems: 'center' }}>
                       <Autocomplete
                         options={materialOptions}
@@ -1057,6 +1492,7 @@ export function PurchasesPage() {
                         onChange={(_, value) => {
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, materialId: value?.id ?? '' } : item))
                         }}
+                        slotProps={{ paper: { sx: darkPopupPaperSx } }}
                         renderInput={(params) => <TextField {...params} label="المادة" required />}
                       />
                       <TextField label="الوحدة" value={material?.unit ?? ''} slotProps={{ input: { readOnly: true } }} />
@@ -1068,7 +1504,7 @@ export function PurchasesPage() {
                           const raw = event.target.value
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, quantity: raw === '' ? '' : Number(raw) } : item))
                         }}
-                        slotProps={{ htmlInput: { min: 0.000001 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
                         required
                       />
                       <TextField
@@ -1079,7 +1515,7 @@ export function PurchasesPage() {
                           const raw = event.target.value
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, unitPrice: raw === '' ? '' : Number(raw) } : item))
                         }}
-                        slotProps={{ htmlInput: { min: 0 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
                         required
                       />
                       <TextField label="الإجمالي" value={currency(lineTotal)} slotProps={{ input: { readOnly: true } }} />
@@ -1110,7 +1546,7 @@ export function PurchasesPage() {
 
           <SectionCard title="الحسم والإجماليات">
             <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
-              <TextField select label="نوع الحسم" value={discountType} onChange={(event) => setDiscountType(event.target.value as DiscountType)}>
+              <TextField select label="نوع الحسم" value={discountType} onChange={(event) => setDiscountType(event.target.value as DiscountType)} slotProps={darkSelectSlotProps}>
                 <MenuItem value="none">بدون حسم</MenuItem>
                 <MenuItem value="percentage">نسبة مئوية</MenuItem>
                 <MenuItem value="fixed">مبلغ ثابت</MenuItem>
@@ -1127,13 +1563,14 @@ export function PurchasesPage() {
                   htmlInput: {
                     min: 0,
                     max: discountType === 'percentage' ? 100 : undefined,
+                    step: 1,
                   },
                 }}
               />
             </Box>
             <Table sx={{ mt: 2, width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
               <TableHead>
-                <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي النهائي</TableCell>
@@ -1163,7 +1600,7 @@ export function PurchasesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} fullWidth maxWidth="lg">
+      <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} fullWidth maxWidth="lg" slotProps={craftDialogSlotProps}>
         <DialogTitle>تفاصيل فاتورة الشراء</DialogTitle>
         <DialogContent>
           {!selectedInvoice ? (
@@ -1180,7 +1617,7 @@ export function PurchasesPage() {
 
               <Table>
                 <TableHead>
-                  <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                  <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell>المادة</TableCell>
                     <TableCell>الوحدة</TableCell>
                     <TableCell>الكمية</TableCell>
@@ -1209,7 +1646,7 @@ export function PurchasesPage() {
 
               <Table sx={{ width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
                 <TableHead>
-                  <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                  <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي النهائي</TableCell>
@@ -1293,7 +1730,7 @@ export function PurchasesPage() {
                   <Typography sx={{ fontWeight: 700, mb: 1 }}>سجل المدفوعات</Typography>
                   <Table>
                     <TableHead>
-                      <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                      <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                         <TableCell>التاريخ</TableCell>
                         <TableCell>المبلغ</TableCell>
                         <TableCell>الملاحظات</TableCell>
@@ -1335,10 +1772,10 @@ export function PurchasesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={paymentDialogOpen} onClose={() => setPaymentDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={paymentDialogOpen} onClose={() => setPaymentDialogOpen(false)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>تسجيل دفعة للفاتورة</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-          {paymentError ? <Alert severity="error">{paymentError}</Alert> : null}
+          {paymentError ? <Alert severity="error" sx={craftErrorAlertSx}>{paymentError}</Alert> : null}
           <TextField
             label="تاريخ الدفعة"
             type="text"
@@ -1358,7 +1795,7 @@ export function PurchasesPage() {
             type="number"
             value={paymentForm.amount}
             onChange={(event) => setPaymentForm((prev) => ({ ...prev, amount: event.target.value }))}
-            slotProps={{ htmlInput: { min: 0.01, step: 0.01 } }}
+            slotProps={{ htmlInput: { min: 0, step: 1 } }}
           />
           <TextField
             label="ملاحظات"
@@ -1374,7 +1811,7 @@ export function PurchasesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(paymentDeleteConfirm)} onClose={() => setPaymentDeleteConfirm(null)} maxWidth="sm" fullWidth>
+      <Dialog open={Boolean(paymentDeleteConfirm)} onClose={() => setPaymentDeleteConfirm(null)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>تأكيد حذف الدفعة</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <Typography>

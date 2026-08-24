@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('craftManufacturingAPI', {
   getProductionOrderById: (id) => ipcRenderer.invoke('productionOrders:getById', id),
   getNextProductionOrderNumber: () => ipcRenderer.invoke('productionOrders:getNextNumber'),
   createProductionOrder: (payload) => ipcRenderer.invoke('productionOrders:create', payload),
+  updateProductionOrder: (orderId, payload) => ipcRenderer.invoke('productionOrders:update', { orderId, payload }),
   deleteProductionOrder: (id) => ipcRenderer.invoke('productionOrders:delete', id),
 })
 
@@ -37,6 +38,14 @@ contextBridge.exposeInMainWorld('craftMovementsAPI', {
   list: (filter) => ipcRenderer.invoke('movements:list', filter),
   getByReference: (reference) => ipcRenderer.invoke('movements:getByReference', reference),
   create: (doc) => ipcRenderer.invoke('movements:create', doc),
+})
+
+contextBridge.exposeInMainWorld('craftAdjustmentsAPI', {
+  list: (filter) => ipcRenderer.invoke('adjustments:list', filter),
+  getByReference: (reference) => ipcRenderer.invoke('adjustments:getByReference', reference),
+  create: (payload) => ipcRenderer.invoke('adjustments:create', payload),
+  update: (reference, payload) => ipcRenderer.invoke('adjustments:update', { reference, payload }),
+  delete: (reference) => ipcRenderer.invoke('adjustments:delete', reference),
 })
 
 contextBridge.exposeInMainWorld('craftSuppliersAPI', {
@@ -62,6 +71,7 @@ contextBridge.exposeInMainWorld('craftPurchasesAPI', {
   listReturns: (filter) => ipcRenderer.invoke('purchases:listReturns', filter),
   getReturnById: (returnId) => ipcRenderer.invoke('purchases:getReturnById', returnId),
   createReturn: (payload) => ipcRenderer.invoke('purchases:createReturn', payload),
+  updateReturn: (returnId, payload) => ipcRenderer.invoke('purchases:updateReturn', { returnId, payload }),
   deleteReturn: (returnId) => ipcRenderer.invoke('purchases:deleteReturn', returnId),
 })
 
@@ -88,5 +98,11 @@ contextBridge.exposeInMainWorld('craftSalesAPI', {
   listReturns: (filter) => ipcRenderer.invoke('sales:listReturns', filter),
   getReturnById: (returnId) => ipcRenderer.invoke('sales:getReturnById', returnId),
   createReturn: (payload) => ipcRenderer.invoke('sales:createReturn', payload),
+  updateReturn: (returnId, payload) => ipcRenderer.invoke('sales:updateReturn', { returnId, payload }),
   deleteReturn: (returnId) => ipcRenderer.invoke('sales:deleteReturn', returnId),
+})
+
+contextBridge.exposeInMainWorld('craftReportsAPI', {
+  getReport: (reportType, filters) => ipcRenderer.invoke('reports:getReport', { reportType, filters }),
+  getReportExportRows: (reportType, filters) => ipcRenderer.invoke('reports:getReportExportRows', { reportType, filters }),
 })

@@ -26,7 +26,7 @@ import { FiCalendar, FiCheckCircle, FiEdit2, FiEye, FiPlus, FiTrash2 } from 'rea
 import { PageHeader } from '../components/ui/PageHeader'
 import { SearchField } from '../components/ui/SearchField'
 import { SectionCard } from '../components/ui/SectionCard'
-import { inventoryService, type WarehouseRecord } from '../services/inventoryService'
+import { inventoryService, type StockBalanceRecord, type WarehouseRecord } from '../services/inventoryService'
 import { materialsService, type MaterialRecord } from '../services/materialsService'
 import {
   customersService,
@@ -41,6 +41,353 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
+
+
+const darkPopupPaperSx = {
+  mt: 0.75,
+  borderRadius: '12px',
+  background: 'rgba(8, 22, 48, 0.97)',
+  backdropFilter: 'blur(22px) saturate(125%)',
+  WebkitBackdropFilter: 'blur(22px) saturate(125%)',
+  border: '1px solid rgba(255, 255, 255, 0.14)',
+  boxShadow: '0 20px 50px rgba(2, 6, 23, 0.38)',
+  color: 'rgba(255, 255, 255, 0.92)',
+  backgroundImage: 'none',
+  '& .MuiMenuItem-root, & .MuiAutocomplete-option': {
+    color: 'rgba(255, 255, 255, 0.88)',
+    borderRadius: '8px',
+    mx: 0.5,
+    my: 0.25,
+    '&:hover': {
+      background: 'rgba(56, 189, 248, 0.10)',
+    },
+    '&.Mui-selected, &[aria-selected="true"]': {
+      color: '#67E8F9',
+      background: 'rgba(34, 211, 238, 0.13)',
+    },
+  },
+}
+
+const darkSelectSlotProps = {
+  select: {
+    MenuProps: {
+      slotProps: {
+        paper: {
+          sx: darkPopupPaperSx,
+        },
+      },
+    },
+  },
+}
+
+const craftPageGlassSx = {
+  '& .MuiPaper-root:not(.MuiAlert-root)': {
+    background: 'rgba(248, 250, 252, 0.10) !important',
+    backdropFilter: 'blur(36px) saturate(120%)',
+    WebkitBackdropFilter: 'blur(18px) saturate(120%)',
+    boxShadow: '0 18px 45px rgba(2, 6, 23, 0.16) !important',
+    border: 'none !important',
+    borderRadius: '18px',
+    color: 'rgba(255, 255, 255, 0.92)',
+    backgroundImage: 'none !important',
+  },
+
+  '& .MuiTypography-root': {
+    color: 'rgba(255, 255, 255, 0.92)',
+  },
+
+  '& .MuiInputBase-root': {
+    background: 'rgba(255, 255, 255, 0.07)',
+    color: 'rgba(255, 255, 255, 0.92)',
+    borderRadius: '14px',
+  },
+
+  '& .MuiInputBase-input': {
+    color: 'rgba(255, 255, 255, 0.92)',
+    WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+  },
+
+  '& .MuiInputBase-input::placeholder': {
+    color: 'rgba(255, 255, 255, 0.58)',
+    opacity: 1,
+  },
+
+  '& .MuiInputLabel-root': {
+    color: 'rgba(255, 255, 255, 0.72)',
+  },
+
+  '& .MuiInputLabel-root.Mui-focused': {
+    color: '#67E8F9',
+  },
+
+  '& .MuiOutlinedInput-notchedOutline': {
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline': {
+    borderColor: 'rgba(103, 232, 249, 0.55)',
+  },
+
+  '& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline': {
+    borderColor: '#67E8F9',
+    borderWidth: 1.5,
+  },
+
+  '& .MuiSelect-icon, & .MuiAutocomplete-popupIndicator, & .MuiAutocomplete-clearIndicator': {
+    color: 'rgba(255, 255, 255, 0.78)',
+  },
+
+  '& .MuiInputAdornment-root .MuiIconButton-root': {
+    color: 'rgba(255, 255, 255, 0.82)',
+  },
+
+  '& .MuiTable-root': {
+    background: 'transparent',
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiTableHead-root .MuiTableRow-root': {
+    background: 'rgba(255, 255, 255, 0.055)',
+  },
+
+  '& .MuiTableBody-root .MuiTableRow-root': {
+    background: 'rgba(255, 255, 255, 0.022)',
+  },
+
+  '& .MuiTableBody-root .MuiTableRow-root:hover': {
+    background: 'rgba(255, 255, 255, 0.055)',
+  },
+
+  '& .MuiTableCell-root': {
+    color: 'rgba(255, 255, 255, 0.88)',
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+  },
+
+  '& .MuiTableHead-root .MuiTableCell-root': {
+    color: 'rgba(255, 255, 255, 0.94)',
+    fontWeight: 700,
+  },
+
+  '& .MuiTablePagination-root': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-selectLabel, & .MuiTablePagination-displayedRows': {
+    color: 'rgba(255, 255, 255, 0.92)',
+    fontWeight: 600,
+  },
+
+  '& .MuiTablePagination-select, & .MuiTablePagination-selectIcon': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-actions .MuiIconButton-root': {
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+
+  '& .MuiTablePagination-actions .MuiIconButton-root.Mui-disabled': {
+    color: 'rgba(255, 255, 255, 0.32)',
+  },
+
+  '& .MuiIconButton-colorPrimary': {
+    color: '#60A5FA',
+  },
+
+  '& .MuiButton-outlined': {
+    color: '#93C5FD',
+    borderColor: 'rgba(96, 165, 250, 0.46)',
+  },
+
+  '& .MuiButton-outlined:hover': {
+    borderColor: '#60A5FA',
+    background: 'rgba(96, 165, 250, 0.10)',
+  },
+
+  '& .MuiCircularProgress-root': {
+    color: '#67E8F9',
+  },
+}
+
+const craftDialogSlotProps = {
+  backdrop: {
+    sx: {
+      backgroundColor: 'rgba(2, 6, 23, 0.62)',
+      backdropFilter: 'blur(5px)',
+      WebkitBackdropFilter: 'blur(5px)',
+    },
+  },
+
+  paper: {
+    sx: {
+      borderRadius: '18px',
+      background:
+        'linear-gradient(145deg, rgba(10, 27, 61, 0.97) 0%, rgba(8, 45, 78, 0.95) 100%)',
+      backdropFilter: 'blur(28px) saturate(125%)',
+      WebkitBackdropFilter: 'blur(28px) saturate(125%)',
+      border: '1px solid rgba(148, 197, 255, 0.16)',
+      boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
+      color: 'rgba(255, 255, 255, 0.92)',
+      backgroundImage: 'none',
+      overflow: 'hidden',
+
+      '& .MuiDialogTitle-root': {
+        color: 'rgba(255, 255, 255, 0.96)',
+        fontWeight: 800,
+        px: 3,
+        pt: 2.5,
+        pb: 1.2,
+      },
+
+      '& .MuiDialogContent-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+      },
+
+      '& .MuiTypography-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+      },
+
+      '& strong': {
+        color: 'rgba(255, 255, 255, 0.96)',
+      },
+
+      '& .MuiOutlinedInput-root': {
+        borderRadius: '14px',
+        background: 'rgba(255, 255, 255, 0.07)',
+        color: 'rgba(255, 255, 255, 0.92)',
+
+        '&:hover': {
+          background: 'rgba(255, 255, 255, 0.09)',
+        },
+
+        '&:hover .MuiOutlinedInput-notchedOutline': {
+          borderColor: 'rgba(103, 232, 249, 0.55)',
+        },
+
+        '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+          borderColor: '#67E8F9',
+          borderWidth: 1.5,
+        },
+      },
+
+      '& .MuiOutlinedInput-notchedOutline': {
+        borderColor: 'rgba(203, 213, 225, 0.22)',
+      },
+
+      '& .MuiInputBase-input': {
+        color: 'rgba(255, 255, 255, 0.92)',
+        WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+      },
+
+      '& .MuiInputBase-input.Mui-disabled': {
+        WebkitTextFillColor: 'rgba(255, 255, 255, 0.48)',
+      },
+
+      '& .MuiInputBase-input::placeholder': {
+        color: 'rgba(255, 255, 255, 0.56)',
+        opacity: 1,
+      },
+
+      '& .MuiInputLabel-root': {
+        color: 'rgba(226, 232, 240, 0.72)',
+      },
+
+      '& .MuiInputLabel-root.Mui-focused': {
+        color: '#67E8F9',
+      },
+
+      '& .MuiSelect-icon, & .MuiAutocomplete-popupIndicator, & .MuiAutocomplete-clearIndicator': {
+        color: 'rgba(255, 255, 255, 0.78)',
+      },
+
+      '& .MuiInputAdornment-root .MuiIconButton-root': {
+        color: 'rgba(255, 255, 255, 0.82)',
+      },
+
+      '& input[type="number"]': {
+        colorScheme: 'dark',
+      },
+
+      '& input[type="number"]::-webkit-inner-spin-button, & input[type="number"]::-webkit-outer-spin-button': {
+        opacity: 0.88,
+        cursor: 'pointer',
+      },
+
+      '& .MuiDialogContent-root .MuiPaper-root:not(.MuiAlert-root)': {
+        background: 'rgba(255, 255, 255, 0.045) !important',
+        border: '1px solid rgba(255, 255, 255, 0.14) !important',
+        boxShadow: 'none !important',
+        color: 'rgba(255, 255, 255, 0.92)',
+        backgroundImage: 'none !important',
+      },
+
+      '& .MuiTable-root': {
+        background: 'transparent',
+        border: '1px solid rgba(255, 255, 255, 0.18)',
+      },
+
+      '& .MuiTableHead-root .MuiTableRow-root': {
+        background: 'rgba(255, 255, 255, 0.055)',
+      },
+
+      '& .MuiTableBody-root .MuiTableRow-root': {
+        background: 'rgba(255, 255, 255, 0.022)',
+      },
+
+      '& .MuiTableBody-root .MuiTableRow-root:hover': {
+        background: 'rgba(255, 255, 255, 0.055)',
+      },
+
+      '& .MuiTableCell-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+        border: '1px solid rgba(255, 255, 255, 0.18)',
+      },
+
+      '& .MuiTableHead-root .MuiTableCell-root': {
+        color: 'rgba(255, 255, 255, 0.94)',
+        fontWeight: 700,
+      },
+
+      '& .MuiButton-outlined': {
+        color: '#93C5FD',
+        borderColor: 'rgba(96, 165, 250, 0.46)',
+      },
+
+      '& .MuiButton-outlined:hover': {
+        borderColor: '#60A5FA',
+        background: 'rgba(96, 165, 250, 0.10)',
+      },
+
+      '& .MuiButton-text': {
+        color: '#CBD5E1',
+      },
+
+      '& .MuiButton-text.MuiButton-colorError': {
+        color: '#FCA5A5',
+      },
+
+      '& .MuiCircularProgress-root': {
+        color: '#67E8F9',
+      },
+    },
+  },
+}
+
+const craftInvoiceDialogSlotProps = craftDialogSlotProps
+
+const craftErrorAlertSx = {
+  background: 'rgb(92 18 18 / 50%) !important',
+  backgroundColor: 'rgb(92 18 18 / 50%) !important',
+  color: '#FEE2E2 !important',
+  border: '1px solid rgba(248, 113, 113, 0.58)',
+  borderRadius: '14px',
+  '& .MuiAlert-icon': {
+    color: '#FCA5A5',
+  },
+  '& .MuiAlert-message': {
+    color: '#FEE2E2',
+    fontWeight: 700,
+  },
+}
 
 type SaleLine = {
   key: string
@@ -115,7 +462,7 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
           input: {
             startAdornment: (
               <InputAdornment position="start" sx={{ marginInlineEnd: 1 }}>
-                <IconButton size="small" onClick={openDatePicker} edge="start" aria-label="اختيار التاريخ" sx={{ color: '#0F172A' }}>
+                <IconButton size="small" onClick={openDatePicker} edge="start" aria-label="اختيار التاريخ" sx={{ color: '#E2E8F0', background: 'transparent', '&:hover': { color: '#67E8F9', background: 'transparent' } }}>
                   <FiCalendar />
                 </IconButton>
               </InputAdornment>
@@ -128,7 +475,7 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
         type="date"
         value={value || ''}
         onChange={(event) => onChange(event.target.value)}
-        style={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, opacity: 0, pointerEvents: 'none' }}
+        style={{ position: 'absolute', top: 0, left: 0, width: 0, height: 0, opacity: 0, pointerEvents: 'none', colorScheme: 'dark' }}
         tabIndex={-1}
         aria-hidden="true"
       />
@@ -169,6 +516,8 @@ export function SalesPage() {
   const [customers, setCustomers] = useState<CustomerRecord[]>([])
   const [activeCustomers, setActiveCustomers] = useState<CustomerRecord[]>([])
   const [activeWarehouses, setActiveWarehouses] = useState<WarehouseRecord[]>([])
+  const [warehouseBalances, setWarehouseBalances] = useState<StockBalanceRecord[]>([])
+  const [warehouseBalancesLoading, setWarehouseBalancesLoading] = useState(false)
   const [materialOptions, setMaterialOptions] = useState<MaterialRecord[]>([])
   const [invoices, setInvoices] = useState<SalesInvoiceListItem[]>([])
 
@@ -182,6 +531,8 @@ export function SalesPage() {
 
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
+  const [customerPage, setCustomerPage] = useState(0)
+  const [customerRowsPerPage, setCustomerRowsPerPage] = useState(10)
 
   const [customerGuideOpen, setCustomerGuideOpen] = useState(false)
   const [customerFormOpen, setCustomerFormOpen] = useState(false)
@@ -219,6 +570,43 @@ export function SalesPage() {
   const [paymentError, setPaymentError] = useState('')
   const [paymentForm, setPaymentForm] = useState({ date: '', amount: '', notes: '' })
   const [paymentDeleteConfirm, setPaymentDeleteConfirm] = useState<{ paymentId: string; paymentDate: string; paymentAmount: number } | null>(null)
+
+  const invoiceDialogContentRef = useRef<HTMLDivElement | null>(null)
+
+  const scrollInvoiceDialogToTop = useCallback(() => {
+    const scrollToTop = () => {
+      const content = invoiceDialogContentRef.current
+
+      if (content) {
+        content.scrollTop = 0
+        content.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+
+        const dialogPaper = content.closest<HTMLElement>('.MuiDialog-paper')
+        if (dialogPaper) {
+          dialogPaper.scrollTop = 0
+          dialogPaper.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+        }
+      }
+
+      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+    }
+
+    window.requestAnimationFrame(() => {
+      scrollToTop()
+
+      window.requestAnimationFrame(scrollToTop)
+    })
+
+    window.setTimeout(scrollToTop, 80)
+  }, [])
+
+  useEffect(() => {
+    if (!invoiceDialogOpen || !invoiceFormError) {
+      return
+    }
+
+    scrollInvoiceDialogToTop()
+  }, [invoiceDialogOpen, invoiceFormError, scrollInvoiceDialogToTop])
 
   const subtotal = useMemo(
     () => invoiceLines.reduce((sum, line) => {
@@ -291,6 +679,16 @@ export function SalesPage() {
 
   const materialById = useMemo(() => new Map(materialOptions.map((item) => [item.id, item])), [materialOptions])
 
+  const warehouseBalanceByMaterial = useMemo(() => {
+    const map = new Map<string, StockBalanceRecord>()
+
+    for (const balance of warehouseBalances) {
+      map.set(balance.id, balance)
+    }
+
+    return map
+  }, [warehouseBalances])
+
   const validateInvoiceForm = useCallback((): string | null => {
     if (!invoiceDate) return 'تاريخ الفاتورة مطلوب.'
     if (!invoiceCustomerId) return 'اختر العميل.'
@@ -359,6 +757,8 @@ export function SalesPage() {
     setInvoiceDate(draftData.date)
     setInvoiceCustomerId('')
     setInvoiceWarehouseId('')
+    setWarehouseBalances([])
+    setWarehouseBalancesLoading(false)
     setDiscountType('none')
     setDiscountValue(0)
     setInvoiceNotes('')
@@ -375,8 +775,9 @@ export function SalesPage() {
     } catch (error) {
       console.error('OPEN CREATE SALES INVOICE DIALOG FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر فتح شاشة الفاتورة.'))
+      scrollInvoiceDialogToTop()
     }
-  }, [resetInvoiceForm])
+  }, [resetInvoiceForm, scrollInvoiceDialogToTop])
 
   const openEditInvoiceDialog = useCallback(async (invoiceId: string) => {
     try {
@@ -390,6 +791,15 @@ export function SalesPage() {
       setInvoiceDate(invoice.date)
       setInvoiceCustomerId(invoice.customerId)
       setInvoiceWarehouseId(invoice.warehouseId)
+
+      setWarehouseBalancesLoading(true)
+      try {
+        const balances = await inventoryService.getBalancesByWarehouse(invoice.warehouseId)
+        setWarehouseBalances(balances)
+      } finally {
+        setWarehouseBalancesLoading(false)
+      }
+
       setDiscountType(invoice.discountType)
       setDiscountValue(invoice.discountValue)
       setInvoiceNotes(invoice.notes ?? '')
@@ -406,14 +816,16 @@ export function SalesPage() {
     } catch (error) {
       console.error('OPEN EDIT SALES INVOICE DIALOG FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر فتح بيانات الفاتورة.'))
+      scrollInvoiceDialogToTop()
       setInvoiceDialogOpen(true)
     }
-  }, [])
+  }, [scrollInvoiceDialogToTop])
 
   const saveDraft = useCallback(async () => {
     const validationError = validateInvoiceForm()
     if (validationError) {
       setInvoiceFormError(validationError)
+      scrollInvoiceDialogToTop()
       return
     }
 
@@ -435,15 +847,17 @@ export function SalesPage() {
     } catch (error) {
       console.error('SAVE SALES DRAFT FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر حفظ مسودة الفاتورة. يرجى المحاولة مرة أخرى.'))
+      scrollInvoiceDialogToTop()
     } finally {
       setSaving(false)
     }
-  }, [validateInvoiceForm, buildInvoicePayload, editingInvoiceId, editingInvoiceStatus, loadData])
+  }, [validateInvoiceForm, buildInvoicePayload, editingInvoiceId, editingInvoiceStatus, loadData, scrollInvoiceDialogToTop])
 
   const completeDraft = useCallback(async () => {
     const validationError = validateInvoiceForm()
     if (validationError) {
       setInvoiceFormError(validationError)
+      scrollInvoiceDialogToTop()
       return
     }
 
@@ -464,10 +878,11 @@ export function SalesPage() {
     } catch (error) {
       console.error('APPROVE SALES FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر اعتماد الفاتورة. يرجى مراجعة البيانات والمحاولة مرة أخرى.'))
+      scrollInvoiceDialogToTop()
     } finally {
       setSaving(false)
     }
-  }, [validateInvoiceForm, editingInvoiceId, buildInvoicePayload, loadData])
+  }, [validateInvoiceForm, editingInvoiceId, buildInvoicePayload, loadData, scrollInvoiceDialogToTop])
 
   const deleteDraft = useCallback(async (invoiceId: string) => {
     try {
@@ -633,7 +1048,7 @@ export function SalesPage() {
   }, [customerForm, loadData])
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box sx={craftPageGlassSx}>
       <PageHeader
         title={isCustomersPage ? 'العملاء' : 'المبيعات والعملاء'}
         breadcrumb={isCustomersPage ? 'إدارة العملاء' : 'إدارة العملاء وفواتير المبيعات'}
@@ -646,7 +1061,7 @@ export function SalesPage() {
           <Box sx={{ overflowX: 'auto' }}>
             <Table sx={{ minWidth: 800 }}>
               <TableHead>
-                <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell>رقم العميل</TableCell>
                   <TableCell>اسم العميل</TableCell>
                   <TableCell>الهاتف</TableCell>
@@ -656,7 +1071,12 @@ export function SalesPage() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {customers.map((customer) => (
+                {customers
+                  .slice(
+                    customerPage * customerRowsPerPage,
+                    customerPage * customerRowsPerPage + customerRowsPerPage,
+                  )
+                  .map((customer) => (
                   <TableRow key={customer.id} sx={{ textAlignLast: 'center' }}>
                     <TableCell>{customer.code}</TableCell>
                     <TableCell>{customer.name}</TableCell>
@@ -693,6 +1113,20 @@ export function SalesPage() {
               </TableBody>
             </Table>
           </Box>
+        
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
+            <TablePagination
+              component="div"
+              count={customers.length}
+              page={customerPage}
+              onPageChange={(_, newPage) => setCustomerPage(newPage)}
+              rowsPerPage={customerRowsPerPage}
+              onRowsPerPageChange={(event) => {
+                setCustomerRowsPerPage(Number(event.target.value))
+                setCustomerPage(0)
+              }}
+            />
+          </Box>
         </SectionCard>
         
       ) : (
@@ -721,13 +1155,13 @@ export function SalesPage() {
             value={toDate}
             onChange={(value) => { setToDate(toInternalDate(value)); setPage(0) }}
           />
-          <TextField select label="العميل" value={customerFilter} onChange={(event) => { setCustomerFilter(event.target.value); setPage(0) }}>
+          <TextField select label="العميل" value={customerFilter} onChange={(event) => { setCustomerFilter(event.target.value); setPage(0) }} slotProps={darkSelectSlotProps}>
             <MenuItem value="">الكل</MenuItem>
             {customers.map((customer) => (
               <MenuItem key={customer.id} value={customer.id}>{customer.code} - {customer.name}</MenuItem>
             ))}
           </TextField>
-          <TextField select label="المخزن" value={warehouseFilter} onChange={(event) => { setWarehouseFilter(event.target.value); setPage(0) }}>
+          <TextField select label="المخزن" value={warehouseFilter} onChange={(event) => { setWarehouseFilter(event.target.value); setPage(0) }} slotProps={darkSelectSlotProps}>
             <MenuItem value="">الكل</MenuItem>
             {activeWarehouses.map((warehouse) => (
               <MenuItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</MenuItem>
@@ -754,9 +1188,9 @@ export function SalesPage() {
           {loading ? (
             <Box sx={{ display: 'grid', placeItems: 'center', p: 4 }}><CircularProgress /></Box>
           ) : (
-            <Table sx={{ minWidth: 1200 }}>
+            <Table sx={{ width: '100%', minWidth: 1000 }}>
               <TableHead>
-                <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>التاريخ</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم الفاتورة</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>العميل</TableCell>
@@ -767,7 +1201,19 @@ export function SalesPage() {
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المدفوع</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المتبقي</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>حالة الدفع</TableCell>
-                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجراءات</TableCell>
+                  <TableCell
+                    sx={{
+                      textAlign: 'center',
+                      fontWeight: 700,
+                      width: 130,
+                      minWidth: 130,
+                      maxWidth: 130,
+                      px: 1,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    الإجراءات
+                  </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -783,8 +1229,25 @@ export function SalesPage() {
                     <TableCell sx={{ textAlign: 'center' }}>{currency(row.paidAmount)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(row.remainingAmount)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{paymentStatusLabel[row.paymentStatus]}</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>
-                      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+                    <TableCell
+                      sx={{
+                        textAlign: 'center',
+                        width: 130,
+                        minWidth: 130,
+                        maxWidth: 130,
+                        px: 1,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          gap: 0.5,
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                          flexWrap: 'nowrap',
+                        }}
+                      >
                         <Tooltip title="عرض">
                           <IconButton size="small" color="secondary" onClick={() => void openDetails(row.id)}>
                             <FiEye />
@@ -825,7 +1288,7 @@ export function SalesPage() {
       </SectionCard>
       )}
 
-      <Dialog open={Boolean(confirmAction)} onClose={() => setConfirmAction(null)} maxWidth="sm" fullWidth>
+      <Dialog open={Boolean(confirmAction)} onClose={() => setConfirmAction(null)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>{confirmAction?.type === 'deleteDraft' ? 'تأكيد حذف المسودة' : 'تأكيد حذف الفاتورة'}</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <Typography>
@@ -854,7 +1317,7 @@ export function SalesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={customerGuideOpen} onClose={() => setCustomerGuideOpen(false)} maxWidth="lg" fullWidth>
+      <Dialog open={customerGuideOpen} onClose={() => setCustomerGuideOpen(false)} maxWidth="lg" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>دليل العملاء</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
@@ -873,7 +1336,7 @@ export function SalesPage() {
           </Box>
           <Table>
             <TableHead>
-              <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+              <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                 <TableCell sx={{ textAlign: 'center' }}>رقم العميل</TableCell>
                 <TableCell sx={{ textAlign: 'center' }}>اسم العميل</TableCell>
                 <TableCell sx={{ textAlign: 'center' }}>الهاتف</TableCell>
@@ -935,10 +1398,10 @@ export function SalesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(customerToDelete)} onClose={() => { setCustomerToDelete(null); setCustomerDeleteError('') }} maxWidth="sm" fullWidth>
+      <Dialog open={Boolean(customerToDelete)} onClose={() => { setCustomerToDelete(null); setCustomerDeleteError('') }} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>تأكيد حذف العميل</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
-          {customerDeleteError ? <Alert severity="error">{customerDeleteError}</Alert> : null}
+          {customerDeleteError ? <Alert severity="error" sx={craftErrorAlertSx}>{customerDeleteError}</Alert> : null}
           <Typography>
             {customerToDelete ? `هل أنت متأكد من حذف العميل «${customerToDelete.name}» رقم ${customerToDelete.code}؟ لا يمكن التراجع عن الحذف.` : ''}
           </Typography>
@@ -967,16 +1430,16 @@ export function SalesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={customerFormOpen} onClose={() => setCustomerFormOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={customerFormOpen} onClose={() => setCustomerFormOpen(false)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>{customerForm.id ? 'تعديل عميل' : 'إضافة عميل'}</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-          {customerFormError ? <Alert severity="error">{customerFormError}</Alert> : null}
+          {customerFormError ? <Alert severity="error" sx={craftErrorAlertSx}>{customerFormError}</Alert> : null}
           <TextField label="رقم العميل" value={customerForm.code} onChange={(event) => setCustomerForm((prev) => ({ ...prev, code: event.target.value }))} required />
           <TextField label="اسم العميل" value={customerForm.name} onChange={(event) => setCustomerForm((prev) => ({ ...prev, name: event.target.value }))} required />
           <TextField label="الهاتف" value={customerForm.phone} onChange={(event) => setCustomerForm((prev) => ({ ...prev, phone: event.target.value }))} />
           <TextField label="العنوان" value={customerForm.address} onChange={(event) => setCustomerForm((prev) => ({ ...prev, address: event.target.value }))} />
           <TextField label="ملاحظات" value={customerForm.notes} onChange={(event) => setCustomerForm((prev) => ({ ...prev, notes: event.target.value }))} multiline minRows={2} />
-          <TextField select label="الحالة" value={customerForm.status} onChange={(event) => setCustomerForm((prev) => ({ ...prev, status: event.target.value as 'active' | 'inactive' }))}>
+          <TextField select label="الحالة" value={customerForm.status} onChange={(event) => setCustomerForm((prev) => ({ ...prev, status: event.target.value as 'active' | 'inactive' }))} slotProps={darkSelectSlotProps}>
             <MenuItem value="active">فعال</MenuItem>
             <MenuItem value="inactive">غير فعال</MenuItem>
           </TextField>
@@ -991,10 +1454,13 @@ export function SalesPage() {
         setInvoiceDialogOpen(false)
         setEditingInvoiceStatus(null)
         setEditingInvoiceId(null)
-      }} fullWidth maxWidth="lg">
+      }} fullWidth maxWidth="lg" slotProps={craftInvoiceDialogSlotProps}>
         <DialogTitle>{editingInvoiceId ? 'تعديل مسودة فاتورة بيع' : 'فاتورة بيع جديدة'}</DialogTitle>
-        <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-          {invoiceFormError ? <Alert severity="error">{invoiceFormError}</Alert> : null}
+        <DialogContent
+          ref={invoiceDialogContentRef}
+          sx={{ display: 'grid', gap: 2, pt: '12px !important' }}
+        >
+          {invoiceFormError ? <Alert severity="error" sx={craftErrorAlertSx}>{invoiceFormError}</Alert> : null}
 
           <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
             <TextField label="رقم الفاتورة" value={invoiceNumber} slotProps={{ input: { readOnly: true } }} />
@@ -1018,14 +1484,51 @@ export function SalesPage() {
               getOptionLabel={(option) => `${option.code} - ${option.name}`}
               value={selectedCustomer}
               onChange={(_, value) => setInvoiceCustomerId(value?.id ?? '')}
+              slotProps={{ paper: { sx: darkPopupPaperSx } }}
               renderInput={(params) => <TextField {...params} label="العميل" required />}
             />
             <Autocomplete
               options={activeWarehouses}
               getOptionLabel={(option) => option.name}
               value={selectedWarehouse}
-              onChange={(_, value) => setInvoiceWarehouseId(value?.id ?? '')}
-              renderInput={(params) => <TextField {...params} label="المخزن" required />}
+              onChange={(_, value) => {
+                const warehouseId = value?.id ?? ''
+                setInvoiceWarehouseId(warehouseId)
+                setWarehouseBalances([])
+                setInvoiceFormError('')
+
+                if (!warehouseId) {
+                  setWarehouseBalancesLoading(false)
+                  return
+                }
+
+                setWarehouseBalancesLoading(true)
+                void inventoryService
+                  .getBalancesByWarehouse(warehouseId)
+                  .then((balances) => {
+                    setWarehouseBalances(balances)
+                  })
+                  .catch((error) => {
+                    console.error('LOAD SALES WAREHOUSE BALANCES FAILED', error)
+                    setWarehouseBalances([])
+                    setInvoiceFormError(
+                      getUserFriendlyErrorMessage(error, 'تعذر تحميل متوسطات أسعار المخزن.'),
+                    )
+                    scrollInvoiceDialogToTop()
+                  })
+                  .finally(() => {
+                    setWarehouseBalancesLoading(false)
+                  })
+              }}
+              slotProps={{ paper: { sx: darkPopupPaperSx } }}
+              renderInput={(params) => (
+                <TextField
+                  {...params}
+                  label="المخزن"
+                  required
+                  helperText={warehouseBalancesLoading ? 'جارٍ تحميل متوسطات أسعار المخزن...' : ''}
+                />
+              )}
             />
           </Box>
 
@@ -1038,15 +1541,22 @@ export function SalesPage() {
                 const lineTotal = (typeof line.quantity === 'number' ? line.quantity : 0) * (typeof line.unitPrice === 'number' ? line.unitPrice : 0)
 
                 return (
-                  <Box key={line.key} sx={{ p: 2, borderRadius: 3, border: '1px solid rgba(15, 23, 42, 0.08)' }}>
+                  <Box key={line.key} sx={{ p: 2, borderRadius: '14px', border: '1px solid rgba(255, 255, 255, 0.14)', background: 'rgba(255, 255, 255, 0.035)' }}>
                     <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', alignItems: 'center' }}>
                       <Autocomplete
                         options={materialOptions}
                         value={material}
+                        disabled={!invoiceWarehouseId || warehouseBalancesLoading}
                         getOptionLabel={(option) => option?.name ?? ''}
                         onChange={(_, value) => {
                           if (!value) {
                             setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, materialId: '', unit: '', unitPrice: '', quantity: item.quantity || '' } : item))
+                            return
+                          }
+
+                          if (!invoiceWarehouseId) {
+                            setInvoiceFormError('اختر المخزن أولاً حتى يتم تحميل متوسط سعر المادة.')
+                            scrollInvoiceDialogToTop()
                             return
                           }
 
@@ -1055,16 +1565,35 @@ export function SalesPage() {
                             return
                           }
 
+                          const averageCost = Number(
+                            warehouseBalanceByMaterial.get(value.id)?.averageCost ?? 0,
+                          )
+
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? {
                             ...item,
                             materialId: value.id,
                             unit: value.unit ?? '',
-                            unitPrice: Number(value.price1 ?? 0),
+                            unitPrice: Number.isFinite(averageCost)
+                              ? Number(averageCost.toFixed(2))
+                              : 0,
                             quantity: typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1,
                           } : item))
                           setInvoiceFormError('')
                         }}
-                        renderInput={(params) => <TextField {...params} label="المادة" required />}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            label="المادة"
+                            required
+                            helperText={
+                              !invoiceWarehouseId
+                                ? 'اختر المخزن أولاً ليظهر متوسط سعر المادة.'
+                                : warehouseBalancesLoading
+                                  ? 'جارٍ تحميل متوسطات الأسعار...'
+                                  : ''
+                            }
+                          />
+                        )}
                       />
                       <TextField label="الوحدة" value={line.unit} slotProps={{ input: { readOnly: true } }} />
                       <TextField
@@ -1075,7 +1604,7 @@ export function SalesPage() {
                           const raw = event.target.value
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, quantity: raw === '' ? '' : Number(raw) } : item))
                         }}
-                        slotProps={{ htmlInput: { min: 0.000001 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
                         required
                       />
                       <TextField
@@ -1086,7 +1615,7 @@ export function SalesPage() {
                           const raw = event.target.value
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, unitPrice: raw === '' ? '' : Number(raw) } : item))
                         }}
-                        slotProps={{ htmlInput: { min: 0 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
                         required
                       />
                       <TextField label="الإجمالي" value={currency(lineTotal)} slotProps={{ input: { readOnly: true } }} />
@@ -1117,7 +1646,7 @@ export function SalesPage() {
 
           <SectionCard title="الحسم والإجماليات">
             <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
-              <TextField select label="نوع الحسم" value={discountType} onChange={(event) => setDiscountType(event.target.value as DiscountType)}>
+              <TextField select label="نوع الحسم" value={discountType} onChange={(event) => setDiscountType(event.target.value as DiscountType)} slotProps={darkSelectSlotProps}>
                 <MenuItem value="none">بدون حسم</MenuItem>
                 <MenuItem value="percentage">نسبة مئوية</MenuItem>
                 <MenuItem value="fixed">مبلغ ثابت</MenuItem>
@@ -1130,12 +1659,12 @@ export function SalesPage() {
                   const raw = event.target.value
                   setDiscountValue(raw === '' ? '' : Number(raw))
                 }}
-                slotProps={{ htmlInput: { min: 0, max: discountType === 'percentage' ? 100 : undefined } }}
+                slotProps={{ htmlInput: { min: 0, max: discountType === 'percentage' ? 100 : undefined, step: 1 } }}
               />
             </Box>
             <Table sx={{ mt: 2, width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
               <TableHead>
-                <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي النهائي</TableCell>
@@ -1164,7 +1693,7 @@ export function SalesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} fullWidth maxWidth="lg">
+      <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} fullWidth maxWidth="lg" slotProps={craftDialogSlotProps}>
         <DialogTitle>تفاصيل فاتورة البيع</DialogTitle>
         <DialogContent>
           {!selectedInvoice ? (
@@ -1181,7 +1710,7 @@ export function SalesPage() {
 
               <Table>
                 <TableHead>
-                  <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                  <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center' }}>المادة</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>الوحدة</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>الكمية</TableCell>
@@ -1210,7 +1739,7 @@ export function SalesPage() {
 
               <Table sx={{ width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
                 <TableHead>
-                  <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                  <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي النهائي</TableCell>
@@ -1244,7 +1773,7 @@ export function SalesPage() {
                   <Typography sx={{ fontWeight: 700 }}>مرتجعات البيع</Typography>
                   <Table>
                     <TableHead>
-                      <TableRow sx={{ background: '#F8FAFC' }}>
+                      <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                         <TableCell>رقم المرتجع</TableCell>
                         <TableCell>التاريخ</TableCell>
                         <TableCell>إجمالي المرتجع</TableCell>
@@ -1334,7 +1863,7 @@ export function SalesPage() {
                 ) : (
                   <Table>
                     <TableHead>
-                      <TableRow sx={{ background: '#F8FAFC', textAlignLast: 'center' }}>
+                      <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                         <TableCell sx={{ textAlign: 'center' }}>التاريخ</TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>المبلغ</TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>ملاحظات</TableCell>
@@ -1366,10 +1895,10 @@ export function SalesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={paymentDialogOpen} onClose={() => setPaymentDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={paymentDialogOpen} onClose={() => setPaymentDialogOpen(false)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>تسجيل دفعة</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
-          {paymentError ? <Alert severity="error">{paymentError}</Alert> : null}
+          {paymentError ? <Alert severity="error" sx={craftErrorAlertSx}>{paymentError}</Alert> : null}
           <TextField
             label="التاريخ"
             type="text"
@@ -1385,7 +1914,7 @@ export function SalesPage() {
             }}
             required
           />
-          <TextField label="المبلغ" type="number" value={paymentForm.amount} onChange={(event) => setPaymentForm((prev) => ({ ...prev, amount: event.target.value }))} required />
+          <TextField label="المبلغ" type="number" value={paymentForm.amount} onChange={(event) => setPaymentForm((prev) => ({ ...prev, amount: event.target.value }))} slotProps={{ htmlInput: { min: 0, step: 1 } }} required />
           <TextField label="ملاحظات" value={paymentForm.notes} onChange={(event) => setPaymentForm((prev) => ({ ...prev, notes: event.target.value }))} multiline minRows={2} />
         </DialogContent>
         <DialogActions>
@@ -1394,7 +1923,7 @@ export function SalesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(paymentDeleteConfirm)} onClose={() => setPaymentDeleteConfirm(null)} maxWidth="sm" fullWidth>
+      <Dialog open={Boolean(paymentDeleteConfirm)} onClose={() => setPaymentDeleteConfirm(null)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>حذف دفعة</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           <Typography>هل أنت متأكد من حذف الدفعة بتاريخ {paymentDeleteConfirm ? formatDateDMY(paymentDeleteConfirm.paymentDate) : ''} بمبلغ {paymentDeleteConfirm ? currency(paymentDeleteConfirm.paymentAmount) : ''}؟</Typography>

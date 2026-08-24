@@ -16,14 +16,47 @@ export function StatisticCard({ title, value, subtitle }: StatisticCardProps) {
       sx={{
         p: 3,
         borderRadius: 3,
-        background: '#F8FAFC',
-        border: '1px solid rgba(15, 23, 42, 0.06)',
+
+        background: 'rgba(248, 250, 252, 0.10)',
+        backdropFilter: 'blur(18px) saturate(120%)',
+        WebkitBackdropFilter: 'blur(18px) saturate(120%)',
+
+        border: '1px solid rgba(255, 255, 255, 0.12)',
+        boxShadow: '0 18px 45px rgba(2, 6, 23, 0.16)',
+
         minWidth: 220,
       }}
     >
-      <Typography sx={{ color: 'text.secondary', fontSize: 12, fontWeight: 700 }}>{title}</Typography>
-      <Typography sx={{ fontSize: 28, fontWeight: 800, mt: 1 }}>{value}</Typography>
-      <Typography sx={{ color: '#64748B', fontSize: 13, mt: 1 }}>{subtitle}</Typography>
+      <Typography
+        sx={{
+          color: 'rgba(255, 255, 255, 0.68)',
+          fontSize: 12,
+          fontWeight: 700,
+        }}
+      >
+        {title}
+      </Typography>
+
+      <Typography
+        sx={{
+          color: 'rgba(255, 255, 255, 0.96)',
+          fontSize: 28,
+          fontWeight: 800,
+          mt: 1,
+        }}
+      >
+        {value}
+      </Typography>
+
+      <Typography
+        sx={{
+          color: 'rgba(255, 255, 255, 0.62)',
+          fontSize: 13,
+          mt: 1,
+        }}
+      >
+        {subtitle}
+      </Typography>
     </Box>
   )
 }

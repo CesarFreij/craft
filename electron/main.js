@@ -16,6 +16,7 @@ import {
   getProductionOrderById,
   getNextProductionOrderNumber,
   createProductionOrder,
+  updateProductionOrder,
   deleteProductionOrder,
   initDatabase,
   listWarehouses,
@@ -27,8 +28,12 @@ import {
   listStockMovements,
   getStockMovementByReference,
   createStockMovementDocument,
+  createAdjustmentDocument,
+  updateAdjustmentDocument,
+  deleteAdjustmentDocument,
   getStockBalancesByWarehouse,
   getStockBalancesByMaterial,
+  getDatabase,
   listSuppliers,
   listActiveSuppliers,
   createSupplier,
@@ -48,6 +53,7 @@ import {
   listPurchaseReturns,
   getPurchaseReturnById,
   createPurchaseReturn,
+  updatePurchaseReturn,
   deletePurchaseReturn,
   listCustomers,
   listActiveCustomers,
@@ -68,9 +74,11 @@ import {
   listSalesReturns,
   getSalesReturnById,
   createSalesReturn,
+  updateSalesReturn,
   deleteSalesReturn
 } from './materialsRepository.js'
 import { fileURLToPath } from 'node:url'
+import { getReportData, getReportExportRows } from './reports.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -206,6 +214,10 @@ ipcMain.handle('productionOrders:create', async (_, payload) => {
   return createProductionOrder(payload)
 })
 
+ipcMain.handle('productionOrders:update', async (_, { orderId, payload }) => {
+  return updateProductionOrder(orderId, payload)
+})
+
 ipcMain.handle('productionOrders:delete', async (_, id) => {
   return deleteProductionOrder(id)
 })
@@ -243,6 +255,18 @@ ipcMain.handle('stock:balancesByMaterial', async (_, materialId) => {
   return getStockBalancesByMaterial(materialId)
 })
 
+ipcMain.handle('reports:getReport', async (_, { reportType, filters }) => {
+  await initDatabase()
+  const db = getDatabase()
+  return getReportData(db, reportType, filters || {})
+})
+
+ipcMain.handle('reports:getReportExportRows', async (_, { reportType, filters }) => {
+  await initDatabase()
+  const db = getDatabase()
+  return getReportExportRows(db, reportType, filters || {})
+})
+
 // Stock movements IPC
 ipcMain.handle('movements:list', async (_, filter) => {
   return listStockMovements(filter || {})
@@ -254,6 +278,26 @@ ipcMain.handle('movements:getByReference', async (_, reference) => {
 
 ipcMain.handle('movements:create', async (_, doc) => {
   return createStockMovementDocument(doc)
+})
+
+ipcMain.handle('adjustments:list', async (_, filter) => {
+  return listStockMovements({ ...filter, type: 'adjustment' })
+})
+
+ipcMain.handle('adjustments:getByReference', async (_, reference) => {
+  return getStockMovementByReference(reference)
+})
+
+ipcMain.handle('adjustments:create', async (_, payload) => {
+  return createAdjustmentDocument(payload)
+})
+
+ipcMain.handle('adjustments:update', async (_, { reference, payload }) => {
+  return updateAdjustmentDocument(reference, payload)
+})
+
+ipcMain.handle('adjustments:delete', async (_, reference) => {
+  return deleteAdjustmentDocument(reference)
 })
 
 // Suppliers IPC
@@ -332,6 +376,10 @@ ipcMain.handle('purchases:getReturnById', async (_, returnId) => {
 
 ipcMain.handle('purchases:createReturn', async (_, payload) => {
   return createPurchaseReturn(payload)
+})
+
+ipcMain.handle('purchases:updateReturn', async (_, { returnId, payload }) => {
+  return updatePurchaseReturn(returnId, payload)
 })
 
 ipcMain.handle('purchases:deleteReturn', async (_, returnId) => {
@@ -414,6 +462,10 @@ ipcMain.handle('sales:getReturnById', async (_, returnId) => {
 
 ipcMain.handle('sales:createReturn', async (_, payload) => {
   return createSalesReturn(payload)
+})
+
+ipcMain.handle('sales:updateReturn', async (_, { returnId, payload }) => {
+  return updateSalesReturn(returnId, payload)
 })
 
 ipcMain.handle('sales:deleteReturn', async (_, returnId) => {

@@ -5,7 +5,6 @@ import {
   Button,
   Typography,
   Tooltip,
-  useTheme,
   Dialog,
   DialogTitle,
   DialogContent,
@@ -30,7 +29,6 @@ import {
   FiChevronRight,
   FiEdit2,
   FiTrash2,
-  FiAlertCircle,
 } from 'react-icons/fi'
 import { materialsService } from '../../services/materialsService'
 import type { MaterialRecord } from '../../services/materialsService'
@@ -63,6 +61,154 @@ interface MaterialCatalogProps {
 }
 
 const initialTree: MaterialNode[] = []
+
+const darkPopupPaperSx = {
+  mt: 0.75,
+  borderRadius: '12px',
+  background: 'rgba(8, 22, 48, 0.97)',
+  backdropFilter: 'blur(22px) saturate(125%)',
+  WebkitBackdropFilter: 'blur(22px) saturate(125%)',
+  border: '1px solid rgba(255, 255, 255, 0.14)',
+  boxShadow: '0 20px 50px rgba(2, 6, 23, 0.38)',
+  color: 'rgba(255, 255, 255, 0.92)',
+  backgroundImage: 'none',
+  '& .MuiMenuItem-root': {
+    color: 'rgba(255, 255, 255, 0.88)',
+    borderRadius: '8px',
+    mx: 0.5,
+    my: 0.25,
+    '&:hover': {
+      background: 'rgba(56, 189, 248, 0.10)',
+    },
+    '&.Mui-selected': {
+      color: '#67E8F9',
+      background: 'rgba(34, 211, 238, 0.13)',
+    },
+    '&.Mui-selected:hover': {
+      background: 'rgba(34, 211, 238, 0.18)',
+    },
+  },
+}
+
+const craftDialogSlotProps = {
+  backdrop: {
+    sx: {
+      backgroundColor: 'rgba(2, 6, 23, 0.62)',
+      backdropFilter: 'blur(5px)',
+      WebkitBackdropFilter: 'blur(5px)',
+    },
+  },
+  paper: {
+    sx: {
+      borderRadius: '18px',
+      background: 'rgba(8, 22, 48, 0.97) !important',
+      backgroundColor: 'rgba(8, 22, 48, 0.97) !important',
+      backgroundImage: 'none !important',
+      backdropFilter: 'blur(28px) saturate(125%)',
+      WebkitBackdropFilter: 'blur(28px) saturate(125%)',
+      border: '1px solid rgba(148, 197, 255, 0.16)',
+      boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
+      color: 'rgba(255, 255, 255, 0.92)',
+      overflow: 'hidden',
+
+      '& .MuiDialogTitle-root': {
+        color: 'rgba(255, 255, 255, 0.96)',
+        fontWeight: 800,
+        px: 3,
+        pt: 2.5,
+        pb: 1.2,
+      },
+
+      '& .MuiDialogContent-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+        borderColor: 'rgba(255, 255, 255, 0.12)',
+      },
+
+      '& .MuiTypography-root': {
+        color: 'rgba(255, 255, 255, 0.88)',
+      },
+
+      '& .MuiOutlinedInput-root': {
+        borderRadius: '14px',
+        background: 'rgba(255, 255, 255, 0.07)',
+        color: 'rgba(255, 255, 255, 0.92)',
+        '&:hover': {
+          background: 'rgba(255, 255, 255, 0.09)',
+        },
+        '&:hover .MuiOutlinedInput-notchedOutline': {
+          borderColor: 'rgba(103, 232, 249, 0.55)',
+        },
+        '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+          borderColor: '#67E8F9',
+          borderWidth: 1.5,
+        },
+      },
+
+      '& .MuiOutlinedInput-notchedOutline': {
+        borderColor: 'rgba(203, 213, 225, 0.22)',
+      },
+
+      '& .MuiInputBase-input': {
+        color: 'rgba(255, 255, 255, 0.92)',
+        WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+      },
+
+      '& .MuiInputBase-input.Mui-disabled': {
+        WebkitTextFillColor: 'rgba(255, 255, 255, 0.48)',
+      },
+
+      '& .MuiInputLabel-root': {
+        color: 'rgba(226, 232, 240, 0.72)',
+      },
+
+      '& .MuiInputLabel-root.Mui-focused': {
+        color: '#67E8F9',
+      },
+
+      '& .MuiSelect-icon, & .MuiAutocomplete-popupIndicator, & .MuiAutocomplete-clearIndicator': {
+        color: 'rgba(255, 255, 255, 0.78)',
+      },
+
+      '& .MuiFormHelperText-root': {
+        color: 'rgba(255, 255, 255, 0.62)',
+      },
+
+      '& .MuiFormHelperText-root.Mui-error': {
+        color: '#FCA5A5',
+      },
+
+      '& .MuiButton-text': {
+        color: '#CBD5E1',
+      },
+    },
+  },
+}
+
+const craftErrorAlertSx = {
+  background: 'rgb(92 18 18 / 50%) !important',
+  backgroundColor: 'rgb(92 18 18 / 50%) !important',
+  color: '#FEE2E2 !important',
+  border: '1px solid rgba(248, 113, 113, 0.58)',
+  borderRadius: '14px',
+  '& .MuiAlert-icon': {
+    color: '#FCA5A5',
+  },
+  '& .MuiAlert-message': {
+    color: '#FEE2E2',
+    fontWeight: 700,
+  },
+}
+
+const craftPanelSx = {
+  borderRadius: '18px',
+  background: 'rgba(248, 250, 252, 0.10)',
+  backdropFilter: 'blur(36px) saturate(120%)',
+  WebkitBackdropFilter: 'blur(18px) saturate(120%)',
+  border: 'none',
+  color: 'rgba(255, 255, 255, 0.92)',
+  backgroundImage: 'none',
+}
+
 
 // Dialog types
 interface DialogState {
@@ -158,7 +304,6 @@ function getNodeReturnabilityDisplay(materials: MaterialNode[], node: MaterialNo
 }
 
 export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
-  const theme = useTheme()
   const [materials, setMaterials] = useState<MaterialNode[]>(initialTree)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [treeWidth, setTreeWidth] = useState(40)
@@ -699,7 +844,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                   justifyContent: 'center',
                   width: 20,
                   height: 20,
-                  color: theme.palette.primary.main,
+                  color: isSelected ? '#67E8F9' : 'rgba(255, 255, 255, 0.72)',
                 }}
                 animate={{ rotate: isExpanded ? 90 : 0 }}
                 transition={{ duration: 0.15 }}
@@ -711,9 +856,9 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
             )}
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              {node.type === 'main' && <FiFolder size={16} color={theme.palette.primary.main} />}
-              {node.type === 'sub' && !node.isNonStock && <FiBox size={16} color="#0F766E" />}
-              {node.type === 'sub' && node.isNonStock && <FiFileText size={16} color="#64748B" />}
+              {node.type === 'main' && <FiFolder size={16} color="#67E8F9" />}
+              {node.type === 'sub' && !node.isNonStock && <FiBox size={16} color="#93C5FD" />}
+              {node.type === 'sub' && node.isNonStock && <FiFileText size={16} color="#CBD5E1" />}
             </Box>
 
             <Box
@@ -724,13 +869,20 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
               sx={{
                 flex: 1,
                 p: 1,
-                borderRadius: 1,
+                borderRadius: '10px',
                 cursor: 'pointer',
-                bgcolor:
-                  isSelected
-                    ? 'rgba(37,99,235,0.12)'
-                    : 'transparent',
-                '&:hover': { bgcolor: 'rgba(37,99,235,0.06)' },
+                color: 'rgba(255, 255, 255, 0.88)',
+                bgcolor: isSelected
+                  ? 'rgba(34, 211, 238, 0.13)'
+                  : 'transparent',
+                border: isSelected
+                  ? '1px solid rgba(34, 211, 238, 0.22)'
+                  : '1px solid transparent',
+                '&:hover': {
+                  bgcolor: isSelected
+                    ? 'rgba(34, 211, 238, 0.18)'
+                    : 'rgba(56, 189, 248, 0.08)',
+                },
               }}
             >
               <Typography
@@ -774,19 +926,21 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
         minHeight: 0,
         width: '100%',
         overflow: 'hidden',
-        bgcolor: '#F7F8FA',
+        background: 'transparent',
+        color: 'rgba(255, 255, 255, 0.92)',
       }}
     >
       {/* Toolbar */}
       <Box
         sx={{
           display: 'flex',
-          gap: 2,
+          gap: 1.5,
           p: 2,
           flexShrink: 0,
-          borderBottom: '1px solid',
-          borderColor: 'divider',
-          bgcolor: '#F7F8FA',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.14)',
+          background: 'transparent',
         }}
       >
         <Button
@@ -794,6 +948,11 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
           color="primary"
           startIcon={<FiPlus />}
           onClick={openAddMainDialog}
+          sx={{
+            borderRadius: '12px',
+            px: 2.25,
+            fontWeight: 700,
+          }}
         >
           إضافة مادة رئيسية
         </Button>
@@ -812,15 +971,22 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
               disableRipple={!canAddSubMaterial}
               onClick={openAddSubDialog}
               sx={{
+                borderRadius: '12px',
+                px: 2.25,
+                fontWeight: 700,
+                color: '#93C5FD',
+                borderColor: 'rgba(96, 165, 250, 0.46)',
+                '&:hover': {
+                  borderColor: '#60A5FA',
+                  background: 'rgba(96, 165, 250, 0.10)',
+                },
                 '&.Mui-disabled': {
                   cursor: 'not-allowed',
                   pointerEvents: 'auto',
-                  opacity: 0.6,
-                  color: theme.palette.primary.main,
-                  borderColor: theme.palette.primary.main,
-                  '&:hover': {
-                    backgroundColor: 'transparent',
-                  },
+                  opacity: 1,
+                  color: 'rgba(203, 213, 225, 0.38)',
+                  borderColor: 'rgba(148, 163, 184, 0.16)',
+                  background: 'rgba(148, 163, 184, 0.08)',
                 },
               }}
             >
@@ -850,18 +1016,14 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
           elevation={0}
           onClick={() => setSelectedNodeId(null)}
           sx={{
+            ...craftPanelSx,
             width: `${treeWidth}%`,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-              borderRadius: '12px',
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E2E8F0',
-              borderInlineEnd: '1px solid #E2E8F0',
             p: 2,
             m: 2,
             boxSizing: 'border-box',
-              boxShadow: 'none',
             flexShrink: 0,
           }}
         >
@@ -870,7 +1032,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
               fontWeight: 700,
               fontSize: 14,
               mb: 2,
-              color: 'text.primary',
+              color: 'rgba(255, 255, 255, 0.94)',
               flexShrink: 0,
             }}
           >
@@ -925,10 +1087,9 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
             maxHeight: '80%',
             minHeight: 0,
             cursor: 'col-resize',
-            bgcolor: 'divider',
-            transition: 'bgcolor 0.2s ease',
-            background: 'linear-gradient(135deg, #0a3697 0%, #0a6fcb 50%, #0cdbeb 100%)',
-            borderRadius: 999,
+            background: 'linear-gradient(135deg, #0a3697 0%, #0a6fcb 50%, #0cdbeb 100%)rgba(255, 255, 255, 0.16)',
+            borderRadius: '999px',
+            transition: 'background 160ms ease, box-shadow 160ms ease',
           }}
         />
 
@@ -936,18 +1097,15 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
         <Paper
           elevation={0}
           sx={{
+            ...craftPanelSx,
             width: `${100 - treeWidth}%`,
             minWidth: 0,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
-            borderRadius: '12px',
-            backgroundColor: '#FFFFFF',
-            border: '1px solid #E2E8F0',
             p: 3,
             m: 2,
             boxSizing: 'border-box',
-            boxShadow: 'none',
             paddingRight: 0,
           }}
         >
@@ -957,6 +1115,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
               minHeight: 0,
               overflowY: 'auto',
               overflowX: 'hidden',
+              pr: 3,
             }}
           >
             {!selectedNode ? (
@@ -966,13 +1125,13 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                   alignItems: 'center',
                   justifyContent: 'center',
                   height: '100%',
-                  color: '#475569',
+                  color: 'rgba(255, 255, 255, 0.72)',
                 }}
               >
                 اختر مادة من القائمة
               </Box>
             ) : (
-              <Box sx={{ display: 'grid', gap: 2, flex: 1 }}>
+              <Box sx={{ display: 'grid', gap: 2 }}>
                 <Typography sx={{ fontWeight: 700, fontSize: 16 }}>
                   {selectedNode.name}
                 </Typography>
@@ -983,7 +1142,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         عائدية المادة
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNodeReturnability}
                       </Typography>
                     </Box>
@@ -992,7 +1151,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         رقم المادة
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNode.materialNumber}
                       </Typography>
                     </Box>
@@ -1005,7 +1164,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         الوحدة
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNode.unit}
                       </Typography>
                     </Box>
@@ -1014,7 +1173,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         سعر التكلفة
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNode.costPrice}
                       </Typography>
                     </Box>
@@ -1023,7 +1182,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         متوسط التكلفة
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {formatDisplayNumber(subMaterialAverageCost, 2)}
                       </Typography>
                     </Box>
@@ -1032,7 +1191,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         سعر البيع الأول
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNode.price1}
                       </Typography>
                     </Box>
@@ -1041,7 +1200,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         سعر البيع الثاني
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNode.price2}
                       </Typography>
                     </Box>
@@ -1050,7 +1209,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         سعر البيع الثالث
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNode.price3}
                       </Typography>
                     </Box>
@@ -1059,7 +1218,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                         مادة لا مخزنية
                       </Typography>
-                      <Typography sx={{ color: '#475569' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNode.isNonStock ? 'نعم' : 'لا'}
                       </Typography>
                     </Box>
@@ -1070,46 +1229,56 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                   <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
                     ملاحظات
                   </Typography>
-                  <Typography sx={{ color: '#475569', whiteSpace: 'pre-wrap' }}>
+                  <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', whiteSpace: 'pre-wrap' }}>
                     {selectedNode.notes || 'لا توجد ملاحظات'}
                   </Typography>
-                </Box>
-
-                <Box>
-                </Box>
-
-
-                {/* Action Buttons at Bottom */}
-                <Box sx={{ display: 'flex', gap: 1, pt: 2, mt: 2, borderTop: '1px solid #E2E8F0', position: 'sticky', bottom: 0, zIndex: 1, backgroundColor: '#FFFFFF' }}>
-                  <Button
-                    size="small"
-                    startIcon={<FiEdit2 size={16} />}
-                    onClick={openEditDialog}
-                    disabled={!selectedNode}
-                    sx={{
-                      textTransform: 'none',
-                      fontWeight: 600,
-                    }}
-                  >
-                    تعديل
-                  </Button>
-                  <Button
-                    size="small"
-                    startIcon={<FiTrash2 size={16} />}
-                    onClick={openDeleteDialog}
-                    disabled={!selectedNode}
-                    color="error"
-                    sx={{
-                      textTransform: 'none',
-                      fontWeight: 600,
-                    }}
-                  >
-                    حذف
-                  </Button>
                 </Box>
               </Box>
             )}
           </Box>
+
+          {selectedNode ? (
+            <Box
+              sx={{
+                display: 'flex',
+                gap: 1,
+                pt: 2,
+                pr: 3,
+                flexShrink: 0,
+                alignItems: 'center',
+              }}
+            >
+              <Button
+                size="small"
+                startIcon={<FiEdit2 size={16} />}
+                onClick={openEditDialog}
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  color: '#60A5FA',
+                  '&:hover': {
+                    color: '#93C5FD',
+                    background: 'rgba(96, 165, 250, 0.12)',
+                  },
+                }}
+              >
+                تعديل
+              </Button>
+
+              <Button
+                size="small"
+                startIcon={<FiTrash2 size={16} />}
+                onClick={openDeleteDialog}
+                color="error"
+                sx={{
+                  textTransform: 'none',
+                  fontWeight: 600,
+                }}
+              >
+                حذف
+              </Button>
+            </Box>
+          ) : null}
         </Paper>
       </Box>
 
@@ -1119,11 +1288,11 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
         onClose={() => setDialog({ open: false, mode: null })}
         maxWidth="sm"
         fullWidth
-      >
+        slotProps={craftDialogSlotProps}      >
         <DialogTitle>إضافة مادة رئيسية</DialogTitle>
         <DialogContent sx={{ pt: '16px !important', display: 'grid', gap: 2 }}>
           {formErrors.name && (
-            <Alert severity="error">{formErrors.name}</Alert>
+            <Alert severity="error" sx={craftErrorAlertSx}>{formErrors.name}</Alert>
           )}
           <TextField
             label="عائدية المادة"
@@ -1181,11 +1350,11 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
         onClose={() => setDialog({ open: false, mode: null })}
         maxWidth="sm"
         fullWidth
-      >
+        slotProps={craftDialogSlotProps}      >
         <DialogTitle>إضافة مادة فرعية</DialogTitle>
         <DialogContent sx={{ pt: '16px !important', display: 'grid', gap: 2 }}>
           {Object.keys(formErrors).length > 0 && (
-            <Alert severity="error">
+            <Alert severity="error" sx={craftErrorAlertSx}>
               <Box component="ul" sx={{ m: 0, pl: 2 }}>
                 {Object.values(formErrors).map((error) => (
                   <li key={error}>{error}</li>
@@ -1228,6 +1397,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
               value={formData.unit}
               onChange={(e, v) => handleFormChange('unit', (v ?? '') as string)}
               onInputChange={(e, v) => handleFormChange('unit', v)}
+              slotProps={{ paper: { sx: darkPopupPaperSx } }}
               renderInput={(params) => (
                 <TextField
                     {...params}
@@ -1260,6 +1430,13 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                   value={formData.openingWarehouseId ?? ''}
                   onChange={(e) => handleFormChange('openingWarehouseId', e.target.value)}
                   label="مخزن الرصيد الافتتاحي"
+                  MenuProps={{
+                    slotProps: {
+                      paper: {
+                        sx: darkPopupPaperSx,
+                      },
+                    },
+                  }}
                 >
                   <MenuItem value="">
                     <em>اختر مخزن</em>
@@ -1317,7 +1494,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                   },
                   '& .MuiSwitch-track': {
                     width: '50px',
-                    backgroundColor: formData.isNonStock ? '#2563EB' : '#CBD5E1',
+                    backgroundColor: formData.isNonStock ? 'rgba(34, 211, 238, 0.34)' : 'rgba(148, 163, 184, 0.24)',
                     opacity: 1,
                   },
                   '& .MuiSwitch-thumb': {
@@ -1326,7 +1503,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                     boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
                   },
                   '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
-                    backgroundColor: '#2563EB',
+                    backgroundColor: 'rgba(34, 211, 238, 0.34)',
                   },
                 }}
               />
@@ -1366,11 +1543,11 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
         onClose={() => setDialog({ open: false, mode: null })}
         maxWidth="sm"
         fullWidth
-      >
+        slotProps={craftDialogSlotProps}      >
         <DialogTitle>تعديل المادة</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2, paddingTop: '20px !important' }}>
           {Object.keys(formErrors).length > 0 && (
-            <Alert severity="error">
+            <Alert severity="error" sx={craftErrorAlertSx}>
               <Box component="ul" sx={{ m: 0, pl: 2 }}>
                 {Object.values(formErrors).map((error) => (
                   <li key={error}>{error}</li>
@@ -1416,6 +1593,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                   value={formData.unit}
                   onChange={(e, v) => handleFormChange('unit', (v ?? '') as string)}
                   onInputChange={(e, v) => handleFormChange('unit', v)}
+                  slotProps={{ paper: { sx: darkPopupPaperSx } }}
                   renderInput={(params) => (
                     <TextField
                       {...params}
@@ -1473,7 +1651,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                       },
                       '& .MuiSwitch-track': {
                         width: '50px',
-                        backgroundColor: formData.isNonStock ? '#2563EB' : '#CBD5E1',
+                        backgroundColor: formData.isNonStock ? 'rgba(34, 211, 238, 0.34)' : 'rgba(148, 163, 184, 0.24)',
                         opacity: 1,
                       },
                       '& .MuiSwitch-thumb': {
@@ -1483,7 +1661,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                         transform: 'translateY(1px)'
                       },
                       '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
-                        backgroundColor: '#2563EB',
+                        backgroundColor: 'rgba(34, 211, 238, 0.34)',
                       },
                     }}
                   />
@@ -1532,33 +1710,34 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
       <Dialog
         open={dialog.open && dialog.mode === 'delete'}
         onClose={() => setDialog({ open: false, mode: null })}
-        maxWidth="sm"
+        maxWidth="xs"
         fullWidth
+        slotProps={craftDialogSlotProps}
       >
-        <DialogTitle>تأكيد الحذف</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 800 }}>حذف المادة</DialogTitle>
+
         <DialogContent>
-          <Alert
-            severity="warning"
-            icon={<FiAlertCircle style={{ color: 'red' }} />}
-            sx={{ color: '#1F2937', background: '#fff', fontWeight: 'bold', border: 'none', fontSize: 16 }}
-          >
-            هل أنت متأكد من حذف هذه المادة؟
-            {deleteCounts && (
-              <Box sx={{ mt: 2, fontWeight: 500, fontSize: 14, lineHeight: 1.6 }}>
-                سيتم حذف هذه المادة وجميع المواد التابعة لها:
-                <Box sx={{ mt: 1, pl: 2, textAlign: 'left' }}>
-                  <Box sx={{ mt: 1, fontWeight: 700 }}>
-                    المجموع: {deleteCounts.total} مادة
-                  </Box>
-                </Box>
-              </Box>
-            )}
-          </Alert>
+          <Typography>
+            هل أنت متأكد من حذف المادة{' '}
+            <strong>{selectedNode?.name || selectedNode?.materialNumber || ''}</strong>؟
+          </Typography>
+
+          <Typography sx={{ mt: 1, color: '#FCA5A5', fontSize: 13 }}>
+            سيتم حذف هذه المادة وجميع المواد التابعة لها، ولا يمكن التراجع عن هذا الإجراء.
+          </Typography>
+
+          {deleteCounts ? (
+            <Typography sx={{ mt: 1, color: '#FCA5A5', fontSize: 13, fontWeight: 700 }}>
+              المجموع: {deleteCounts.total} مادة
+            </Typography>
+          ) : null}
         </DialogContent>
+
         <DialogActions>
           <Button onClick={() => setDialog({ open: false, mode: null })}>
             إلغاء
           </Button>
+
           <Button
             onClick={handleConfirmDelete}
             variant="contained"
@@ -1575,10 +1754,10 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
         onClose={() => setDialog({ open: false, mode: null })}
         maxWidth="sm"
         fullWidth
-      >
+        slotProps={craftDialogSlotProps}      >
         <DialogTitle>تعذر إتمام العملية</DialogTitle>
         <DialogContent>
-          <Alert severity="error">{errorMessage}</Alert>
+          <Alert severity="error" sx={craftErrorAlertSx}>{errorMessage}</Alert>
         </DialogContent>
         <DialogActions>
           <Button

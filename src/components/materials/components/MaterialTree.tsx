@@ -86,15 +86,22 @@ export const MaterialTree: React.FC<MaterialTreeProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 gap: 1,
-                minHeight: 40,
-                borderRadius: 1.5,
-                bgcolor: isSelected ? 'rgba(37,99,235,0.1)' : 'transparent',
+                minHeight: 42,
+                borderRadius: '10px',
+                color: 'rgba(255, 255, 255, 0.88)',
+                bgcolor: isSelected
+                  ? 'rgba(34, 211, 238, 0.13)'
+                  : 'transparent',
+                border: isSelected
+                  ? '1px solid rgba(34, 211, 238, 0.22)'
+                  : '1px solid transparent',
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
+                transition:
+                  'background 150ms ease, border-color 150ms ease, color 150ms ease',
                 '&:hover': {
                   bgcolor: isSelected
-                    ? 'rgba(37,99,235,0.15)'
-                    : 'rgba(37,99,235,0.05)',
+                    ? 'rgba(34, 211, 238, 0.18)'
+                    : 'rgba(56, 189, 248, 0.08)',
                 },
               }}
               onClick={() => onNodeSelect(node.id)}
@@ -111,6 +118,11 @@ export const MaterialTree: React.FC<MaterialTreeProps> = ({
                     minWidth: 24,
                     width: 24,
                     height: 24,
+                    color: isSelected ? '#67E8F9' : 'rgba(255, 255, 255, 0.72)',
+                    '&:hover': {
+                      color: '#67E8F9',
+                      background: 'rgba(34, 211, 238, 0.10)',
+                    },
                   }}
                 >
                   <motion.div
@@ -121,16 +133,27 @@ export const MaterialTree: React.FC<MaterialTreeProps> = ({
                   </motion.div>
                 </IconButton>
               )}
+
               {!hasChildren && <Box sx={{ width: 24 }} />}
 
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Box
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 0.75,
+                  color: isSelected ? '#67E8F9' : '#93C5FD',
+                }}
+              >
                 {getNodeIcon(node.type, isExpanded)}
               </Box>
 
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography
                   sx={{
-                    fontWeight: 600,
+                    color: isSelected
+                      ? 'rgba(255, 255, 255, 0.96)'
+                      : 'rgba(255, 255, 255, 0.88)',
+                    fontWeight: isSelected ? 700 : 600,
                     fontSize: 13,
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -139,10 +162,13 @@ export const MaterialTree: React.FC<MaterialTreeProps> = ({
                 >
                   {node.name}
                 </Typography>
+
                 <Typography
                   sx={{
                     fontSize: 11,
-                    color: 'text.secondary',
+                    color: isSelected
+                      ? 'rgba(103, 232, 249, 0.78)'
+                      : 'rgba(255, 255, 255, 0.56)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -162,9 +188,7 @@ export const MaterialTree: React.FC<MaterialTreeProps> = ({
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.2 }}
               >
-                <Box>
-                  {renderTreeNodes(node.children, depth + 1)}
-                </Box>
+                <Box>{renderTreeNodes(node.children, depth + 1)}</Box>
               </motion.div>
             )}
           </AnimatePresence>
@@ -180,9 +204,20 @@ export const MaterialTree: React.FC<MaterialTreeProps> = ({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
-        borderRadius: 2,
-        bgcolor: 'background.paper',
+        minHeight: 0,
+        borderRadius: '18px',
+        background: 'rgba(248, 250, 252, 0.10)',
+        backdropFilter: 'blur(36px) saturate(120%)',
+        WebkitBackdropFilter: 'blur(18px) saturate(120%)',
+        boxShadow: '0 18px 45px rgba(2, 6, 23, 0.16)',
+        color: 'rgba(255, 255, 255, 0.92)',
+        backgroundImage: 'none',
         p: 2,
+        overflow: 'hidden',
+
+        '& .MuiTypography-root': {
+          color: 'inherit',
+        },
       }}
     >
       <TextField
@@ -202,8 +237,38 @@ export const MaterialTree: React.FC<MaterialTreeProps> = ({
         }}
         sx={{
           mb: 2,
+
           '& .MuiOutlinedInput-root': {
-            borderRadius: 1.5,
+            borderRadius: '14px',
+            background: 'rgba(255, 255, 255, 0.07)',
+            color: 'rgba(255, 255, 255, 0.92)',
+          },
+
+          '& .MuiOutlinedInput-notchedOutline': {
+            borderColor: 'rgba(255, 255, 255, 0.18)',
+          },
+
+          '& .MuiOutlinedInput-root:hover .MuiOutlinedInput-notchedOutline': {
+            borderColor: 'rgba(103, 232, 249, 0.55)',
+          },
+
+          '& .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline': {
+            borderColor: '#67E8F9',
+            borderWidth: 1.5,
+          },
+
+          '& .MuiInputBase-input': {
+            color: 'rgba(255, 255, 255, 0.92)',
+            WebkitTextFillColor: 'rgba(255, 255, 255, 0.92)',
+          },
+
+          '& .MuiInputBase-input::placeholder': {
+            color: 'rgba(255, 255, 255, 0.58)',
+            opacity: 1,
+          },
+
+          '& .MuiInputAdornment-root': {
+            color: '#E2E8F0',
           },
         }}
       />
@@ -211,16 +276,29 @@ export const MaterialTree: React.FC<MaterialTreeProps> = ({
       <Box
         sx={{
           flex: 1,
+          minHeight: 0,
           overflow: 'auto',
           display: 'flex',
           flexDirection: 'column',
+          pr: 0.5,
         }}
       >
         {materials.length === 0 ? (
-          <EmptyState
-            title="لا توجد مواد"
-            description="ابدأ بإضافة مادة جديدة"
-          />
+          <Box
+            sx={{
+              flex: 1,
+              display: 'grid',
+              placeItems: 'center',
+              '& .MuiTypography-root': {
+                color: 'rgba(255, 255, 255, 0.72)',
+              },
+            }}
+          >
+            <EmptyState
+              title="لا توجد مواد"
+              description="ابدأ بإضافة مادة جديدة"
+            />
+          </Box>
         ) : (
           renderTreeNodes(materials)
         )}

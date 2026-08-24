@@ -336,6 +336,7 @@ declare global {
       listReturns: (filter?: Record<string, string>) => Promise<Array<{ id: string; returnNumber: string; date: string; supplierId: string; supplierName: string; warehouseId: string; warehouseName: string; purchaseInvoiceId: string; purchaseInvoiceNumber: string; netTotal: number; status: string }>>
       getReturnById: (returnId: string) => Promise<PurchaseReturnRecord>
       createReturn: (payload: { date: string; supplierId: string; warehouseId: string; purchaseInvoiceId: string; notes?: string; items: PurchaseReturnItemInput[] }) => Promise<PurchaseReturnRecord>
+      updateReturn: (returnId: string, payload: { date: string; supplierId: string; warehouseId: string; purchaseInvoiceId: string; notes?: string; items: PurchaseReturnItemInput[] }) => Promise<PurchaseReturnRecord>
       deleteReturn: (returnId: string) => Promise<Array<{ id: string; returnNumber: string; date: string; supplierId: string; supplierName: string; warehouseId: string; warehouseName: string; purchaseInvoiceId: string; purchaseInvoiceNumber: string; netTotal: number; status: string }>>
     }
     craftCustomersAPI?: {
@@ -360,6 +361,7 @@ declare global {
       listReturns: (filter?: Record<string, string>) => Promise<Array<{ id: string; returnNumber: string; date: string; customerId: string; customerName: string; warehouseId: string; warehouseName: string; salesInvoiceId: string; salesInvoiceNumber: string; netTotal: number; status: string }>>
       getReturnById: (returnId: string) => Promise<SalesReturnRecord>
       createReturn: (payload: { date: string; customerId: string; warehouseId: string; salesInvoiceId: string; notes?: string; items: SalesReturnItemInput[] }) => Promise<SalesReturnRecord>
+      updateReturn: (returnId: string, payload: { date: string; customerId: string; warehouseId: string; salesInvoiceId: string; notes?: string; items: SalesReturnItemInput[] }) => Promise<SalesReturnRecord>
       deleteReturn: (returnId: string) => Promise<Array<{ id: string; returnNumber: string; date: string; customerId: string; customerName: string; warehouseId: string; warehouseName: string; salesInvoiceId: string; salesInvoiceNumber: string; netTotal: number; status: string }>>
     }
   }
@@ -440,6 +442,9 @@ export const purchasesService = {
   async createReturn(payload: { date: string; supplierId: string; warehouseId: string; purchaseInvoiceId: string; notes?: string; items: PurchaseReturnItemInput[] }): Promise<PurchaseReturnRecord> {
     return getPurchasesApi().createReturn(payload)
   },
+  async updateReturn(returnId: string, payload: { date: string; supplierId: string; warehouseId: string; purchaseInvoiceId: string; notes?: string; items: PurchaseReturnItemInput[] }): Promise<PurchaseReturnRecord> {
+    return getPurchasesApi().updateReturn(returnId, payload)
+  },
   async deleteReturn(returnId: string): Promise<Array<{ id: string; returnNumber: string; date: string; supplierId: string; supplierName: string; warehouseId: string; warehouseName: string; purchaseInvoiceId: string; purchaseInvoiceNumber: string; netTotal: number; status: string }>> {
     return getPurchasesApi().deleteReturn(returnId)
   },
@@ -519,6 +524,9 @@ export const salesService = {
   },
   async createReturn(payload: { date: string; customerId: string; warehouseId: string; salesInvoiceId: string; notes?: string; items: SalesReturnItemInput[] }): Promise<SalesReturnRecord> {
     return getSalesApi().createReturn(payload)
+  },
+  async updateReturn(returnId: string, payload: { date: string; customerId: string; warehouseId: string; salesInvoiceId: string; notes?: string; items: SalesReturnItemInput[] }): Promise<SalesReturnRecord> {
+    return getSalesApi().updateReturn(returnId, payload)
   },
   async deleteReturn(returnId: string): Promise<Array<{ id: string; returnNumber: string; date: string; customerId: string; customerName: string; warehouseId: string; warehouseName: string; salesInvoiceId: string; salesInvoiceNumber: string; netTotal: number; status: string }>> {
     return getSalesApi().deleteReturn(returnId)
