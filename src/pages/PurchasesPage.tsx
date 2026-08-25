@@ -28,6 +28,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { SearchField } from '../components/ui/SearchField'
 import { inventoryService, type WarehouseRecord } from '../services/inventoryService'
 import { materialsService, type MaterialRecord } from '../services/materialsService'
+import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
 import {
   purchasesService,
   suppliersService,
@@ -38,6 +39,7 @@ import {
   type PurchaseInvoiceStatus,
   type SupplierRecord,
 } from '../services/purchasesService'
+import type { InvoicePrintData } from '../types/invoicePrint'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
@@ -569,6 +571,7 @@ export function PurchasesPage() {
   const [invoiceWarehouseId, setInvoiceWarehouseId] = useState('')
   const [discountType, setDiscountType] = useState<DiscountType>('none')
   const [discountValue, setDiscountValue] = useState<number | ''>(0)
+  const [invoiceExpenses, setInvoiceExpenses] = useState<number | ''>(0)
   const [invoiceNotes, setInvoiceNotes] = useState('')
   const [invoiceLines, setInvoiceLines] = useState<InvoiceLine[]>([createEmptyLine()])
 
@@ -579,6 +582,7 @@ export function PurchasesPage() {
     invoiceId: string
     invoiceNumber: string
   } | null>(null)
+  const [invoiceDeleteError, setInvoiceDeleteError] = useState('')
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
   const [paymentError, setPaymentError] = useState('')
   const [paymentForm, setPaymentForm] = useState({ date: '', amount: '', notes: '' })
@@ -587,6 +591,7 @@ export function PurchasesPage() {
     paymentDate: string
     paymentAmount: number
   } | null>(null)
+  const [paymentDeleteError, setPaymentDeleteError] = useState('')
 
   const invoiceDialogContentRef = useRef<HTMLDivElement | null>(null)
 
@@ -644,7 +649,8 @@ export function PurchasesPage() {
     return 0
   }, [discountType, discountValue, subtotal])
 
-  const netTotal = useMemo(() => subtotal - discountAmount, [subtotal, discountAmount])
+  const invoiceExpensesAmount = useMemo(() => (typeof invoiceExpenses === 'number' ? invoiceExpenses : 0), [invoiceExpenses])
+  const netTotal = useMemo(() => subtotal - discountAmount + invoiceExpensesAmount, [subtotal, discountAmount, invoiceExpensesAmount])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -692,6 +698,53 @@ export function PurchasesPage() {
     })
     setInvoices(list)
   }, [search, fromDate, toDate, supplierFilter, warehouseFilter])
+
+  const buildPurchaseExportData = useCallback((): InvoicePrintData | null => {
+    if (!selectedInvoice) {
+      return null
+    }
+
+    return {
+      documentType: 'purchase',
+      title: 'فاتورة مشتريات',
+      documentNumber: selectedInvoice.invoiceNumber,
+      date: formatDateDMY(selectedInvoice.date),
+      partyLabel: 'المورد',
+      partyName: selectedInvoice.supplierName,
+      warehouseName: selectedInvoice.warehouseName,
+      referenceLabel: 'رقم فاتورة المورد',
+      referenceValue: selectedInvoice.supplierInvoiceNumber || '—',
+      notes: selectedInvoice.notes,
+      items: selectedInvoice.items.map((item) => ({
+        id: item.id,
+        code: item.materialNumber,
+        name: item.materialName,
+        unit: item.unit,
+        quantity: item.quantity,
+        price: item.unitPrice,
+        total: item.lineTotal,
+      })),
+      subtotal: selectedInvoice.subtotal,
+      discount: selectedInvoice.discountAmount,
+      additionalFees: selectedInvoice.expenses ?? 0,
+      total: selectedInvoice.netTotal,
+    }
+  }, [selectedInvoice])
+
+  const handleExportPdf = useCallback(() => {
+    const exportData = buildPurchaseExportData()
+    if (!exportData) {
+      return
+    }
+
+    const latestSettings = loadCompanyPrintSettings()
+    navigate('/invoice-preview', {
+      state: {
+        invoiceData: exportData,
+        settings: latestSettings,
+      },
+    })
+  }, [buildPurchaseExportData, navigate])
 
   const materialById = useMemo(() => {
     return new Map(materialOptions.map((item) => [item.id, item]))
@@ -750,6 +803,7 @@ export function PurchasesPage() {
       warehouseId: invoiceWarehouseId,
       discountType,
       discountValue: typeof discountValue === 'number' ? discountValue : 0,
+      expenses: typeof invoiceExpenses === 'number' ? invoiceExpenses : 0,
       notes: invoiceNotes,
       items: invoiceLines.map((line) => ({
         materialId: line.materialId,
@@ -758,7 +812,7 @@ export function PurchasesPage() {
         notes: line.notes,
       })),
     }
-  }, [invoiceNumber, supplierInvoiceNumber, invoiceDate, invoiceSupplierId, invoiceWarehouseId, discountType, discountValue, invoiceNotes, invoiceLines])
+  }, [invoiceNumber, supplierInvoiceNumber, invoiceDate, invoiceSupplierId, invoiceWarehouseId, discountType, discountValue, invoiceNotes, invoiceLines, invoiceExpenses])
 
   const resetInvoiceForm = useCallback(async () => {
     const draftData = await purchasesService.getNextDraftData()
@@ -769,6 +823,7 @@ export function PurchasesPage() {
     setInvoiceWarehouseId('')
     setDiscountType('none')
     setDiscountValue(0)
+    setInvoiceExpenses(0)
     setInvoiceNotes('')
     setInvoiceLines([createEmptyLine()])
     setEditingInvoiceId(null)
@@ -802,6 +857,7 @@ export function PurchasesPage() {
       setInvoiceWarehouseId(invoice.warehouseId)
       setDiscountType(invoice.discountType)
       setDiscountValue(invoice.discountValue)
+      setInvoiceExpenses(invoice.expenses ?? 0)
       setInvoiceNotes(invoice.notes ?? '')
       setInvoiceLines(
         invoice.items.map((item) => ({
@@ -885,25 +941,43 @@ export function PurchasesPage() {
     }
   }, [validateInvoiceForm, editingInvoiceId, buildInvoicePayload, loadData, scrollInvoiceDialogToTop])
 
-  const deleteDraft = useCallback(async (invoiceId: string) => {
+  const deleteDraft = useCallback(async (invoiceId: string): Promise<boolean> => {
     try {
+      setInvoiceDeleteError('')
       await purchasesService.deleteDraft(invoiceId)
       await reloadInvoices()
+      return true
     } catch (error) {
       console.error('DELETE PURCHASE DRAFT FAILED', error)
+      setInvoiceDeleteError(
+        getUserFriendlyErrorMessage(
+          error,
+          'تعذر حذف مسودة فاتورة الشراء. قد تكون الفاتورة مرتبطة ببيانات أخرى أو لم تعد قابلة للحذف.',
+        ),
+      )
+      return false
     }
   }, [reloadInvoices])
 
-  const deleteApprovedInvoice = useCallback(async (invoiceId: string) => {
+  const deleteApprovedInvoice = useCallback(async (invoiceId: string): Promise<boolean> => {
     try {
+      setInvoiceDeleteError('')
       await purchasesService.deleteApproved(invoiceId)
       await reloadInvoices()
       if (detailsOpen && selectedInvoice?.id === invoiceId) {
         const refreshed = await purchasesService.getInvoiceById(invoiceId)
         setSelectedInvoice(refreshed)
       }
+      return true
     } catch (error) {
       console.error('DELETE APPROVED PURCHASE INVOICE FAILED', error)
+      setInvoiceDeleteError(
+        getUserFriendlyErrorMessage(
+          error,
+          'تعذر حذف فاتورة الشراء. قد تكون مرتبطة بمرتجع أو دفعات أو حركات أخرى تمنع حذفها.',
+        ),
+      )
+      return false
     }
   }, [reloadInvoices, detailsOpen, selectedInvoice])
 
@@ -956,8 +1030,9 @@ export function PurchasesPage() {
     }
   }, [paymentForm, reloadInvoices, selectedInvoice])
 
-  const deletePayment = useCallback(async (paymentId: string) => {
+  const deletePayment = useCallback(async (paymentId: string): Promise<boolean> => {
     try {
+      setPaymentDeleteError('')
       await purchasesService.deletePayment(paymentId)
       if (selectedInvoice) {
         const refreshed = await purchasesService.getInvoiceById(selectedInvoice.id)
@@ -965,8 +1040,16 @@ export function PurchasesPage() {
       }
       await reloadInvoices()
       setPaymentDeleteConfirm(null)
+      return true
     } catch (error) {
       console.error('DELETE PURCHASE PAYMENT FAILED', error)
+      setPaymentDeleteError(
+        getUserFriendlyErrorMessage(
+          error,
+          'تعذر حذف الدفعة. قد تكون الدفعة أو الفاتورة مرتبطة بعملية أخرى تمنع الحذف.',
+        ),
+      )
+      return false
     }
   }, [reloadInvoices, selectedInvoice])
 
@@ -1154,9 +1237,8 @@ export function PurchasesPage() {
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المخزن</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
+                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المصاريف الإضافية</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي</TableCell>
-                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المدفوع</TableCell>
-                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المتبقي</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>حالة الدفع</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجراءات</TableCell>
                 </TableRow>
@@ -1171,9 +1253,8 @@ export function PurchasesPage() {
                     <TableCell sx={{ textAlign: 'center' }}>{row.warehouseName}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(row.subtotal)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(row.discountAmount)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{currency(row.expenses ?? 0)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(row.netTotal)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>{currency(row.paidAmount)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>{currency(row.remainingAmount)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{paymentStatusLabel[row.paymentStatus]}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>
                       <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
@@ -1191,7 +1272,10 @@ export function PurchasesPage() {
                           <IconButton
                             size="small"
                             color="error"
-                            onClick={() => setConfirmAction({ type: 'deleteApprovedInvoice', invoiceId: row.id, invoiceNumber: row.invoiceNumber })}
+                            onClick={() => {
+                              setInvoiceDeleteError('')
+                              setConfirmAction({ type: 'deleteApprovedInvoice', invoiceId: row.id, invoiceNumber: row.invoiceNumber })
+                            }}
                           >
                             <FiTrash2 />
                           </IconButton>
@@ -1223,7 +1307,10 @@ export function PurchasesPage() {
 
       <Dialog
         open={Boolean(confirmAction)}
-        onClose={() => setConfirmAction(null)}
+        onClose={() => {
+          setConfirmAction(null)
+          setInvoiceDeleteError('')
+        }}
         maxWidth="sm"
         fullWidth
         slotProps={craftDialogSlotProps}
@@ -1231,7 +1318,8 @@ export function PurchasesPage() {
         <DialogTitle>
           {confirmAction?.type === 'deleteDraft' ? 'تأكيد حذف المسودة' : 'تأكيد حذف الفاتورة'}
         </DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
+        <DialogContent sx={{ pt: 2, display: 'grid', gap: 1.5 }}>
+          {invoiceDeleteError ? <Alert severity="error" sx={craftErrorAlertSx}>{invoiceDeleteError}</Alert> : null}
           <Typography>
             {confirmAction?.type === 'deleteDraft'
               ? `هل أنت متأكد من حذف فاتورة الشراء رقم ${confirmAction.invoiceNumber}؟ لا يمكن التراجع عن الحذف.`
@@ -1239,19 +1327,21 @@ export function PurchasesPage() {
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmAction(null)}>إلغاء</Button>
+          <Button onClick={() => { setConfirmAction(null); setInvoiceDeleteError('') }}>إلغاء</Button>
           <Button
             variant="contained"
             color="error"
             onClick={async () => {
               if (!confirmAction) return
 
-              if (confirmAction.type === 'deleteDraft') {
-                await deleteDraft(confirmAction.invoiceId)
-              } else {
-                await deleteApprovedInvoice(confirmAction.invoiceId)
+              const deleted = confirmAction.type === 'deleteDraft'
+                ? await deleteDraft(confirmAction.invoiceId)
+                : await deleteApprovedInvoice(confirmAction.invoiceId)
+
+              if (deleted) {
+                setConfirmAction(null)
+                setInvoiceDeleteError('')
               }
-              setConfirmAction(null)
             }}
           >
             {confirmAction?.type === 'deleteDraft' ? 'حذف' : 'حذف نهائي'}
@@ -1361,7 +1451,7 @@ export function PurchasesPage() {
                 await loadData()
               } catch (error) {
                 console.error('DELETE SUPPLIER FAILED', error)
-                setSupplierDeleteError(getUserFriendlyErrorMessage(error, 'تعذر حذف المورد. يرجى المحاولة مرة أخرى.'))
+                setSupplierDeleteError(getUserFriendlyErrorMessage(error, 'تعذر حذف المورد. قد يكون مرتبطاً بفواتير أو حركات أخرى، لذلك لا يمكن حذفه حالياً.'))
               }
             }}
           >
@@ -1567,12 +1657,23 @@ export function PurchasesPage() {
                   },
                 }}
               />
+              <TextField
+                label="مصاريف إضافية"
+                type="number"
+                value={invoiceExpenses}
+                onChange={(event) => {
+                  const raw = event.target.value
+                  setInvoiceExpenses(raw === '' ? '' : Number(raw))
+                }}
+                slotProps={{ htmlInput: { min: 0, step: 1 } }}
+              />
             </Box>
             <Table sx={{ mt: 2, width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
+                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المصاريف الإضافية</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي النهائي</TableCell>
                 </TableRow>
               </TableHead>
@@ -1580,6 +1681,7 @@ export function PurchasesPage() {
                 <TableRow sx={{ textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center' }}>{currency(subtotal)}</TableCell>
                   <TableCell sx={{ textAlign: 'center' }}>{currency(discountAmount)}</TableCell>
+                  <TableCell sx={{ textAlign: 'center' }}>{currency(invoiceExpensesAmount)}</TableCell>
                   <TableCell sx={{ textAlign: 'center' }}>{currency(netTotal)}</TableCell>
                 </TableRow>
               </TableBody>
@@ -1649,6 +1751,7 @@ export function PurchasesPage() {
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المصاريف الإضافية</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي النهائي</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المدفوع</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المتبقي</TableCell>
@@ -1658,6 +1761,7 @@ export function PurchasesPage() {
                   <TableRow sx={{ textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.subtotal)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.discountAmount)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.expenses ?? 0)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.netTotal)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.paidAmount)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.remainingAmount)}</TableCell>
@@ -1668,63 +1772,64 @@ export function PurchasesPage() {
               <Box sx={{ display: 'grid', gap: 1 }}>
                 <Box>حالة الدفع: <strong>{paymentStatusLabel[selectedInvoice.paymentStatus]}</strong></Box>
               </Box>
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
+                <Button variant="contained" onClick={() => { void handleExportPdf() }}>تصدير PDF</Button>
                 {selectedInvoice.status === 'completed' ? (
-                  <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={() => {
+                      setDetailsOpen(false)
+                      navigate(`/purchase-returns?invoiceId=${selectedInvoice.id}`)
+                    }}
+                  >
+                    إنشاء مرتجع شراء
+                  </Button>
+                ) : null}
+                <Tooltip
+                  title={
+                    selectedInvoice.paymentStatus === 'paid' || selectedInvoice.remainingAmount <= 0
+                      ? 'الفاتورة مدفوعة بالكامل'
+                      : ''
+                  }
+                  arrow
+                >
+                  <Box
+                    component="span"
+                    sx={{
+                      display: 'inline-flex',
+                      cursor:
+                        selectedInvoice.paymentStatus === 'paid' || selectedInvoice.remainingAmount <= 0
+                          ? 'not-allowed'
+                          : 'pointer',
+                    }}
+                  >
                     <Button
                       variant="contained"
-                      color="primary"
-                      onClick={() => {
-                        setDetailsOpen(false)
-                        navigate(`/purchase-returns?invoiceId=${selectedInvoice.id}`)
+                      startIcon={<FiCheckCircle />}
+                      onClick={openPaymentDialog}
+                      disabled={
+                        selectedInvoice.paymentStatus === 'paid' ||
+                        selectedInvoice.remainingAmount <= 0
+                      }
+                      sx={{
+                        background: '#66bb6a',
+                        '&:hover': {
+                          background: '#66bb6a',
+                        },
+                        '&.Mui-disabled': {
+                          backgroundColor: 'success.main',
+                          color: 'common.white',
+                          opacity: 0.8,
+                          boxShadow: 'none',
+                        },
                       }}
                     >
-                      إنشاء مرتجع شراء
+                      تسجيل دفعة
                     </Button>
-                    <Tooltip
-                      title={
-                        selectedInvoice.paymentStatus === 'paid' || selectedInvoice.remainingAmount <= 0
-                          ? 'الفاتورة مدفوعة بالكامل'
-                          : ''
-                      }
-                      arrow
-                    >
-                      <Box
-                        component="span"
-                        sx={{
-                          display: 'inline-flex',
-                          cursor:
-                            selectedInvoice.paymentStatus === 'paid' || selectedInvoice.remainingAmount <= 0
-                              ? 'not-allowed'
-                              : 'pointer',
-                        }}
-                      >
-                        <Button
-                          variant="contained"
-                          startIcon={<FiCheckCircle />}
-                          onClick={openPaymentDialog}
-                          disabled={
-                            selectedInvoice.paymentStatus === 'paid' ||
-                            selectedInvoice.remainingAmount <= 0
-                          }
-                          sx={{
-                            background: '#66bb6a',
-                            '&:hover': {
-                              background: '#66bb6a',
-                            },
-                            '&.Mui-disabled': {
-                              backgroundColor: 'success.main',
-                              color: 'common.white',
-                              opacity: 0.8,
-                              boxShadow: 'none',
-                            },
-                          }}
-                        >
-                          تسجيل دفعة
-                        </Button>
-                      </Box>
-                    </Tooltip>
                   </Box>
-                ) : null}
+                </Tooltip>
+              </Box>
               {paymentRows.length > 0 ? (
                 <Box>
                   <Typography sx={{ fontWeight: 700, mb: 1 }}>سجل المدفوعات</Typography>
@@ -1747,11 +1852,14 @@ export function PurchasesPage() {
                             <IconButton
                               size="small"
                               color="error"
-                              onClick={() => setPaymentDeleteConfirm({
-                                paymentId: payment.id,
-                                paymentDate: payment.date,
-                                paymentAmount: payment.amount,
-                              })}
+                              onClick={() => {
+                                setPaymentDeleteError('')
+                                setPaymentDeleteConfirm({
+                                  paymentId: payment.id,
+                                  paymentDate: payment.date,
+                                  paymentAmount: payment.amount,
+                                })
+                              }}
                             >
                               <FiTrash2 />
                             </IconButton>
@@ -1811,22 +1919,31 @@ export function PurchasesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(paymentDeleteConfirm)} onClose={() => setPaymentDeleteConfirm(null)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
+      <Dialog
+        open={Boolean(paymentDeleteConfirm)}
+        onClose={() => {
+          setPaymentDeleteConfirm(null)
+          setPaymentDeleteError('')
+        }}
+        maxWidth="sm"
+        fullWidth
+        slotProps={craftDialogSlotProps}
+      >
         <DialogTitle>تأكيد حذف الدفعة</DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
+        <DialogContent sx={{ pt: 2, display: 'grid', gap: 1.5 }}>
+          {paymentDeleteError ? <Alert severity="error" sx={craftErrorAlertSx}>{paymentDeleteError}</Alert> : null}
           <Typography>
             هل أنت متأكد من حذف دفعة بتاريخ {paymentDeleteConfirm ? formatDateDMY(paymentDeleteConfirm.paymentDate) : ''} بقيمة {paymentDeleteConfirm ? currency(paymentDeleteConfirm.paymentAmount) : ''}؟
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPaymentDeleteConfirm(null)}>إلغاء</Button>
+          <Button onClick={() => { setPaymentDeleteConfirm(null); setPaymentDeleteError('') }}>إلغاء</Button>
           <Button
             variant="contained"
             color="error"
-            onClick={() => {
-              if (paymentDeleteConfirm) {
-                void deletePayment(paymentDeleteConfirm.paymentId)
-              }
+            onClick={async () => {
+              if (!paymentDeleteConfirm) return
+              await deletePayment(paymentDeleteConfirm.paymentId)
             }}
           >
             حذف

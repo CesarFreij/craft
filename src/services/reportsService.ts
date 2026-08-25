@@ -7,11 +7,19 @@ export type ReportType =
   | 'production'
   | 'production_cost'
 
+export type ReportPeriod =
+  | 'daily'
+  | 'weekly'
+  | 'monthly'
+  | 'yearly'
+  | 'custom'
+
 export interface ReportFilters {
   warehouseId?: string
   materialId?: string
   fromDate?: string
   toDate?: string
+  period?: ReportPeriod
   page?: number
   pageSize?: number
 }
@@ -23,9 +31,14 @@ export interface ReportMetric {
   suffix?: string
 }
 
+export interface ReportChartSeries {
+  key: string
+  label: string
+}
+
 export interface ReportChartPoint {
   label: string
-  value: number
+  values: Record<string, number>
 }
 
 export interface ReportPagination {
@@ -39,35 +52,53 @@ export interface ReportApiResponse {
   reportType: ReportType
   summary: ReportMetric[]
   rows: Array<Record<string, string | number | boolean | null>>
+  chartSeries: ReportChartSeries[]
   chartData: ReportChartPoint[]
   pagination: ReportPagination
   generatedAt: string
 }
 
-export type ReportExportRow = Record<string, string | number | boolean | null>
+export type ReportExportRow =
+  Record<string, string | number | boolean | null>
 
 declare global {
   interface Window {
     craftReportsAPI?: {
-      getReport: (reportType: ReportType, filters?: ReportFilters) => Promise<ReportApiResponse>
-      getReportExportRows: (reportType: ReportType, filters?: ReportFilters) => Promise<ReportExportRow[]>
+      getReport(
+        reportType: ReportType,
+        filters?: ReportFilters
+      ): Promise<ReportApiResponse>
+
+      getReportExportRows(
+        reportType: ReportType,
+        filters?: ReportFilters
+      ): Promise<ReportExportRow[]>
     }
   }
 }
 
 function getReportsAPI() {
   if (!window.craftReportsAPI) {
-    throw new Error('craftReportsAPI is not available. Check preload or IPC setup.')
+    throw new Error(
+      'craftReportsAPI is not available. Check preload or IPC setup.'
+    )
   }
 
   return window.craftReportsAPI
 }
 
 export const reportsService = {
-  async getReport(reportType: ReportType, filters: ReportFilters = {}): Promise<ReportApiResponse> {
+  getReport(
+    reportType: ReportType,
+    filters: ReportFilters = {}
+  ) {
     return getReportsAPI().getReport(reportType, filters)
   },
-  async getReportExportRows(reportType: ReportType, filters: ReportFilters = {}): Promise<ReportExportRow[]> {
+
+  getReportExportRows(
+    reportType: ReportType,
+    filters: ReportFilters = {}
+  ) {
     return getReportsAPI().getReportExportRows(reportType, filters)
   },
 }

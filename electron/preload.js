@@ -106,3 +106,19 @@ contextBridge.exposeInMainWorld('craftReportsAPI', {
   getReport: (reportType, filters) => ipcRenderer.invoke('reports:getReport', { reportType, filters }),
   getReportExportRows: (reportType, filters) => ipcRenderer.invoke('reports:getReportExportRows', { reportType, filters }),
 })
+
+contextBridge.exposeInMainWorld('craftExportAPI', {
+  exportInvoicePdf: ({ invoiceData, settings, fileName }) => ipcRenderer.invoke('invoice:exportPdf', { invoiceData, settings, fileName }),
+})
+
+contextBridge.exposeInMainWorld('invoicePrintAPI', {
+  onInvoiceData: (callback) => {
+    ipcRenderer.on('invoice-preview:data', (_event, payload) => callback(payload))
+  },
+  offInvoiceData: () => {
+    ipcRenderer.removeAllListeners('invoice-preview:data')
+  },
+  notifyReady: () => {
+    ipcRenderer.send('invoice-preview:ready')
+  },
+})

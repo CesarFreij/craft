@@ -8,9 +8,162 @@ function readNumber(db, sql, params = []) {
   return Number(value ?? 0)
 }
 
+const REPORT_PERIODS = new Set(['daily', 'weekly', 'monthly', 'yearly', 'custom'])
+
+function formatLocalDate(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function parseLocalDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''))
+  if (!match) return null
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12, 0, 0, 0)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function resolvePeriodDateRange(period, fromDate, toDate) {
+  if (period === 'custom') {
+    return { fromDate, toDate }
+  }
+
+  const today = new Date()
+  today.setHours(12, 0, 0, 0)
+
+  if (period === 'daily') {
+    const value = formatLocalDate(today)
+    return { fromDate: value, toDate: value }
+  }
+
+  if (period === 'weekly') {
+    const monday = new Date(today)
+    const day = monday.getDay()
+    const diffToMonday = day === 0 ? -6 : 1 - day
+    monday.setDate(monday.getDate() + diffToMonday)
+
+    const sunday = new Date(monday)
+    sunday.setDate(sunday.getDate() + 6)
+
+    return {
+      fromDate: formatLocalDate(monday),
+      toDate: formatLocalDate(sunday),
+    }
+  }
+
+  if (period === 'monthly') {
+    return {
+      fromDate: formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 1, 12)),
+      toDate: formatLocalDate(new Date(today.getFullYear(), today.getMonth() + 1, 0, 12)),
+    }
+  }
+
+  if (period === 'yearly') {
+    return {
+      fromDate: `${today.getFullYear()}-01-01`,
+      toDate: `${today.getFullYear()}-12-31`,
+    }
+  }
+
+  return { fromDate, toDate }
+}
+
+function resolveChartGranularity(period, fromDate, toDate) {
+  if (period === 'yearly') return 'month'
+  if (period === 'daily' || period === 'weekly' || period === 'monthly') return 'day'
+
+  if (period === 'custom') {
+    const start = parseLocalDate(fromDate)
+    const end = parseLocalDate(toDate)
+    if (!start || !end) return 'month'
+
+    const days = Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000))
+    if (days <= 62) return 'day'
+    if (days <= 730) return 'month'
+    return 'year'
+  }
+
+  return 'month'
+}
+
+function getDateBucketExpression(dateField, granularity) {
+  if (granularity === 'day') return `substr(${dateField}, 1, 10)`
+  if (granularity === 'year') return `substr(${dateField}, 1, 4)`
+  return `substr(${dateField}, 1, 7)`
+}
+
+function buildBucketLabels(fromDate, toDate, granularity) {
+  const start = parseLocalDate(fromDate)
+  const end = parseLocalDate(toDate)
+  if (!start || !end || start > end) return []
+
+  const labels = []
+  const cursor = new Date(start)
+
+  if (granularity === 'year') {
+    cursor.setMonth(0, 1)
+    while (cursor <= end) {
+      labels.push(String(cursor.getFullYear()))
+      cursor.setFullYear(cursor.getFullYear() + 1)
+    }
+    return labels
+  }
+
+  if (granularity === 'month') {
+    cursor.setDate(1)
+    while (cursor <= end) {
+      labels.push(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`)
+      cursor.setMonth(cursor.getMonth() + 1)
+    }
+    return labels
+  }
+
+  while (cursor <= end) {
+    labels.push(formatLocalDate(cursor))
+    cursor.setDate(cursor.getDate() + 1)
+  }
+
+  return labels
+}
+
+function buildChartData(chartRows, series, fromDate, toDate, granularity) {
+  const mapped = new Map()
+
+  for (const row of chartRows) {
+    const label = String(row[0] ?? '')
+    const values = {}
+    series.forEach((item, index) => {
+      values[item.key] = normalizeNumber(row[index + 1])
+    })
+    mapped.set(label, { label, values })
+  }
+
+  const buckets = buildBucketLabels(fromDate, toDate, granularity)
+  if (buckets.length === 0) {
+    return Array.from(mapped.values())
+  }
+
+  return buckets.map((label) => {
+    const existing = mapped.get(label)
+    if (existing) return existing
+
+    const values = {}
+    series.forEach((item) => {
+      values[item.key] = 0
+    })
+    return { label, values }
+  })
+}
+
 function getBaseReportPayload(reportType, filters = {}) {
   const page = Math.max(0, Number(filters.page ?? 0))
   const pageSize = Math.min(1000, Math.max(1, Number(filters.pageSize ?? 10)))
+  const requestedPeriod = String(filters.period ?? 'weekly').trim()
+  const period = REPORT_PERIODS.has(requestedPeriod) ? requestedPeriod : 'weekly'
+  const requestedFromDate = String(filters.fromDate ?? '').trim() || null
+  const requestedToDate = String(filters.toDate ?? '').trim() || null
+  const range = resolvePeriodDateRange(period, requestedFromDate, requestedToDate)
 
   return {
     reportType,
@@ -18,8 +171,10 @@ function getBaseReportPayload(reportType, filters = {}) {
     pageSize,
     warehouseId: String(filters.warehouseId ?? '').trim() || null,
     materialId: String(filters.materialId ?? '').trim() || null,
-    fromDate: String(filters.fromDate ?? '').trim() || null,
-    toDate: String(filters.toDate ?? '').trim() || null,
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    period,
+    chartGranularity: resolveChartGranularity(period, range.fromDate, range.toDate),
   }
 }
 
@@ -68,7 +223,7 @@ function buildWarehouseChartData(db, rowsQuery, params) {
 
 export function getReportData(db, reportType, filters = {}) {
   const options = getBaseReportPayload(reportType, filters)
-  const { warehouseId, materialId, fromDate, toDate, page, pageSize } = options
+  const { warehouseId, materialId, fromDate, toDate, page, pageSize, chartGranularity } = options
 
   if (reportType === 'stock_balances') {
     const clauses = [...buildMaterialFilterClause()]
@@ -112,7 +267,7 @@ export function getReportData(db, reportType, filters = {}) {
       reportType,
       summary: [
         { label: 'إجمالي الكمية', value: totalQty },
-        { label: 'إجمالي القيمة', value: totalValue, prefix: 'ر.س ' },
+        { label: 'إجمالي القيمة', value: totalValue },
         { label: 'عدد المواد', value: materialCount },
         { label: 'عدد المخازن', value: warehouseCount },
       ],
@@ -127,7 +282,11 @@ export function getReportData(db, reportType, filters = {}) {
         stockValue: normalizeNumber(row[7]),
         unit: row[8] ?? '',
       })),
-      chartData: chartDataRows.map((row) => ({ label: String(row[0] ?? ''), value: normalizeNumber(row[1]) })),
+      chartSeries: [{ key: 'stockValue', label: 'قيمة المخزون' }],
+      chartData: chartDataRows.map((row) => ({
+        label: String(row[0] ?? ''),
+        values: { stockValue: normalizeNumber(row[1]) },
+      })),
       pagination: buildPagination(totalRows, page, pageSize),
       generatedAt: new Date().toISOString(),
     }
@@ -175,7 +334,7 @@ export function getReportData(db, reportType, filters = {}) {
       reportType,
       summary: [
         { label: 'إجمالي الكمية', value: totalQty },
-        { label: 'إجمالي القيمة', value: totalValue, prefix: 'ر.س ' },
+        { label: 'إجمالي القيمة', value: totalValue },
         { label: 'عدد المواد', value: materialCount },
         { label: 'عدد المخازن', value: warehouseCount },
       ],
@@ -188,7 +347,11 @@ export function getReportData(db, reportType, filters = {}) {
         stockValue: normalizeNumber(row[5]),
         unit: row[6] ?? '',
       })),
-      chartData: chartDataRows.map((row) => ({ label: String(row[0] ?? ''), value: normalizeNumber(row[1]) })),
+      chartSeries: [{ key: 'stockValue', label: 'قيمة المخزون' }],
+      chartData: chartDataRows.map((row) => ({
+        label: String(row[0] ?? ''),
+        values: { stockValue: normalizeNumber(row[1]) },
+      })),
       pagination: buildPagination(totalRows, page, pageSize),
       generatedAt: new Date().toISOString(),
     }
@@ -205,7 +368,7 @@ export function getReportData(db, reportType, filters = {}) {
     const total = readNumber(db, `SELECT COUNT(*) FROM purchase_invoices pi ${where}`, params)
     const rows = db.exec(
       `SELECT pi.id, pi.invoice_number, pi.date, s.name AS supplier_name, w.name AS warehouse_name,
-              pi.net_total,
+              pi.net_total, COALESCE(pi.expenses, 0) AS expenses,
               COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
               COALESCE(pi.net_total - (SELECT COALESCE(SUM(pp.amount), 0) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS remaining_amount,
               pi.status
@@ -218,24 +381,42 @@ export function getReportData(db, reportType, filters = {}) {
       [...params, pageSize, page * pageSize]
     )[0]?.values ?? []
 
+    const chartSeries = [
+      { key: 'total', label: 'إجمالي المشتريات' },
+      { key: 'expenses', label: 'المصاريف الإضافية' },
+      { key: 'paid', label: 'المدفوع' },
+      { key: 'remaining', label: 'المتبقي' },
+    ]
+    const bucketExpression = getDateBucketExpression('pi.date', chartGranularity)
     const chartDataRows = db.exec(
-      `SELECT substr(pi.date, 1, 7) AS label, SUM(pi.net_total) AS value
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(pi.net_total, 0)) AS total_value,
+              SUM(COALESCE(pi.expenses, 0)) AS expenses_value,
+              SUM(COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)) AS paid_value,
+              SUM(
+                CASE
+                  WHEN COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) > 0
+                    THEN COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)
+                  ELSE 0
+                END
+              ) AS remaining_value
        FROM purchase_invoices pi
        ${where}
-       GROUP BY substr(pi.date, 1, 7)
+       GROUP BY ${bucketExpression}
        ORDER BY label ASC`,
       params
     )[0]?.values ?? []
 
     const summaryNet = readNumber(db, `SELECT COALESCE(SUM(pi.net_total), 0) FROM purchase_invoices pi ${where}`, params)
+    const summaryExpenses = readNumber(db, `SELECT COALESCE(SUM(pi.expenses), 0) FROM purchase_invoices pi ${where}`, params)
     const summaryPaid = readNumber(db, `SELECT COALESCE(SUM(COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)), 0) FROM purchase_invoices pi ${where}`, params)
-
     return {
       reportType,
       summary: [
         { label: 'عدد الفواتير', value: total },
-        { label: 'إجمالي المشتريات', value: summaryNet, prefix: 'ر.س ' },
-        { label: 'المبالغ المدفوعة', value: summaryPaid, prefix: 'ر.س ' },
+        { label: 'إجمالي المشتريات', value: summaryNet },
+        { label: 'المصاريف الإضافية', value: summaryExpenses },
+        { label: 'المبالغ المدفوعة', value: summaryPaid },
       ],
       rows: rows.map((row) => ({
         id: row[0] ?? '',
@@ -244,11 +425,13 @@ export function getReportData(db, reportType, filters = {}) {
         supplierName: row[3] ?? '',
         warehouseName: row[4] ?? '',
         netTotal: normalizeNumber(row[5]),
-        paidAmount: normalizeNumber(row[6]),
-        remainingAmount: normalizeNumber(row[7]),
-        status: row[8] ?? '',
+        expenses: normalizeNumber(row[6]),
+        paidAmount: normalizeNumber(row[7]),
+        remainingAmount: normalizeNumber(row[8]),
+        status: row[9] ?? '',
       })),
-      chartData: chartDataRows.map((row) => ({ label: String(row[0] ?? ''), value: normalizeNumber(row[1]) })),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
       pagination: buildPagination(total, page, pageSize),
       generatedAt: new Date().toISOString(),
     }
@@ -265,7 +448,7 @@ export function getReportData(db, reportType, filters = {}) {
     const total = readNumber(db, `SELECT COUNT(*) FROM sales_invoices si ${where}`, params)
     const rows = db.exec(
       `SELECT si.id, si.invoice_number, si.date, c.name AS customer_name, w.name AS warehouse_name,
-              si.net_total,
+              si.net_total, COALESCE(si.customer_additional_fees, 0) AS customer_additional_fees,
               COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0) AS return_total,
               COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) AS paid_amount,
               si.status
@@ -278,28 +461,46 @@ export function getReportData(db, reportType, filters = {}) {
       [...params, pageSize, page * pageSize]
     )[0]?.values ?? []
 
+    const chartSeries = [
+      { key: 'total', label: 'إجمالي المبيعات' },
+      { key: 'fees', label: 'رسوم إضافية على العميل' },
+      { key: 'paid', label: 'المستلم' },
+      { key: 'remaining', label: 'المتبقي' },
+    ]
+    const bucketExpression = getDateBucketExpression('si.date', chartGranularity)
     const chartDataRows = db.exec(
-      `SELECT substr(si.date, 1, 7) AS label, SUM(si.net_total) AS value
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(si.net_total, 0)) AS total_value,
+              SUM(COALESCE(si.customer_additional_fees, 0)) AS fees_value,
+              SUM(COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)) AS paid_value,
+              SUM(
+                CASE
+                  WHEN COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) > 0
+                    THEN COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)
+                  ELSE 0
+                END
+              ) AS remaining_value
        FROM sales_invoices si
        ${where}
-       GROUP BY substr(si.date, 1, 7)
+       GROUP BY ${bucketExpression}
        ORDER BY label ASC`,
       params
     )[0]?.values ?? []
 
     const summaryNet = readNumber(db, `SELECT COALESCE(SUM(si.net_total), 0) FROM sales_invoices si ${where}`, params)
+    const summaryFees = readNumber(db, `SELECT COALESCE(SUM(si.customer_additional_fees), 0) FROM sales_invoices si ${where}`, params)
     const summaryPaid = readNumber(db, `SELECT COALESCE(SUM(COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)), 0) FROM sales_invoices si ${where}`, params)
-
     return {
       reportType,
       summary: [
         { label: 'عدد الفواتير', value: total },
-        { label: 'إجمالي المبيعات', value: summaryNet, prefix: 'ر.س ' },
-        { label: 'المبالغ المستلمة', value: summaryPaid, prefix: 'ر.س ' },
+        { label: 'إجمالي المبيعات', value: summaryNet },
+        { label: 'رسوم إضافية على العميل', value: summaryFees },
+        { label: 'المبالغ المستلمة', value: summaryPaid },
       ],
       rows: rows.map((row) => {
         const netTotal = normalizeNumber(row[5])
-        const paidAmount = normalizeNumber(row[7])
+        const paidAmount = normalizeNumber(row[8])
 
         return {
           id: row[0] ?? '',
@@ -308,12 +509,14 @@ export function getReportData(db, reportType, filters = {}) {
           customerName: row[3] ?? '',
           warehouseName: row[4] ?? '',
           netTotal,
+          customerAdditionalFees: normalizeNumber(row[6]),
           paidAmount,
           remainingAmount: Math.max(netTotal - paidAmount, 0),
-          status: row[8] ?? '',
+          status: row[9] ?? '',
         }
       }),
-      chartData: chartDataRows.map((row) => ({ label: String(row[0] ?? ''), value: normalizeNumber(row[1]) })),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
       pagination: buildPagination(total, page, pageSize),
       generatedAt: new Date().toISOString(),
     }
@@ -343,13 +546,25 @@ export function getReportData(db, reportType, filters = {}) {
 
     const incomingValue = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sm.quantity_in, 0) * COALESCE(sm.cost, 0)), 0) FROM stock_movements sm LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference ${where}`, params)
     const outgoingValue = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sm.quantity_out, 0) * COALESCE(sm.cost, 0)), 0) FROM stock_movements sm LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference ${where}`, params)
+
+    const chartSeries = [
+      { key: 'incoming', label: 'قيمة الوارد' },
+      { key: 'outgoing', label: 'قيمة الصادر' },
+      { key: 'difference', label: 'الفرق' },
+    ]
+    const bucketExpression = getDateBucketExpression('d.date', chartGranularity)
     const chartDataRows = db.exec(
-      `SELECT substr(d.date, 1, 7) AS label,
-              SUM(CASE WHEN COALESCE(sm.quantity_in, 0) > 0 THEN COALESCE(sm.quantity_in, 0) * COALESCE(sm.cost, 0) ELSE COALESCE(sm.quantity_out, 0) * COALESCE(sm.cost, 0) END) AS value
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(sm.quantity_in, 0) * COALESCE(sm.cost, 0)) AS incoming_value,
+              SUM(COALESCE(sm.quantity_out, 0) * COALESCE(sm.cost, 0)) AS outgoing_value,
+              ABS(
+                SUM(COALESCE(sm.quantity_in, 0) * COALESCE(sm.cost, 0)) -
+                SUM(COALESCE(sm.quantity_out, 0) * COALESCE(sm.cost, 0))
+              ) AS difference_value
        FROM stock_movements sm
        LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference
        ${where}
-       GROUP BY substr(d.date, 1, 7)
+       GROUP BY ${bucketExpression}
        ORDER BY label ASC`,
       params
     )[0]?.values ?? []
@@ -358,8 +573,8 @@ export function getReportData(db, reportType, filters = {}) {
       reportType,
       summary: [
         { label: 'عدد الحركات', value: total },
-        { label: 'قيمة الوارد', value: incomingValue, prefix: 'ر.س ' },
-        { label: 'قيمة الصادر', value: outgoingValue, prefix: 'ر.س ' },
+        { label: 'قيمة الوارد', value: incomingValue },
+        { label: 'قيمة الصادر', value: outgoingValue },
       ],
       rows: rows.map((row) => {
         const quantityIn = normalizeNumber(row[6])
@@ -383,7 +598,8 @@ export function getReportData(db, reportType, filters = {}) {
           notes: row[11] ?? '',
         }
       }),
-      chartData: chartDataRows.map((row) => ({ label: String(row[0] ?? ''), value: normalizeNumber(row[1]) })),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
       pagination: buildPagination(total, page, pageSize),
       generatedAt: new Date().toISOString(),
     }
@@ -401,7 +617,12 @@ export function getReportData(db, reportType, filters = {}) {
     const rows = db.exec(
       `SELECT po.id, po.order_number, po.date, m.name AS product_name, w.name AS warehouse_name,
               po.planned_output_quantity, po.actual_output_quantity, po.material_cost_total, po.labor_cost,
-              po.total_production_cost, po.unit_production_cost
+              COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0) AS total_production_cost,
+              CASE
+                WHEN COALESCE(po.actual_output_quantity, 0) > 0
+                  THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
+                ELSE 0
+              END AS unit_production_cost
        FROM production_orders po
        LEFT JOIN materials m ON m.id = po.product_material_id
        LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
@@ -411,36 +632,66 @@ export function getReportData(db, reportType, filters = {}) {
       [...params, pageSize, page * pageSize]
     )[0]?.values ?? []
 
+    const chartSeries = [
+      { key: 'planned', label: 'الإنتاج المخطط' },
+      { key: 'actual', label: 'الإنتاج الفعلي' },
+      { key: 'difference', label: 'الفرق' },
+    ]
+    const bucketExpression = getDateBucketExpression('po.date', chartGranularity)
     const chartDataRows = db.exec(
-      `SELECT substr(po.date, 1, 7) AS label, SUM(po.total_production_cost) AS value
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(po.planned_output_quantity, 0)) AS planned_value,
+              SUM(COALESCE(po.actual_output_quantity, 0)) AS actual_value,
+              ABS(
+                SUM(COALESCE(po.planned_output_quantity, 0)) -
+                SUM(COALESCE(po.actual_output_quantity, 0))
+              ) AS difference_value
        FROM production_orders po
        ${where}
-       GROUP BY substr(po.date, 1, 7)
+       GROUP BY ${bucketExpression}
        ORDER BY label ASC`,
       params
     )[0]?.values ?? []
 
+    const plannedTotal = readNumber(db, `SELECT COALESCE(SUM(planned_output_quantity),0) FROM production_orders po ${where}`, params)
+    const actualTotal = readNumber(db, `SELECT COALESCE(SUM(actual_output_quantity),0) FROM production_orders po ${where}`, params)
     return {
       reportType,
       summary: [
         { label: 'عدد الأوامر', value: total },
-        { label: 'الإنتاج الفعلي', value: readNumber(db, `SELECT COALESCE(SUM(actual_output_quantity),0) FROM production_orders po ${where}`, params) },
-        { label: 'تكلفة الإنتاج', value: readNumber(db, `SELECT COALESCE(SUM(total_production_cost),0) FROM production_orders po ${where}`, params), prefix: 'ر.س ' },
+        { label: 'الإنتاج المخطط', value: plannedTotal },
+        { label: 'الإنتاج الفعلي', value: actualTotal },
+        {
+          label: 'تكلفة الإنتاج',
+          value: readNumber(
+            db,
+            `SELECT COALESCE(SUM(COALESCE(material_cost_total, 0) + COALESCE(labor_cost, 0)), 0)
+             FROM production_orders po ${where}`,
+            params,
+          ),
+        },
       ],
-      rows: rows.map((row) => ({
-        id: row[0] ?? '',
-        orderNumber: row[1] ?? '',
-        date: row[2] ?? '',
-        productName: row[3] ?? '',
-        warehouseName: row[4] ?? '',
-        plannedOutputQuantity: normalizeNumber(row[5]),
-        actualOutputQuantity: normalizeNumber(row[6]),
-        materialCostTotal: normalizeNumber(row[7]),
-        laborCost: normalizeNumber(row[8]),
-        totalProductionCost: normalizeNumber(row[9]),
-        unitProductionCost: normalizeNumber(row[10]),
-      })),
-      chartData: chartDataRows.map((row) => ({ label: String(row[0] ?? ''), value: normalizeNumber(row[1]) })),
+      rows: rows.map((row) => {
+        const plannedOutputQuantity = normalizeNumber(row[5])
+        const actualOutputQuantity = normalizeNumber(row[6])
+
+        return {
+          id: row[0] ?? '',
+          orderNumber: row[1] ?? '',
+          date: row[2] ?? '',
+          productName: row[3] ?? '',
+          warehouseName: row[4] ?? '',
+          plannedOutputQuantity,
+          actualOutputQuantity,
+          outputDifference: plannedOutputQuantity - actualOutputQuantity,
+          materialCostTotal: normalizeNumber(row[7]),
+          laborCost: normalizeNumber(row[8]),
+          totalProductionCost: normalizeNumber(row[9]),
+          unitProductionCost: normalizeNumber(row[10]),
+        }
+      }),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
       pagination: buildPagination(total, page, pageSize),
       generatedAt: new Date().toISOString(),
     }
@@ -458,7 +709,12 @@ export function getReportData(db, reportType, filters = {}) {
     const rows = db.exec(
       `SELECT po.order_number, po.date, m.name AS product_name, w.name AS warehouse_name,
               po.planned_output_quantity, po.actual_output_quantity, po.material_cost_total, po.labor_cost,
-              po.total_production_cost, po.unit_production_cost
+              COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0) AS total_production_cost,
+              CASE
+                WHEN COALESCE(po.actual_output_quantity, 0) > 0
+                  THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
+                ELSE 0
+              END AS unit_production_cost
        FROM production_orders po
        LEFT JOIN materials m ON m.id = po.product_material_id
        LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
@@ -468,14 +724,24 @@ export function getReportData(db, reportType, filters = {}) {
       [...params, pageSize, page * pageSize]
     )[0]?.values ?? []
 
-    const totalCost = readNumber(db, `SELECT COALESCE(SUM(total_production_cost), 0) FROM production_orders po ${where}`, params)
     const totalLabor = readNumber(db, `SELECT COALESCE(SUM(labor_cost), 0) FROM production_orders po ${where}`, params)
     const totalMaterials = readNumber(db, `SELECT COALESCE(SUM(material_cost_total), 0) FROM production_orders po ${where}`, params)
+    const totalCost = totalMaterials + totalLabor
+
+    const chartSeries = [
+      { key: 'materials', label: 'تكلفة المواد' },
+      { key: 'labor', label: 'تكلفة الأجور' },
+      { key: 'total', label: 'إجمالي التكلفة' },
+    ]
+    const bucketExpression = getDateBucketExpression('po.date', chartGranularity)
     const chartDataRows = db.exec(
-      `SELECT substr(po.date, 1, 7) AS label, SUM(po.total_production_cost) AS value
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(po.material_cost_total, 0)) AS material_value,
+              SUM(COALESCE(po.labor_cost, 0)) AS labor_value,
+              SUM(COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) AS total_value
        FROM production_orders po
        ${where}
-       GROUP BY substr(po.date, 1, 7)
+       GROUP BY ${bucketExpression}
        ORDER BY label ASC`,
       params
     )[0]?.values ?? []
@@ -484,9 +750,9 @@ export function getReportData(db, reportType, filters = {}) {
       reportType,
       summary: [
         { label: 'عدد الأوامر', value: total },
-        { label: 'تكلفة المواد', value: totalMaterials, prefix: 'ر.س ' },
-        { label: 'تكلفة الأجور', value: totalLabor, prefix: 'ر.س ' },
-        { label: 'إجمالي التكلفة', value: totalCost, prefix: 'ر.س ' },
+        { label: 'تكلفة المواد', value: totalMaterials },
+        { label: 'تكلفة الأجور', value: totalLabor },
+        { label: 'إجمالي التكلفة', value: totalCost },
       ],
       rows: rows.map((row) => ({
         orderNumber: row[0] ?? '',
@@ -500,7 +766,8 @@ export function getReportData(db, reportType, filters = {}) {
         totalProductionCost: normalizeNumber(row[8]),
         unitProductionCost: normalizeNumber(row[9]),
       })),
-      chartData: chartDataRows.map((row) => ({ label: String(row[0] ?? ''), value: normalizeNumber(row[1]) })),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
       pagination: buildPagination(total, page, pageSize),
       generatedAt: new Date().toISOString(),
     }
@@ -589,7 +856,7 @@ export function getReportExportRows(db, reportType, filters = {}) {
 
     const rows = db.exec(
       `SELECT pi.id, pi.invoice_number, pi.date, s.name AS supplier_name, w.name AS warehouse_name,
-              pi.net_total,
+              pi.net_total, COALESCE(pi.expenses, 0) AS expenses,
               COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
               COALESCE(pi.net_total - (SELECT COALESCE(SUM(pp.amount), 0) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS remaining_amount,
               pi.status
@@ -608,9 +875,10 @@ export function getReportExportRows(db, reportType, filters = {}) {
       supplierName: row[3] ?? '',
       warehouseName: row[4] ?? '',
       netTotal: normalizeNumber(row[5]),
-      paidAmount: normalizeNumber(row[6]),
-      remainingAmount: normalizeNumber(row[7]),
-      status: row[8] ?? '',
+      expenses: normalizeNumber(row[6]),
+      paidAmount: normalizeNumber(row[7]),
+      remainingAmount: normalizeNumber(row[8]),
+      status: row[9] ?? '',
     }))
   }
 
@@ -624,7 +892,7 @@ export function getReportExportRows(db, reportType, filters = {}) {
 
     const rows = db.exec(
       `SELECT si.id, si.invoice_number, si.date, c.name AS customer_name, w.name AS warehouse_name,
-              si.net_total,
+              si.net_total, COALESCE(si.customer_additional_fees, 0) AS customer_additional_fees,
               COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0) AS return_total,
               COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) AS paid_amount,
               si.status
@@ -638,8 +906,9 @@ export function getReportExportRows(db, reportType, filters = {}) {
 
     return rows.map((row) => {
       const netTotal = normalizeNumber(row[5])
-      const returnTotal = normalizeNumber(row[6])
-      const paidAmount = normalizeNumber(row[7])
+      const customerAdditionalFees = normalizeNumber(row[6])
+      const paidAmount = normalizeNumber(row[8])
+
       return {
         id: row[0] ?? '',
         invoiceNumber: row[1] ?? '',
@@ -647,11 +916,10 @@ export function getReportExportRows(db, reportType, filters = {}) {
         customerName: row[3] ?? '',
         warehouseName: row[4] ?? '',
         netTotal,
-        returnTotal,
-        netAfterReturns: Math.max(netTotal - returnTotal, 0),
+        customerAdditionalFees,
         paidAmount,
-        remainingAmount: Math.max(netTotal - returnTotal - paidAmount, 0),
-        status: row[8] ?? '',
+        remainingAmount: Math.max(netTotal - paidAmount, 0),
+        status: row[9] ?? '',
       }
     })
   }
@@ -709,7 +977,12 @@ export function getReportExportRows(db, reportType, filters = {}) {
     const rows = db.exec(
       `SELECT po.id, po.order_number, po.date, m.name AS product_name, w.name AS warehouse_name,
               po.planned_output_quantity, po.actual_output_quantity, po.material_cost_total, po.labor_cost,
-              po.total_production_cost, po.unit_production_cost
+              COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0) AS total_production_cost,
+              CASE
+                WHEN COALESCE(po.actual_output_quantity, 0) > 0
+                  THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
+                ELSE 0
+              END AS unit_production_cost
        FROM production_orders po
        LEFT JOIN materials m ON m.id = po.product_material_id
        LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
@@ -718,19 +991,25 @@ export function getReportExportRows(db, reportType, filters = {}) {
       params
     )[0]?.values ?? []
 
-    return rows.map((row) => ({
-      id: row[0] ?? '',
-      orderNumber: row[1] ?? '',
-      date: row[2] ?? '',
-      productName: row[3] ?? '',
-      warehouseName: row[4] ?? '',
-      plannedOutputQuantity: normalizeNumber(row[5]),
-      actualOutputQuantity: normalizeNumber(row[6]),
-      materialCostTotal: normalizeNumber(row[7]),
-      laborCost: normalizeNumber(row[8]),
-      totalProductionCost: normalizeNumber(row[9]),
-      unitProductionCost: normalizeNumber(row[10]),
-    }))
+    return rows.map((row) => {
+      const plannedOutputQuantity = normalizeNumber(row[5])
+      const actualOutputQuantity = normalizeNumber(row[6])
+
+      return {
+        id: row[0] ?? '',
+        orderNumber: row[1] ?? '',
+        date: row[2] ?? '',
+        productName: row[3] ?? '',
+        warehouseName: row[4] ?? '',
+        plannedOutputQuantity,
+        actualOutputQuantity,
+        outputDifference: plannedOutputQuantity - actualOutputQuantity,
+        materialCostTotal: normalizeNumber(row[7]),
+        laborCost: normalizeNumber(row[8]),
+        totalProductionCost: normalizeNumber(row[9]),
+        unitProductionCost: normalizeNumber(row[10]),
+      }
+    })
   }
 
   if (reportType === 'production_cost') {
@@ -744,7 +1023,12 @@ export function getReportExportRows(db, reportType, filters = {}) {
     const rows = db.exec(
       `SELECT po.order_number, po.date, m.name AS product_name, w.name AS warehouse_name,
               po.planned_output_quantity, po.actual_output_quantity, po.material_cost_total, po.labor_cost,
-              po.total_production_cost, po.unit_production_cost
+              COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0) AS total_production_cost,
+              CASE
+                WHEN COALESCE(po.actual_output_quantity, 0) > 0
+                  THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
+                ELSE 0
+              END AS unit_production_cost
        FROM production_orders po
        LEFT JOIN materials m ON m.id = po.product_material_id
        LEFT JOIN warehouses w ON w.id = po.output_warehouse_id

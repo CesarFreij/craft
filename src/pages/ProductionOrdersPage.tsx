@@ -21,14 +21,17 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
 import { inventoryService, type WarehouseRecord } from '../services/inventoryService'
 import { materialsService, type MaterialRecord } from '../services/materialsService'
+import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
 import {
   manufacturingService,
   type ManufacturingRecipeRecord,
   type ProductionOrderPayload,
   type ProductionOrderRecord,
 } from '../services/manufacturingService'
+import type { InvoicePrintData } from '../types/invoicePrint'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { formatDateDMY, toInternalDate } from '../utils/displayFormatting'
+import { useNavigate } from 'react-router-dom'
 
 
 const darkPopupPaperSx = {
@@ -458,6 +461,43 @@ function formatMaterialLabel(material: MaterialRecord): string {
   return `${material.materialNumber} - ${material.name}`
 }
 
+const numberFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+function roundToTwo(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+function formatNumber(value: number | string | null | undefined): string {
+  const numericValue = Number(value ?? 0)
+  return Number.isFinite(numericValue) ? numberFormatter.format(numericValue) : '0.00'
+}
+
+function formatEditableNumber(value: number | string | null | undefined): string {
+  const numericValue = Number(value ?? 0)
+  return Number.isFinite(numericValue) ? roundToTwo(numericValue).toFixed(2) : '0.00'
+}
+
+function formatSignedNumber(value: number | string | null | undefined): string {
+  const numericValue = roundToTwo(Number(value ?? 0))
+
+  if (!Number.isFinite(numericValue) || Math.abs(numericValue) < 0.000001) {
+    return '0.00'
+  }
+
+  return `${numericValue > 0 ? '+' : ''}${formatNumber(numericValue)}`
+}
+
+function nearlyEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < 0.000001
+}
+
 function flattenStockableMaterials(nodes: MaterialRecord[]): MaterialRecord[] {
   const result: MaterialRecord[] = []
 
@@ -592,6 +632,7 @@ function DateFilterField({
 }
 
 export function ProductionOrdersPage() {
+  const navigate = useNavigate()
   const [orders, setOrders] = useState<ProductionOrderRecord[]>([])
   const [recipes, setRecipes] = useState<ManufacturingRecipeRecord[]>([])
   const [materials, setMaterials] = useState<MaterialRecord[]>([])
@@ -605,6 +646,7 @@ export function ProductionOrdersPage() {
   const [orderNumberPreview, setOrderNumberPreview] = useState('PRD-000001')
   const [form, setForm] = useState<OrderFormState>(emptyFormState)
   const [selectedRecipe, setSelectedRecipe] = useState<ManufacturingRecipeRecord | null>(null)
+  const [detailsRecipe, setDetailsRecipe] = useState<ManufacturingRecipeRecord | null>(null)
   const [isRecipeLoading, setIsRecipeLoading] = useState(false)
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
@@ -637,6 +679,54 @@ export function ProductionOrdersPage() {
   const isEditMode = Boolean(editingOrderId)
   const dialogOrderNumber = isEditMode ? editingOrderNumber : orderNumberPreview
 
+  const buildProductionExportData = useCallback((): InvoicePrintData | null => {
+    if (!selectedOrder) {
+      return null
+    }
+
+    return {
+      documentType: 'production',
+      title: 'أمر إنتاج',
+      documentNumber: selectedOrder.orderNumber,
+      date: formatDateDMY(selectedOrder.date),
+      partyLabel: 'المنتج النهائي',
+      partyName: selectedOrder.productName,
+      referenceLabel: 'نموذج التصنيع',
+      referenceValue: selectedOrder.recipeName,
+      productName: selectedOrder.productName,
+      productQuantity: selectedOrder.actualOutputQuantity,
+      notes: selectedOrder.notes,
+      items: (selectedOrder.inputs ?? []).map((input) => ({
+        id: input.id,
+        name: input.materialName,
+        unit: input.unit || '',
+        quantity: input.actualQuantity,
+        plannedQuantity: input.plannedQuantity,
+        actualQuantity: input.actualQuantity,
+        cost: input.totalCost,
+      })),
+      subtotal: (selectedOrder.inputs ?? []).reduce((sum, input) => sum + Number(input.totalCost ?? 0), 0),
+      discount: 0,
+      total: Number(selectedOrder.totalProductionCost ?? 0),
+      productionMode: true,
+    }
+  }, [selectedOrder])
+
+  const handleExportPdf = useCallback(() => {
+    const exportData = buildProductionExportData()
+    if (!exportData) {
+      return
+    }
+
+    const latestSettings = loadCompanyPrintSettings()
+    navigate('/invoice-preview', {
+      state: {
+        invoiceData: exportData,
+        settings: latestSettings,
+      },
+    })
+  }, [buildProductionExportData, navigate])
+
   const manufacturingMaterials = useMemo(
     () => flattenStockableMaterials(materials),
     [materials],
@@ -667,38 +757,57 @@ export function ProductionOrdersPage() {
   const syncRecipeItems = (
     recipe: ManufacturingRecipeRecord | null,
     nextPlannedOutputQuantity: string,
+    nextActualOutputQuantity: string,
     currentItems: OrderFormItem[],
     defaultWarehouseId: string,
+    preserveEditedActual = true,
   ): OrderFormItem[] => {
     if (!recipe?.items?.length) {
       return []
     }
 
     const plannedOutput = Number(nextPlannedOutputQuantity)
+    const actualOutput = Number(nextActualOutputQuantity)
     const standardOutput = Number(recipe.standardOutputQuantity)
-    const baseFactor =
-      Number.isFinite(plannedOutput) &&
-      plannedOutput > 0 &&
+
+    const hasValidStandardOutput =
       Number.isFinite(standardOutput) &&
       standardOutput > 0
+
+    const plannedFactor =
+      Number.isFinite(plannedOutput) &&
+      plannedOutput > 0 &&
+      hasValidStandardOutput
         ? plannedOutput / standardOutput
         : 1
 
+    const actualFactor =
+      Number.isFinite(actualOutput) &&
+      actualOutput > 0 &&
+      hasValidStandardOutput
+        ? actualOutput / standardOutput
+        : plannedFactor
+
     return recipe.items.map((item, index) => {
       const previousItem = currentItems.find((entry) => entry.materialId === item.materialId)
-      const plannedQuantity = Number(item.quantity ?? 0) * baseFactor
-      const actualQuantity = previousItem?.actualQuantityEdited
-        ? previousItem.actualQuantity
-        : String(plannedQuantity)
+      const recipeQuantity = Number(item.quantity ?? 0)
+      const plannedQuantity = roundToTwo(recipeQuantity * plannedFactor)
+      const calculatedActualQuantity = roundToTwo(recipeQuantity * actualFactor)
+
+      const keepEditedActual =
+        preserveEditedActual &&
+        Boolean(previousItem?.actualQuantityEdited)
 
       return {
         id: previousItem?.id ?? `${recipe.id}-${item.id ?? index}`,
         recipeItemId: item.id,
         materialId: item.materialId,
         warehouseId: previousItem?.warehouseId || defaultWarehouseId || '',
-        plannedQuantity: String(plannedQuantity),
-        actualQuantity,
-        actualQuantityEdited: previousItem?.actualQuantityEdited ?? false,
+        plannedQuantity: formatEditableNumber(plannedQuantity),
+        actualQuantity: keepEditedActual
+          ? previousItem?.actualQuantity ?? formatEditableNumber(calculatedActualQuantity)
+          : formatEditableNumber(calculatedActualQuantity),
+        actualQuantityEdited: keepEditedActual,
         notes: previousItem?.notes ?? item.notes ?? '',
         unit: item.unit || previousItem?.unit || '',
       }
@@ -737,9 +846,18 @@ export function ProductionOrdersPage() {
         }
 
         const plannedBasis = current.plannedOutputQuantity || String(recipe.standardOutputQuantity)
+        const actualBasis = current.actualOutputQuantity || plannedBasis
+
         return {
           ...current,
-          items: syncRecipeItems(recipe, plannedBasis, [], current.defaultInputWarehouseId),
+          items: syncRecipeItems(
+            recipe,
+            plannedBasis,
+            actualBasis,
+            [],
+            current.defaultInputWarehouseId,
+            false,
+          ),
         }
       })
     } catch (error) {
@@ -794,26 +912,91 @@ export function ProductionOrdersPage() {
       }
 
       setSelectedRecipe(recipe)
+
+      const standardOutput = Number(recipe.standardOutputQuantity)
+      const plannedOutput = Number(order.plannedOutputQuantity)
+      const actualOutput = Number(order.actualOutputQuantity)
+
+      const hasValidStandard =
+        Number.isFinite(standardOutput) &&
+        standardOutput > 0
+
+      const plannedFactor =
+        hasValidStandard &&
+        Number.isFinite(plannedOutput) &&
+        plannedOutput > 0
+          ? plannedOutput / standardOutput
+          : 1
+
+      const actualFactor =
+        hasValidStandard &&
+        Number.isFinite(actualOutput) &&
+        actualOutput > 0
+          ? actualOutput / standardOutput
+          : plannedFactor
+
       const nextForm: OrderFormState = {
         recipeId: order.recipeId,
         outputWarehouseId: order.outputWarehouseId,
-        plannedOutputQuantity: String(order.plannedOutputQuantity),
-        actualOutputQuantity: String(order.actualOutputQuantity),
-        laborCost: String(order.laborCost ?? 0),
+        plannedOutputQuantity: formatEditableNumber(order.plannedOutputQuantity),
+        actualOutputQuantity: formatEditableNumber(order.actualOutputQuantity),
+        laborCost: formatEditableNumber(order.laborCost ?? 0),
         date: order.date,
         notes: order.notes ?? '',
         defaultInputWarehouseId: order.inputs?.[0]?.warehouseId ?? '',
-        items: (order.inputs ?? []).map((input) => ({
-          id: input.id,
-          recipeItemId: input.recipeItemId ?? undefined,
-          materialId: input.materialId,
-          warehouseId: input.warehouseId,
-          plannedQuantity: String(input.plannedQuantity),
-          actualQuantity: String(input.actualQuantity),
-          actualQuantityEdited: Math.abs(Number(input.actualQuantity) - Number(input.plannedQuantity)) > 0.000001,
-          notes: input.notes ?? '',
-          unit: input.unit || '',
-        })),
+        items: (order.inputs ?? []).map((input) => {
+          const recipeItem = recipe.items?.find(
+            (item) =>
+              (input.recipeItemId && item.id === input.recipeItemId) ||
+              item.materialId === input.materialId,
+          )
+
+          if (!recipeItem) {
+            return {
+              id: input.id,
+              recipeItemId: input.recipeItemId ?? undefined,
+              materialId: input.materialId,
+              warehouseId: input.warehouseId,
+              plannedQuantity: formatEditableNumber(input.plannedQuantity),
+              actualQuantity: formatEditableNumber(input.actualQuantity),
+              actualQuantityEdited: true,
+              notes: input.notes ?? '',
+              unit: input.unit || '',
+            }
+          }
+
+          const recipeQuantity = Number(recipeItem.quantity ?? 0)
+          const expectedPlanned = roundToTwo(recipeQuantity * plannedFactor)
+          const expectedActual = roundToTwo(recipeQuantity * actualFactor)
+          const storedPlanned = roundToTwo(Number(input.plannedQuantity ?? 0))
+          const storedActual = roundToTwo(Number(input.actualQuantity ?? 0))
+
+          // Legacy records created by the old logic often have
+          // actual consumption exactly equal to planned consumption,
+          // even when actual output differs from planned output.
+          const looksLikeLegacyAutoActual =
+            nearlyEqual(storedActual, storedPlanned) &&
+            nearlyEqual(storedPlanned, expectedPlanned) &&
+            !nearlyEqual(expectedActual, storedActual)
+
+          const normalizedActual = looksLikeLegacyAutoActual
+            ? expectedActual
+            : storedActual
+
+          return {
+            id: input.id,
+            recipeItemId: input.recipeItemId ?? undefined,
+            materialId: input.materialId,
+            warehouseId: input.warehouseId,
+            plannedQuantity: formatEditableNumber(expectedPlanned),
+            actualQuantity: formatEditableNumber(normalizedActual),
+            actualQuantityEdited:
+              !looksLikeLegacyAutoActual &&
+              !nearlyEqual(normalizedActual, expectedActual),
+            notes: input.notes ?? '',
+            unit: input.unit || '',
+          }
+        }),
       }
 
       setForm((current) => ({
@@ -837,9 +1020,13 @@ export function ProductionOrdersPage() {
         return
       }
 
+      const recipe = await manufacturingService.getRecipeById(order.recipeId)
+
       setSelectedOrder(order)
+      setDetailsRecipe(recipe)
       setDetailsOpen(true)
     } catch (error) {
+      setDetailsRecipe(null)
       setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر تحميل تفاصيل أمر الإنتاج.'))
     }
   }
@@ -909,17 +1096,17 @@ export function ProductionOrdersPage() {
     const payload: ProductionOrderPayload = {
       recipeId: form.recipeId,
       outputWarehouseId: form.outputWarehouseId,
-      plannedOutputQuantity: Number(form.plannedOutputQuantity),
-      actualOutputQuantity: Number(form.actualOutputQuantity),
-      laborCost: Number(form.laborCost || 0),
+      plannedOutputQuantity: roundToTwo(Number(form.plannedOutputQuantity)),
+      actualOutputQuantity: roundToTwo(Number(form.actualOutputQuantity)),
+      laborCost: roundToTwo(Number(form.laborCost || 0)),
       date: form.date,
       notes: form.notes.trim(),
       items: form.items.map((item) => ({
         recipeItemId: item.recipeItemId ?? null,
         materialId: item.materialId,
         warehouseId: item.warehouseId,
-        plannedQuantity: Number(item.plannedQuantity || item.actualQuantity),
-        actualQuantity: Number(item.actualQuantity),
+        plannedQuantity: roundToTwo(Number(item.plannedQuantity || item.actualQuantity)),
+        actualQuantity: roundToTwo(Number(item.actualQuantity)),
         unit: item.unit,
         notes: item.notes.trim(),
       })),
@@ -989,10 +1176,10 @@ export function ProductionOrdersPage() {
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.orderNumber}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.recipeName}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.productName}</Box>
-                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.actualOutputQuantity}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatNumber(order.actualOutputQuantity)}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.outputWarehouseName}</Box>
-                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{Number(order.laborCost ?? 0).toFixed(2)}</Box>
-                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.totalProductionCost.toFixed(2)}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatNumber(order.laborCost)}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatNumber(order.totalProductionCost)}</Box>
                   <Box component="td" sx={{ p: 1, textAlign: 'center', width: 130, minWidth: 130, maxWidth: 130 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap' }}>
 
@@ -1079,28 +1266,73 @@ export function ProductionOrdersPage() {
                     ...current,
                     plannedOutputQuantity: nextValue,
                     items: selectedRecipe
-                      ? syncRecipeItems(selectedRecipe, nextValue, current.items, current.defaultInputWarehouseId)
+                      ? syncRecipeItems(
+                          selectedRecipe,
+                          nextValue,
+                          current.actualOutputQuantity,
+                          current.items,
+                          current.defaultInputWarehouseId,
+                          true,
+                        )
                       : current.items,
                   }))
                 }}
-                slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                onBlur={() => {
+                  setForm((current) => ({
+                    ...current,
+                    plannedOutputQuantity: current.plannedOutputQuantity
+                      ? formatEditableNumber(current.plannedOutputQuantity)
+                      : '',
+                  }))
+                }}
+                slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
               />
               <TextField
                 label="الكمية الفعلية"
                 type="number"
                 value={form.actualOutputQuantity}
-                onChange={(event) => setForm((current) => ({ ...current, actualOutputQuantity: event.target.value }))}
-                slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                onChange={(event) => {
+                  const nextValue = event.target.value
+                  setForm((current) => ({
+                    ...current,
+                    actualOutputQuantity: nextValue,
+                    items: selectedRecipe
+                      ? syncRecipeItems(
+                          selectedRecipe,
+                          current.plannedOutputQuantity,
+                          nextValue,
+                          current.items,
+                          current.defaultInputWarehouseId,
+                          false,
+                        )
+                      : current.items,
+                  }))
+                }}
+                onBlur={() => {
+                  setForm((current) => ({
+                    ...current,
+                    actualOutputQuantity: current.actualOutputQuantity
+                      ? formatEditableNumber(current.actualOutputQuantity)
+                      : '',
+                  }))
+                }}
+                slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
               />
               <TextField
                 label="تكلفة الأجور الفعلية"
                 type="number"
                 value={form.laborCost}
                 onChange={(event) => setForm((current) => ({ ...current, laborCost: event.target.value }))}
+                onBlur={() => {
+                  setForm((current) => ({
+                    ...current,
+                    laborCost: current.laborCost ? formatEditableNumber(current.laborCost) : '0.00',
+                  }))
+                }}
                 slotProps={{
                   htmlInput: {
                     min: 0,
-                    step: 1,
+                    step: 0.01,
                   },
                 }}
               />
@@ -1167,7 +1399,7 @@ export function ProductionOrdersPage() {
                               <TextField value={item.unit || material?.unit || ''} slotProps={{ input: { readOnly: true } }} size="small" fullWidth />
                             </Box>
                             <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
-                              <TextField value={item.plannedQuantity} slotProps={{ input: { readOnly: true } }} size="small" fullWidth />
+                              <TextField value={formatNumber(item.plannedQuantity)} slotProps={{ input: { readOnly: true } }} size="small" fullWidth />
                             </Box>
                             <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
                               <TextField
@@ -1175,7 +1407,6 @@ export function ProductionOrdersPage() {
                                 type="number"
                                 size="small"
                                 fullWidth
-                                slotProps={darkSelectSlotProps}
                                 onChange={(event) => {
                                   setForm((current) => ({
                                     ...current,
@@ -1184,6 +1415,20 @@ export function ProductionOrdersPage() {
                                       : entry),
                                   }))
                                 }}
+                                onBlur={() => {
+                                  setForm((current) => ({
+                                    ...current,
+                                    items: current.items.map((entry) => entry.id === item.id
+                                      ? {
+                                          ...entry,
+                                          actualQuantity: entry.actualQuantity
+                                            ? formatEditableNumber(entry.actualQuantity)
+                                            : '',
+                                        }
+                                      : entry),
+                                  }))
+                                }}
+                                slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
                               />
                             </Box>
                             <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
@@ -1265,7 +1510,16 @@ export function ProductionOrdersPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} maxWidth="xl" fullWidth slotProps={craftDialogSlotProps}>
+      <Dialog
+        open={detailsOpen}
+        onClose={() => {
+          setDetailsOpen(false)
+          setDetailsRecipe(null)
+        }}
+        maxWidth="xl"
+        fullWidth
+        slotProps={craftDialogSlotProps}
+      >
         <DialogTitle>تفاصيل أمر الإنتاج</DialogTitle>
         <DialogContent dividers>
           {selectedOrder ? (
@@ -1292,17 +1546,19 @@ export function ProductionOrdersPage() {
                       <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{selectedOrder.recipeName}</Box>
                       <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{selectedOrder.productName}</Box>
                       <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{selectedOrder.outputWarehouseName}</Box>
-                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{selectedOrder.plannedOutputQuantity}</Box>
-                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{selectedOrder.actualOutputQuantity}</Box>
+                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(selectedOrder.plannedOutputQuantity)}</Box>
+                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(selectedOrder.actualOutputQuantity)}</Box>
                       <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>
-                        {(selectedOrder.inputs ?? []).reduce((sum, input) => sum + Number(input.totalCost ?? 0), 0).toFixed(2)}
+                        {formatNumber((selectedOrder.inputs ?? []).reduce((sum, input) => sum + Number(input.totalCost ?? 0), 0))}
                       </Box>
-                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{Number(selectedOrder.laborCost ?? 0).toFixed(2)}</Box>
-                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{selectedOrder.totalProductionCost.toFixed(2)}</Box>
+                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(selectedOrder.laborCost)}</Box>
+                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(selectedOrder.totalProductionCost)}</Box>
                       <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>
-                        {(selectedOrder.actualOutputQuantity > 0
-                          ? selectedOrder.totalProductionCost / selectedOrder.actualOutputQuantity
-                          : 0).toFixed(2)}
+                        {formatNumber(
+                          selectedOrder.actualOutputQuantity > 0
+                            ? selectedOrder.totalProductionCost / selectedOrder.actualOutputQuantity
+                            : 0,
+                        )}
                       </Box>
                     </Box>
                   </Box>
@@ -1328,23 +1584,56 @@ export function ProductionOrdersPage() {
                     </Box>
                     <Box component="tbody">
                       {selectedOrder.inputs.map((input) => {
-                        const difference = Number(input.actualQuantity) - Number(input.plannedQuantity)
-                        const differenceText = Math.abs(difference) < 0.000001
-                          ? '0'
-                          : difference > 0
-                            ? `+${difference.toFixed(2)}`
-                            : difference.toFixed(2)
+                        const recipeItem = detailsRecipe?.items?.find(
+                          (item) =>
+                            (input.recipeItemId && item.id === input.recipeItemId) ||
+                            item.materialId === input.materialId,
+                        )
+
+                        const standardOutput = Number(detailsRecipe?.standardOutputQuantity ?? 0)
+                        const plannedOutput = Number(selectedOrder.plannedOutputQuantity)
+                        const actualOutput = Number(selectedOrder.actualOutputQuantity)
+                        const recipeQuantity = Number(recipeItem?.quantity ?? 0)
+
+                        const hasRecipeBasis =
+                          Boolean(recipeItem) &&
+                          Number.isFinite(standardOutput) &&
+                          standardOutput > 0
+
+                        const calculatedPlanned = hasRecipeBasis
+                          ? roundToTwo(recipeQuantity * (plannedOutput / standardOutput))
+                          : roundToTwo(Number(input.plannedQuantity ?? 0))
+
+                        const calculatedActual = hasRecipeBasis
+                          ? roundToTwo(recipeQuantity * (actualOutput / standardOutput))
+                          : roundToTwo(Number(input.actualQuantity ?? 0))
+
+                        const storedPlanned = roundToTwo(Number(input.plannedQuantity ?? 0))
+                        const storedActual = roundToTwo(Number(input.actualQuantity ?? 0))
+
+                        const looksLikeLegacyAutoActual =
+                          hasRecipeBasis &&
+                          nearlyEqual(storedActual, storedPlanned) &&
+                          nearlyEqual(storedPlanned, calculatedPlanned) &&
+                          !nearlyEqual(storedActual, calculatedActual)
+
+                        const displayedActual = looksLikeLegacyAutoActual
+                          ? calculatedActual
+                          : storedActual
+
+                        const difference = roundToTwo(displayedActual - calculatedPlanned)
+                        const differenceText = formatSignedNumber(difference)
 
                         return (
                           <Box component="tr" key={input.id}>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.materialName}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.warehouseName}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.unit || '__'}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.plannedQuantity}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.actualQuantity}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(calculatedPlanned)}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(displayedActual)}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{differenceText}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.unitCost.toFixed(2)}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.totalCost.toFixed(2)}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(input.unitCost)}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(input.totalCost)}</Box>
                           </Box>
                         )
                       })}
@@ -1364,8 +1653,12 @@ export function ProductionOrdersPage() {
             </Box>
           ) : null}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDetailsOpen(false)}>إغلاق</Button>
+        <DialogActions sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="contained" onClick={() => { void handleExportPdf() }}>تصدير PDF</Button>
+          <Button onClick={() => {
+            setDetailsOpen(false)
+            setDetailsRecipe(null)
+          }}>إغلاق</Button>
         </DialogActions>
       </Dialog>
     </Box>

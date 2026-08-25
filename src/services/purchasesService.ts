@@ -36,6 +36,7 @@ export interface PurchaseInvoiceDraftInput {
   warehouseId: string
   discountType: DiscountType
   discountValue: number
+  expenses?: number
   notes?: string
   items: PurchaseInvoiceItemInput[]
 }
@@ -60,6 +61,7 @@ export interface PurchaseInvoiceListItem {
   warehouseName: string
   subtotal: number
   discountAmount: number
+  expenses: number
   netTotal: number
   paidAmount: number
   remainingAmount: number
@@ -85,6 +87,7 @@ export interface PurchaseInvoiceDetails {
   discountType: DiscountType
   discountValue: number
   discountAmount: number
+  expenses: number
   netTotal: number
   paidAmount: number
   remainingAmount: number
@@ -221,6 +224,7 @@ export interface SalesInvoiceDraftInput {
   warehouseId: string
   discountType: DiscountType
   discountValue: number
+  customerAdditionalFees?: number
   notes?: string
   items: SalesInvoiceItemInput[]
 }
@@ -244,6 +248,7 @@ export interface SalesInvoiceListItem {
   warehouseName: string
   subtotal: number
   discountAmount: number
+  customerAdditionalFees: number
   netTotal: number
   salesReturnTotal: number
   netAfterReturns: number
@@ -278,6 +283,7 @@ export interface SalesInvoiceDetails {
   discountType: DiscountType
   discountValue: number
   discountAmount: number
+  customerAdditionalFees: number
   netTotal: number
   salesReturnTotal: number
   netAfterReturns: number

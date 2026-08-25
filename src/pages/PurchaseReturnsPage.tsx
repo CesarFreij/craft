@@ -32,6 +32,8 @@ import {
 } from '../services/purchasesService'
 import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
+import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
+import type { InvoicePrintData } from '../types/invoicePrint'
 
 
 const darkPopupPaperSx = {
@@ -743,6 +745,63 @@ useEffect(() => {
     [invoices, selectedInvoiceId],
   )
 
+  const buildPurchaseReturnExportData = useCallback((): InvoicePrintData | null => {
+    if (!selectedReturn) {
+      return null
+    }
+
+    const subtotal = (selectedReturn.items ?? []).reduce(
+      (sum, item) => sum + Number(item.lineTotal ?? 0),
+      0,
+    )
+
+    return {
+      documentType: 'purchase_return' as InvoicePrintData['documentType'],
+      title: 'مرتجع مشتريات',
+      documentNumber: selectedReturn.returnNumber,
+      date: formatDateDMY(selectedReturn.date),
+
+      partyLabel: 'المورد',
+      partyName: selectedReturn.supplierName,
+
+      referenceLabel: 'الفاتورة الأصلية',
+      referenceValue: selectedReturn.purchaseInvoiceNumber,
+
+      notes: selectedReturn.notes ?? '',
+
+      items: (selectedReturn.items ?? []).map((item) => ({
+        id: item.id,
+        materialNumber: item.materialNumber ?? '',
+        name: item.materialName,
+        unit: item.unit ?? '',
+        quantity: Number(item.quantity ?? 0),
+        price: Number(item.unitPrice ?? 0),
+        total: Number(item.lineTotal ?? 0),
+      })),
+
+      subtotal,
+      discount: 0,
+      total: Number(selectedReturn.netTotal ?? subtotal),
+    }
+  }, [selectedReturn])
+
+  const handleExportPdf = useCallback(() => {
+    const exportData = buildPurchaseReturnExportData()
+
+    if (!exportData) {
+      return
+    }
+
+    const latestSettings = loadCompanyPrintSettings()
+
+    navigate('/invoice-preview', {
+      state: {
+        invoiceData: exportData,
+        settings: latestSettings,
+      },
+    })
+  }, [buildPurchaseReturnExportData, navigate])
+
   return (
     <Box sx={craftPageGlassSx}>
       <PageHeader
@@ -1029,8 +1088,9 @@ useEffect(() => {
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
           <Button onClick={() => setDetailsOpen(false)}>إغلاق</Button>
+          <Button variant="contained" onClick={() => { void handleExportPdf() }}>تصدير PDF</Button>
         </DialogActions>
       </Dialog>
     </Box>

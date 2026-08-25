@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
   listMaterials,
@@ -81,6 +82,146 @@ import { fileURLToPath } from 'node:url'
 import { getReportData, getReportExportRows } from './reports.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+async function exportInvoicePdfFromHtml({ invoiceData, settings, fileName }) {
+  const defaultFileName = String(fileName || 'invoice.pdf').replace(/\.[^/.]+$/, '') + '.pdf'
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'حفظ ملف PDF',
+    defaultPath: path.join(app.getPath('downloads'), defaultFileName),
+    filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
+  })
+
+  if (canceled || !filePath) {
+    return ''
+  }
+
+  // IMPORTANT: PDF export uses the dedicated PDF-only renderer mode.
+  // This route renders only the white A4 invoice and excludes the CRAFT preview background/toolbar.
+  const renderUrl = app.isPackaged
+    ? `file://${path.join(__dirname, '../dist/index.html')}#/invoice-preview?mode=pdf`
+    : 'http://localhost:5173/#/invoice-preview?mode=pdf'
+
+  const exportWindow = new BrowserWindow({
+    show: false,
+    width: 900,
+    height: 1200,
+    backgroundColor: '#FFFFFF',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  })
+
+  let readyHandler = null
+
+  try {
+    console.log('Loading PDF-only invoice route:', renderUrl)
+    await exportWindow.loadURL(renderUrl)
+
+    const ready = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (readyHandler) {
+          ipcMain.removeListener('invoice-preview:ready', readyHandler)
+        }
+        reject(new Error('Invoice PDF renderer did not become ready.'))
+      }, 20000)
+
+      readyHandler = (event) => {
+        // Ignore ready notifications coming from the visible preview or any other window.
+        if (event.sender.id !== exportWindow.webContents.id) {
+          return
+        }
+
+        clearTimeout(timeout)
+        ipcMain.removeListener('invoice-preview:ready', readyHandler)
+        readyHandler = null
+        console.log('Invoice PDF renderer ready')
+        resolve()
+      }
+
+      ipcMain.on('invoice-preview:ready', readyHandler)
+
+      exportWindow.webContents.once('did-fail-load', (_event, code, description) => {
+        clearTimeout(timeout)
+        if (readyHandler) {
+          ipcMain.removeListener('invoice-preview:ready', readyHandler)
+          readyHandler = null
+        }
+        reject(new Error(`Failed to load invoice PDF page: ${code} ${description}`))
+      })
+    })
+
+    // Send data only after the PDF-only route has fully loaded and the ready listener is installed.
+    exportWindow.webContents.send('invoice-preview:data', { invoiceData, settings })
+    await ready
+
+    // Make sure logo/images are decoded before Chromium captures the page into PDF.
+    await exportWindow.webContents.executeJavaScript(`
+      Promise.all(
+        Array.from(document.images).map((img) => {
+          if (img.complete) {
+            return typeof img.decode === 'function' ? img.decode().catch(() => undefined) : Promise.resolve()
+          }
+
+          return new Promise((resolve) => {
+            img.addEventListener('load', resolve, { once: true })
+            img.addEventListener('error', resolve, { once: true })
+          })
+        })
+      ).then(() => document.fonts.ready)
+    `)
+
+    console.log('PDF-only page loaded')
+
+    const pdfBuffer = await exportWindow.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+      landscape: false,
+      preferCSSPageSize: true,
+      displayHeaderFooter: true,
+      headerTemplate: '<div></div>',
+      footerTemplate: `
+        <div style="width:100%; text-align:center; font-size:9px; color:#64748b; font-family:Arial,sans-serif;">
+          صفحة <span class="pageNumber"></span> من <span class="totalPages"></span>
+        </div>
+      `,
+      margins: {
+        top: 0,
+        right: 0,
+        bottom: 0.28,
+        left: 0,
+      },
+    })
+
+    console.log('PDF bytes:', pdfBuffer.length)
+    console.log('PDF header:', pdfBuffer.subarray(0, 5).toString())
+
+    if (!Buffer.isBuffer(pdfBuffer) || pdfBuffer.length < 1000) {
+      throw new Error('PDF generation returned invalid data.')
+    }
+
+    const header = pdfBuffer.subarray(0, 5).toString()
+    if (header !== '%PDF-') {
+      throw new Error('Generated file is not a valid PDF.')
+    }
+
+    await fs.writeFile(filePath, pdfBuffer)
+    console.log('Saved PDF:', filePath)
+
+    await shell.openPath(filePath)
+    return filePath
+  } finally {
+    if (readyHandler) {
+      ipcMain.removeListener('invoice-preview:ready', readyHandler)
+    }
+
+    if (!exportWindow.isDestroyed()) {
+      exportWindow.destroy()
+    }
+  }
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -265,6 +406,10 @@ ipcMain.handle('reports:getReportExportRows', async (_, { reportType, filters })
   await initDatabase()
   const db = getDatabase()
   return getReportExportRows(db, reportType, filters || {})
+})
+
+ipcMain.handle('invoice:exportPdf', async (_, { invoiceData, settings, fileName }) => {
+  return exportInvoicePdfFromHtml({ invoiceData, settings, fileName })
 })
 
 // Stock movements IPC

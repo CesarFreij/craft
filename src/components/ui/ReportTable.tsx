@@ -1,4 +1,13 @@
-import { Box, Table, TableBody, TableCell, TableContainer, TableHead, TablePagination, TableRow } from '@mui/material'
+import {
+  Box,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TablePagination,
+  TableRow,
+} from '@mui/material'
 
 export type ReportTableColumn = {
   key: string
@@ -18,49 +27,112 @@ interface ReportTableProps {
   loading?: boolean
 }
 
-export function ReportTable({ columns, rows, totalCount, page, pageSize, onPageChange, onRowsPerPageChange, loading }: ReportTableProps) {
+const craftReportTableSx = {
+  borderRadius: '18px',
+  overflow: 'hidden',
+  border: '1px solid rgba(255,255,255,.18)',
+  background: 'rgba(248,250,252,.055)',
+  backdropFilter: 'blur(20px) saturate(115%)',
+  WebkitBackdropFilter: 'blur(20px) saturate(115%)',
+
+  '& .MuiTable-root': {
+    background: 'transparent',
+    borderCollapse: 'collapse',
+  },
+
+  '& .MuiTableHead-root .MuiTableRow-root': {
+    background: 'rgba(255,255,255,.075)',
+  },
+
+  '& .MuiTableBody-root .MuiTableRow-root': {
+    background: 'rgba(255,255,255,.018)',
+  },
+
+  '& .MuiTableBody-root .MuiTableRow-root:hover': {
+    background: 'rgba(56,189,248,.075)',
+  },
+
+  '& .MuiTableCell-root': {
+    color: 'rgba(255,255,255,.88)',
+    border: '1px solid rgba(255,255,255,.16)',
+    whiteSpace: 'nowrap',
+  },
+
+  '& .MuiTableHead-root .MuiTableCell-root': {
+    color: 'rgba(255,255,255,.96)',
+    fontWeight: 800,
+  },
+}
+
+export function ReportTable({
+  columns,
+  rows,
+  totalCount,
+  page,
+  pageSize,
+  onPageChange,
+  onRowsPerPageChange,
+  loading,
+}: ReportTableProps) {
   return (
     <Box>
-      <TableContainer sx={{ borderRadius: 2, overflow: 'hidden', border: '1px solid #E2E8F0' }}>
-        <Table>
+      <TableContainer sx={craftReportTableSx}>
+        <Table size="small" sx={{ minWidth: 900 }}>
           <TableHead>
-            <TableRow sx={{ backgroundColor: '#F8FAFC' }}>
+            <TableRow>
               {columns.map((column) => (
-                <TableCell key={column.key} align={column.align ?? 'center'} sx={{ fontWeight: 700, backgroundColor: '#F8FAFC' }}>
+                <TableCell
+                  key={column.key}
+                  align={column.align ?? 'center'}
+                  sx={{ py: 1.6 }}
+                >
                   {column.label}
                 </TableCell>
               ))}
             </TableRow>
           </TableHead>
+
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={columns.length} align="center" sx={{ py: 5, color: '#64748B' }}>
+                <TableCell
+                  colSpan={columns.length}
+                  align="center"
+                  sx={{ py: 5 }}
+                >
                   جاري تحميل البيانات...
                 </TableCell>
               </TableRow>
             ) : rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={columns.length} align="center" sx={{ py: 5, color: '#64748B' }}>
+                <TableCell
+                  colSpan={columns.length}
+                  align="center"
+                  sx={{ py: 5 }}
+                >
                   لا توجد بيانات ضمن الفلاتر المحددة.
                 </TableCell>
               </TableRow>
             ) : (
               rows.map((row, index) => (
-                <TableRow key={`${row.id ?? index}`} hover>
+                <TableRow
+                  key={`${row.id ?? row.reference ?? index}`}
+                  hover
+                >
                   {columns.map((column) => {
                     const value = row[column.key]
+
                     return (
-                      <TableCell key={`${column.key}-${index}`} align={column.align ?? 'center'} sx={{ py: 1.5 }}>
+                      <TableCell
+                        key={`${column.key}-${index}`}
+                        align={column.align ?? 'center'}
+                        sx={{ py: 1.4 }}
+                      >
                         {column.render
-                            ? column.render(value, row)
-                            : value == null
-                            ? '-'
-                            : typeof value === 'string' || typeof value === 'number'
-                            ? value
-                            : typeof value === 'boolean'
-                                ? value ? 'نعم' : 'لا'
-                                : String(value)} 
+                          ? column.render(value, row)
+                          : value == null
+                            ? '—'
+                            : String(value)}
                       </TableCell>
                     )
                   })}
@@ -73,14 +145,25 @@ export function ReportTable({ columns, rows, totalCount, page, pageSize, onPageC
 
       <TablePagination
         component="div"
-        className="report-page-pagination"
         count={totalCount}
         page={page}
         rowsPerPage={pageSize}
-        onPageChange={(_, nextPage) => onPageChange(nextPage)}
-        onRowsPerPageChange={(event) => onRowsPerPageChange(Number(event.target.value))}
+        onPageChange={(_, value) => onPageChange(value)}
+        onRowsPerPageChange={(event) =>
+          onRowsPerPageChange(Number(event.target.value))
+        }
         labelRowsPerPage="عدد الصفوف"
         rowsPerPageOptions={[10, 25, 50, 100]}
+        sx={{
+          color: 'rgba(255,255,255,.96)',
+          '& .MuiTablePagination-selectLabel,& .MuiTablePagination-displayedRows': {
+            color: 'rgba(255,255,255,.92)',
+            fontWeight: 700,
+          },
+          '& .MuiIconButton-root': {
+            color: 'rgba(255,255,255,.95)',
+          },
+        }}
       />
     </Box>
   )

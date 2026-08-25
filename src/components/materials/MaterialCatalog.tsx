@@ -157,6 +157,15 @@ const craftDialogSlotProps = {
         WebkitTextFillColor: 'rgba(255, 255, 255, 0.48)',
       },
 
+      '& input[type="number"]': {
+        colorScheme: 'dark',
+      },
+
+      '& input[type="number"]::-webkit-inner-spin-button, & input[type="number"]::-webkit-outer-spin-button': {
+        opacity: 0.88,
+        cursor: 'pointer',
+      },
+
       '& .MuiInputLabel-root': {
         color: 'rgba(226, 232, 240, 0.72)',
       },

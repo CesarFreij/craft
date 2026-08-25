@@ -14,6 +14,26 @@ let dbInstance = null
 let dbDir = null
 let dbFile = null
 
+function ensureInvoiceFeeColumns(db) {
+  const ensureColumns = (tableName, columns) => {
+    const existingColumns = db.exec(`PRAGMA table_info(${tableName})`)[0]?.values ?? []
+    const existingNames = new Set(existingColumns.map((column) => String(column[1])))
+
+    for (const column of columns) {
+      if (!existingNames.has(column.name)) {
+        db.run(`ALTER TABLE ${tableName} ADD COLUMN ${column.name} ${column.definition}`)
+      }
+    }
+  }
+
+  ensureColumns('purchase_invoices', [
+    { name: 'expenses', definition: 'REAL NOT NULL DEFAULT 0' },
+  ])
+  ensureColumns('sales_invoices', [
+    { name: 'customer_additional_fees', definition: 'REAL NOT NULL DEFAULT 0' },
+  ])
+}
+
 export async function initDatabase() {
   console.log('DATABASE INIT: START')
 
@@ -77,6 +97,7 @@ export async function initDatabase() {
         dbInstance = new SQL.Database()
         console.log('DATABASE INIT: SCHEMA START')
         initializeSchema(dbInstance)
+        ensureInvoiceFeeColumns(dbInstance)
         console.log('DATABASE INIT: SCHEMA COMPLETE')
 
         console.log('DATABASE INIT: EXPORT START')
@@ -92,6 +113,7 @@ export async function initDatabase() {
         dbInstance = new SQL.Database(binary)
         console.log('DATABASE INIT: SCHEMA START')
         initializeSchema(dbInstance)
+        ensureInvoiceFeeColumns(dbInstance)
         console.log('DATABASE INIT: SCHEMA COMPLETE')
 
         // persist any schema changes back to disk
@@ -412,6 +434,7 @@ function initializeSchema(db) {
       discount_value REAL NOT NULL DEFAULT 0,
       discount_amount REAL NOT NULL DEFAULT 0,
       net_total REAL NOT NULL DEFAULT 0,
+      expenses REAL NOT NULL DEFAULT 0,
       notes TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -482,6 +505,7 @@ function initializeSchema(db) {
       discount_value REAL NOT NULL DEFAULT 0,
       discount_amount REAL NOT NULL DEFAULT 0,
       net_total REAL NOT NULL DEFAULT 0,
+      customer_additional_fees REAL NOT NULL DEFAULT 0,
       status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','completed','cancelled')),
       notes TEXT,
       created_at TEXT NOT NULL,
@@ -664,6 +688,7 @@ function initializeSchema(db) {
       { name: 'discount_value', definition: 'discount_value REAL NOT NULL DEFAULT 0' },
       { name: 'discount_amount', definition: 'discount_amount REAL NOT NULL DEFAULT 0' },
       { name: 'net_total', definition: 'net_total REAL NOT NULL DEFAULT 0' },
+      { name: 'expenses', definition: 'expenses REAL NOT NULL DEFAULT 0' },
       { name: 'notes', definition: 'notes TEXT' },
       { name: 'created_at', definition: 'created_at TEXT' },
       { name: 'updated_at', definition: 'updated_at TEXT' },
@@ -708,6 +733,7 @@ function initializeSchema(db) {
       { name: 'discount_value', definition: 'discount_value REAL NOT NULL DEFAULT 0' },
       { name: 'discount_amount', definition: 'discount_amount REAL NOT NULL DEFAULT 0' },
       { name: 'net_total', definition: 'net_total REAL NOT NULL DEFAULT 0' },
+      { name: 'customer_additional_fees', definition: 'customer_additional_fees REAL NOT NULL DEFAULT 0' },
       { name: 'status', definition: "status TEXT NOT NULL DEFAULT 'draft'" },
       { name: 'notes', definition: 'notes TEXT' },
       { name: 'created_at', definition: "created_at TEXT NOT NULL DEFAULT ''" },
@@ -937,7 +963,15 @@ function normalizeDiscount(discountType, discountValue, subtotal) {
   }
 }
 
-function buildPurchaseNetItemCosts(items, discountType, discountValue, subtotal) {
+function normalizeAdditionalFeeValue(value, fieldName) {
+  const numericValue = Number(value ?? 0)
+  if (Number.isNaN(numericValue) || numericValue < 0) {
+    throw new Error(`${fieldName} غير صالح.`)
+  }
+  return normalizeMoney(numericValue)
+}
+
+function buildPurchaseNetItemCosts(items, discountType, discountValue, subtotal, expenses = 0) {
   if (!Array.isArray(items) || items.length === 0) {
     return []
   }
@@ -945,8 +979,9 @@ function buildPurchaseNetItemCosts(items, discountType, discountValue, subtotal)
   const safeSubtotal = Number(subtotal ?? 0)
   const type = discountType ?? 'none'
   const value = Number(discountValue ?? 0)
+  const feeTotal = normalizeMoney(Number(expenses ?? 0))
 
-  if (type === 'none' || Number(value) <= 0 || safeSubtotal <= 0) {
+  if (safeSubtotal <= 0 && feeTotal <= 0) {
     return items.map((item) => ({
       ...item,
       netLineTotal: normalizeMoney(Number(item.lineTotal ?? 0)),
@@ -954,50 +989,34 @@ function buildPurchaseNetItemCosts(items, discountType, discountValue, subtotal)
     }))
   }
 
-  let adjustedItems = items.map((item) => ({ ...item, grossLineTotal: Number(item.lineTotal ?? 0), grossUnitPrice: Number(item.unitPrice ?? 0) }))
+  const totalGross = items.reduce((sum, item) => sum + Number(item.lineTotal ?? 0), 0)
+  const discountAmount = type === 'percentage' ? (safeSubtotal * value) / 100 : type === 'fixed' ? Math.min(Number(value), safeSubtotal) : 0
+  const totalNet = normalizeMoney(Math.max(safeSubtotal - discountAmount + feeTotal, 0))
 
-  if (type === 'percentage') {
-    const ratio = 1 - (Number(value) / 100)
-    adjustedItems = adjustedItems.map((item) => {
-      const netLineTotal = normalizeMoney(item.grossLineTotal * ratio)
-      const quantity = Number(item.quantity ?? 0)
-      return {
-        ...item,
-        netLineTotal,
-        netUnitPrice: quantity > 0 ? normalizeMoney(netLineTotal / quantity) : 0,
-      }
-    })
-  } else if (type === 'fixed') {
-    const fixedDiscount = Math.min(Number(value), safeSubtotal)
-    const totalGross = adjustedItems.reduce((sum, item) => sum + Number(item.grossLineTotal ?? 0), 0)
-    let remainingDiff = 0
+  let adjustedItems = items.map((item, index) => {
+    const grossLineTotal = Number(item.lineTotal ?? 0)
+    const share = totalGross > 0 ? grossLineTotal / totalGross : 0
+    const lineDiscount = type === 'none' || Number(value) <= 0 ? 0 : discountAmount * share
+    const lineExpense = totalGross > 0 ? feeTotal * share : feeTotal / Math.max(items.length, 1)
+    const rawNetLineTotal = grossLineTotal - lineDiscount + lineExpense
+    return {
+      ...item,
+      netLineTotal: normalizeMoney(rawNetLineTotal),
+      netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeMoney(rawNetLineTotal / Number(item.quantity)) : 0,
+      __index: index,
+    }
+  })
 
-    adjustedItems = adjustedItems.map((item, index) => {
-      const grossLineTotal = Number(item.grossLineTotal ?? 0)
-      const share = totalGross > 0 ? grossLineTotal / totalGross : 0
-      const rawNetLineTotal = grossLineTotal - (fixedDiscount * share)
-      const netLineTotal = normalizeMoney(rawNetLineTotal)
-      remainingDiff += normalizeMoney(grossLineTotal) - netLineTotal
-      return {
-        ...item,
-        netLineTotal,
-        netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeMoney(netLineTotal / Number(item.quantity)) : 0,
-        __index: index,
-      }
-    })
-
-    const netSum = adjustedItems.reduce((sum, item) => sum + Number(item.netLineTotal ?? 0), 0)
-    const expectedNet = normalizeMoney(safeSubtotal - fixedDiscount)
-    const diff = normalizeMoney(expectedNet - netSum)
-    if (Math.abs(diff) > 0 && adjustedItems.length > 0) {
-      const lastIndex = adjustedItems.length - 1
-      const lastItem = adjustedItems[lastIndex]
-      const lastItemNet = normalizeMoney(Number(lastItem.netLineTotal ?? 0) + diff)
-      adjustedItems[lastIndex] = {
-        ...lastItem,
-        netLineTotal: lastItemNet,
-        netUnitPrice: Number(lastItem.quantity ?? 0) > 0 ? normalizeMoney(lastItemNet / Number(lastItem.quantity)) : 0,
-      }
+  const netSum = adjustedItems.reduce((sum, item) => sum + Number(item.netLineTotal ?? 0), 0)
+  const diff = normalizeMoney(totalNet - netSum)
+  if (Math.abs(diff) > 0 && adjustedItems.length > 0) {
+    const lastIndex = adjustedItems.length - 1
+    const lastItem = adjustedItems[lastIndex]
+    const lastItemNet = normalizeMoney(Number(lastItem.netLineTotal ?? 0) + diff)
+    adjustedItems[lastIndex] = {
+      ...lastItem,
+      netLineTotal: lastItemNet,
+      netUnitPrice: Number(lastItem.quantity ?? 0) > 0 ? normalizeMoney(lastItemNet / Number(lastItem.quantity)) : 0,
     }
   }
 
@@ -1005,8 +1024,6 @@ function buildPurchaseNetItemCosts(items, discountType, discountValue, subtotal)
     ...item,
     netLineTotal: normalizeMoney(Number(item.netLineTotal ?? 0)),
     netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeMoney(Number(item.netLineTotal ?? 0) / Number(item.quantity)) : 0,
-    grossLineTotal: undefined,
-    grossUnitPrice: undefined,
     __index: undefined,
   }))
 }
@@ -1092,7 +1109,8 @@ function validatePurchaseInvoiceCore(db, payload) {
   })
 
   const discount = normalizeDiscount(payload.discountType, payload.discountValue, subtotal)
-  const costAdjustedItems = buildPurchaseNetItemCosts(validatedItems, discount.discountType, discount.discountValue, subtotal)
+  const expenses = normalizeAdditionalFeeValue(payload.expenses, 'مصاريف الفاتورة')
+  const costAdjustedItems = buildPurchaseNetItemCosts(validatedItems, discount.discountType, discount.discountValue, subtotal, expenses)
 
   return {
     supplier,
@@ -1108,6 +1126,8 @@ function validatePurchaseInvoiceCore(db, payload) {
     }),
     subtotal,
     ...discount,
+    expenses,
+    netTotal: normalizeMoney(subtotal - discount.discountAmount + expenses),
     supplierInvoiceNumber: String(payload.supplierInvoiceNumber ?? '').trim(),
     notes: String(payload.notes ?? '').trim(),
   }
@@ -1132,6 +1152,7 @@ function buildPurchaseInvoiceDetails(db, invoiceId) {
        pi.discount_value,
        pi.discount_amount,
        pi.net_total,
+       pi.expenses,
        pi.notes,
        pi.created_at,
        pi.updated_at
@@ -1190,12 +1211,13 @@ function buildPurchaseInvoiceDetails(db, invoiceId) {
     discountValue: Number(header[13] ?? 0),
     discountAmount: Number(header[14] ?? 0),
     netTotal: Number(header[15] ?? 0),
+    expenses: Number(header[16] ?? 0),
     paidAmount: paymentSummary.paidAmount,
     remainingAmount: paymentSummary.remainingAmount,
     paymentStatus: paymentSummary.paymentStatus,
-    notes: header[16] ?? '',
-    createdAt: header[17],
-    updatedAt: header[18],
+    notes: header[17] ?? '',
+    createdAt: header[18],
+    updatedAt: header[19],
     items: itemsRows.map((row) => ({
       id: row[0],
       materialId: row[1],
@@ -1299,6 +1321,7 @@ function buildPurchaseInvoiceList(filter = {}) {
        pi.subtotal,
        pi.discount_amount,
        pi.net_total,
+       pi.expenses,
        pi.status,
        COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
        pi.created_at,
@@ -1313,7 +1336,8 @@ function buildPurchaseInvoiceList(filter = {}) {
 
   return rows.map((row) => {
     const netTotal = Number(row[10] ?? 0)
-    const paidAmount = normalizeMoney(Number(row[12] ?? 0))
+    const expenses = Number(row[11] ?? 0)
+    const paidAmount = normalizeMoney(Number(row[13] ?? 0))
     const remainingAmount = normalizeMoney(netTotal - paidAmount)
     const paymentStatus = paidAmount <= 0 ? 'unpaid' : paidAmount < netTotal ? 'partial' : 'paid'
 
@@ -1329,12 +1353,13 @@ function buildPurchaseInvoiceList(filter = {}) {
       subtotal: Number(row[8] ?? 0),
       discountAmount: Number(row[9] ?? 0),
       netTotal,
+      expenses,
       paidAmount,
       remainingAmount,
       paymentStatus,
-      status: row[11],
-      createdAt: row[13],
-      updatedAt: row[14],
+      status: row[12],
+      createdAt: row[14],
+      updatedAt: row[15],
     }
   })
 }
@@ -1601,6 +1626,7 @@ function validateSalesInvoiceCore(db, payload) {
   })
 
   const discount = normalizeDiscount(payload.discountType, payload.discountValue, subtotal)
+  const customerAdditionalFees = normalizeAdditionalFeeValue(payload.customerAdditionalFees, 'رسوم العميل الإضافية')
   return {
     customer,
     warehouse,
@@ -1608,6 +1634,8 @@ function validateSalesInvoiceCore(db, payload) {
     items: validatedItems,
     subtotal,
     ...discount,
+    customerAdditionalFees,
+    netTotal: normalizeMoney(subtotal - discount.discountAmount + customerAdditionalFees),
     notes: String(payload.notes ?? '').trim(),
   }
 }
@@ -1674,6 +1702,7 @@ function buildSalesInvoiceDetails(db, invoiceId) {
        si.discount_value,
        si.discount_amount,
        si.net_total,
+       si.customer_additional_fees,
        si.notes,
        si.created_at,
        si.updated_at
@@ -1736,15 +1765,16 @@ function buildSalesInvoiceDetails(db, invoiceId) {
     discountValue: Number(header[12] ?? 0),
     discountAmount: Number(header[13] ?? 0),
     netTotal: Number(header[14] ?? 0),
+    customerAdditionalFees: Number(header[15] ?? 0),
     salesReturnTotal: paymentSummary.salesReturnTotal,
     netAfterReturns: paymentSummary.netAfterReturns,
     paidAmount: paymentSummary.paidAmount,
     remainingAmount: paymentSummary.remainingAmount,
     customerCredit: paymentSummary.customerCredit,
     paymentStatus: paymentSummary.paymentStatus,
-    notes: header[15] ?? '',
-    createdAt: header[16],
-    updatedAt: header[17],
+    notes: header[16] ?? '',
+    createdAt: header[17],
+    updatedAt: header[18],
     returns: salesReturnsRows.map((row) => ({
       id: row[0],
       returnNumber: row[1],
@@ -1819,6 +1849,7 @@ function buildSalesInvoiceList(filter = {}) {
        si.subtotal,
        si.discount_amount,
        si.net_total,
+       si.customer_additional_fees,
        si.status,
        COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) AS paid_amount,
        si.created_at,
@@ -1833,6 +1864,7 @@ function buildSalesInvoiceList(filter = {}) {
 
   return rows.map((row) => {
     const netTotal = Number(row[9] ?? 0)
+    const customerAdditionalFees = Number(row[10] ?? 0)
     const financialSummary = getSalesInvoiceFinancialSummary(db, row[0], netTotal)
 
     return {
@@ -1846,15 +1878,16 @@ function buildSalesInvoiceList(filter = {}) {
       subtotal: Number(row[7] ?? 0),
       discountAmount: Number(row[8] ?? 0),
       netTotal,
+      customerAdditionalFees,
       salesReturnTotal: financialSummary.salesReturnTotal,
       netAfterReturns: financialSummary.netAfterReturns,
       paidAmount: financialSummary.paidAmount,
       remainingAmount: financialSummary.remainingAmount,
       customerCredit: financialSummary.customerCredit,
       paymentStatus: financialSummary.paymentStatus,
-      status: row[10],
-      createdAt: row[12],
-      updatedAt: row[13],
+      status: row[11],
+      createdAt: row[13],
+      updatedAt: row[14],
     }
   })
 }
@@ -1985,8 +2018,8 @@ export function createSalesInvoiceDraft(payload) {
     db.run(
       `INSERT INTO sales_invoices (
          id, invoice_number, date, customer_id, warehouse_id, status,
-         subtotal, discount_type, discount_value, discount_amount, net_total, notes, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)` ,
+         subtotal, discount_type, discount_value, discount_amount, net_total, customer_additional_fees, notes, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [
         invoiceId,
         invoiceNumber,
@@ -1998,6 +2031,7 @@ export function createSalesInvoiceDraft(payload) {
         validated.discountValue,
         validated.discountAmount,
         validated.netTotal,
+        validated.customerAdditionalFees,
         validated.notes || null,
         now,
         now,
@@ -2061,7 +2095,7 @@ export function updateSalesInvoiceDraft(invoiceId, payload) {
     db.run(
       `UPDATE sales_invoices
        SET invoice_number = ?, date = ?, customer_id = ?, warehouse_id = ?,
-           subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, notes = ?, updated_at = ?
+           subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, customer_additional_fees = ?, notes = ?, updated_at = ?
        WHERE id = ?`,
       [
         invoiceNumber,
@@ -2073,6 +2107,7 @@ export function updateSalesInvoiceDraft(invoiceId, payload) {
         validated.discountValue,
         validated.discountAmount,
         validated.netTotal,
+        validated.customerAdditionalFees,
         validated.notes || null,
         now,
         invoiceId,
@@ -2178,7 +2213,7 @@ export function updateApprovedSalesInvoice(invoiceId, payload) {
 
     db.run(
       `UPDATE sales_invoices
-       SET date = ?, customer_id = ?, warehouse_id = ?, subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, notes = ?, updated_at = ?
+       SET date = ?, customer_id = ?, warehouse_id = ?, subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, customer_additional_fees = ?, notes = ?, updated_at = ?
        WHERE id = ?`,
       [
         validated.date,
@@ -2189,6 +2224,7 @@ export function updateApprovedSalesInvoice(invoiceId, payload) {
         validated.discountValue,
         validated.discountAmount,
         validated.netTotal,
+        validated.customerAdditionalFees,
         validated.notes || null,
         now,
         invoiceId,
@@ -2334,7 +2370,7 @@ export function completeSalesInvoice(invoiceId) {
 
     stage = 'load-invoice'
     const header = db.exec(
-      `SELECT id, invoice_number, date, customer_id, warehouse_id, status, discount_type, discount_value, notes
+      `SELECT id, invoice_number, date, customer_id, warehouse_id, status, discount_type, discount_value, customer_additional_fees, notes
        FROM sales_invoices WHERE id = ?`,
       [invoiceId]
     )[0]?.values?.[0]
@@ -2349,7 +2385,8 @@ export function completeSalesInvoice(invoiceId) {
       date: header[2],
       discountType: header[6],
       discountValue: header[7],
-      notes: header[8] ?? null,
+      customerAdditionalFees: Number(header[8] ?? 0),
+      notes: header[9] ?? null,
       items: db.exec(
         `SELECT material_id, quantity, unit_price, unit, notes
          FROM sales_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
@@ -2409,9 +2446,9 @@ export function completeSalesInvoice(invoiceId) {
     stage = 'update-invoice-status'
     db.run(
       `UPDATE sales_invoices
-       SET status = 'completed', subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, updated_at = ?
+       SET status = 'completed', subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, customer_additional_fees = ?, updated_at = ?
        WHERE id = ?`,
-      [validated.subtotal, validated.discountType, validated.discountValue, validated.discountAmount, validated.netTotal, now, invoiceId]
+      [validated.subtotal, validated.discountType, validated.discountValue, validated.discountAmount, validated.netTotal, validated.customerAdditionalFees, now, invoiceId]
     )
 
     db.run('COMMIT')
@@ -2603,8 +2640,8 @@ export function createPurchaseInvoiceDraft(payload) {
     db.run(
       `INSERT INTO purchase_invoices (
          id, invoice_number, supplier_invoice_number, date, supplier_id, warehouse_id, status,
-         subtotal, discount_type, discount_value, discount_amount, net_total, notes, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`,
+         subtotal, discount_type, discount_value, discount_amount, net_total, expenses, notes, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         invoiceId,
         invoiceNumber,
@@ -2617,6 +2654,7 @@ export function createPurchaseInvoiceDraft(payload) {
         validated.discountValue,
         validated.discountAmount,
         validated.netTotal,
+        validated.expenses,
         validated.notes || null,
         now,
         now,
@@ -2688,7 +2726,7 @@ export function updatePurchaseInvoiceDraft(invoiceId, payload) {
     db.run(
       `UPDATE purchase_invoices
        SET invoice_number = ?, supplier_invoice_number = ?, date = ?, supplier_id = ?, warehouse_id = ?,
-           subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, notes = ?, updated_at = ?
+           subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, expenses = ?, notes = ?, updated_at = ?
        WHERE id = ?`,
       [
         invoiceNumber,
@@ -2701,6 +2739,7 @@ export function updatePurchaseInvoiceDraft(invoiceId, payload) {
         validated.discountValue,
         validated.discountAmount,
         validated.netTotal,
+        validated.expenses,
         validated.notes || null,
         now,
         invoiceId,
@@ -2789,7 +2828,7 @@ export function updateApprovedPurchaseInvoice(invoiceId, payload) {
 
     db.run(
       `UPDATE purchase_invoices
-       SET supplier_invoice_number = ?, date = ?, supplier_id = ?, warehouse_id = ?, subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, notes = ?, updated_at = ?
+       SET supplier_invoice_number = ?, date = ?, supplier_id = ?, warehouse_id = ?, subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, expenses = ?, notes = ?, updated_at = ?
        WHERE id = ?`,
       [
         validated.supplierInvoiceNumber || null,
@@ -2801,6 +2840,7 @@ export function updateApprovedPurchaseInvoice(invoiceId, payload) {
         validated.discountValue,
         validated.discountAmount,
         validated.netTotal,
+        validated.expenses,
         validated.notes || null,
         now,
         invoiceId,
@@ -2968,7 +3008,7 @@ export function completePurchaseInvoice(invoiceId) {
 
     stage = 'load-invoice'
     const header = db.exec(
-      `SELECT id, invoice_number, date, supplier_id, warehouse_id, status, discount_type, discount_value, notes
+      `SELECT id, invoice_number, date, supplier_id, warehouse_id, status, discount_type, discount_value, expenses, notes
        FROM purchase_invoices WHERE id = ?`,
       [invoiceId]
     )[0]?.values?.[0]
@@ -2986,8 +3026,9 @@ export function completePurchaseInvoice(invoiceId) {
       date: header[2],
       discountType: header[6],
       discountValue: header[7],
+      expenses: Number(header[8] ?? 0),
       supplierInvoiceNumber: null,
-      notes: header[8] ?? null,
+      notes: header[9] ?? null,
       items: db.exec(
         `SELECT material_id, quantity, unit_price, unit, notes
          FROM purchase_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
@@ -3051,9 +3092,9 @@ export function completePurchaseInvoice(invoiceId) {
     stage = 'update-invoice-status'
     db.run(
       `UPDATE purchase_invoices
-       SET status = 'completed', subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, updated_at = ?
+       SET status = 'completed', subtotal = ?, discount_type = ?, discount_value = ?, discount_amount = ?, net_total = ?, expenses = ?, updated_at = ?
        WHERE id = ?`,
-      [validated.subtotal, validated.discountType, validated.discountValue, validated.discountAmount, validated.netTotal, now, invoiceId]
+      [validated.subtotal, validated.discountType, validated.discountValue, validated.discountAmount, validated.netTotal, validated.expenses, now, invoiceId]
     )
 
     stage = 'commit'

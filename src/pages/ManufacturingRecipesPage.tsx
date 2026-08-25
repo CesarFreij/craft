@@ -425,6 +425,41 @@ function formatRecipeMaterialLabel(material: MaterialRecord): string {
   return `${material.materialNumber} - ${material.name}`
 }
 
+const numberFormatter = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+function roundToTwo(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+function formatNumber(value: number | string | null | undefined): string {
+  const numericValue = Number(value ?? 0)
+  return Number.isFinite(numericValue) ? numberFormatter.format(numericValue) : '0.00'
+}
+
+function formatEditableNumber(value: number | string | null | undefined): string {
+  const numericValue = Number(value ?? 0)
+  return Number.isFinite(numericValue) ? roundToTwo(numericValue).toFixed(2) : '0.00'
+}
+
+function formatInteger(value: number | string | null | undefined): string {
+  const numericValue = Number(value ?? 0)
+
+  if (!Number.isFinite(numericValue)) {
+    return '0'
+  }
+
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 0,
+  }).format(numericValue)
+}
+
 // materialsService.listMaterials() returns a hierarchical tree (children nested), so options must be flattened.
 function flattenStockableSubMaterials(nodes: MaterialRecord[]): MaterialRecord[] {
   const result: MaterialRecord[] = []
@@ -532,13 +567,13 @@ export function ManufacturingRecipesPage() {
     setForm({
       name: details.name,
       productMaterialId: details.productMaterialId,
-      standardOutputQuantity: String(details.standardOutputQuantity),
+      standardOutputQuantity: formatEditableNumber(details.standardOutputQuantity),
       status: details.status,
       notes: details.notes ?? '',
       items: (details.items ?? []).map((item) => ({
         id: item.id,
         materialId: item.materialId,
-        quantity: String(item.quantity),
+        quantity: formatEditableNumber(item.quantity),
         notes: item.notes ?? '',
       })),
     })
@@ -674,12 +709,12 @@ export function ManufacturingRecipesPage() {
     const payload: ManufacturingRecipePayload = {
       name: form.name.trim(),
       productMaterialId: form.productMaterialId,
-      standardOutputQuantity: Number(form.standardOutputQuantity),
+      standardOutputQuantity: roundToTwo(Number(form.standardOutputQuantity)),
       notes: form.notes.trim(),
       status: form.status,
       items: form.items.map((item) => ({
         materialId: item.materialId,
-        quantity: Number(item.quantity),
+        quantity: roundToTwo(Number(item.quantity)),
         notes: item.notes.trim(),
         sortOrder: 0,
       })),
@@ -750,9 +785,9 @@ export function ManufacturingRecipesPage() {
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.recipeNumber}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.name}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.productName}</Box>
-                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.standardOutputQuantity}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatNumber(recipe.standardOutputQuantity)}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.unit || '—'}</Box>
-                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.componentCount}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatInteger(recipe.componentCount)}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>
                     <Box component="span" sx={{ display: 'inline-flex', px: 1.3, py: 0.6, borderRadius: 999, background: recipe.status === 'active' ? 'rgba(34, 211, 238, 0.16)' : 'rgba(148, 163, 184, 0.12)', color: recipe.status === 'active' ? '#67E8F9' : '#C7D2E0', border: recipe.status === 'active' ? '1px solid rgba(34, 211, 238, 0.32)' : '1px solid rgba(148, 163, 184, 0.28)', fontSize: 12, fontWeight: 700 }}>
                       {recipe.status === 'active' ? 'فعال' : 'غير فعال'}
@@ -826,7 +861,15 @@ export function ManufacturingRecipesPage() {
               type="number"
               value={form.standardOutputQuantity}
               onChange={(event) => setForm((current) => ({ ...current, standardOutputQuantity: event.target.value }))}
-              slotProps={{ htmlInput: { min: 0, step: 1 } }}
+              onBlur={() => {
+                setForm((current) => ({
+                  ...current,
+                  standardOutputQuantity: current.standardOutputQuantity
+                    ? formatEditableNumber(current.standardOutputQuantity)
+                    : '',
+                }))
+              }}
+              slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
               required
               fullWidth
             />
@@ -902,10 +945,15 @@ export function ManufacturingRecipesPage() {
                             type="number"
                             value={item.quantity}
                             onChange={(event) => handleItemChange(item.id, 'quantity', event.target.value)}
+                            onBlur={() => {
+                              if (item.quantity) {
+                                handleItemChange(item.id, 'quantity', formatEditableNumber(item.quantity))
+                              }
+                            }}
                             variant="outlined"
                             size="small"
                             fullWidth
-                            slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                            slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
                             sx={{ '& input': { textAlign: 'center' } }}
                           />
                         </Box>
@@ -947,7 +995,7 @@ export function ManufacturingRecipesPage() {
                 <TextField label="رقم النموذج" value={selectedRecipe.recipeNumber} slotProps={{ input: { readOnly: true }}} fullWidth />
                 <TextField label="اسم النموذج" value={selectedRecipe.name} slotProps={{ input: { readOnly: true }}} fullWidth />
                 <TextField label="المنتج" value={selectedRecipe.productName} slotProps={{ input: { readOnly: true }}} fullWidth />
-                <TextField label="الكمية القياسية" value={selectedRecipe.standardOutputQuantity} slotProps={{ input: { readOnly: true }}} fullWidth />
+                <TextField label="الكمية القياسية" value={formatNumber(selectedRecipe.standardOutputQuantity)} slotProps={{ input: { readOnly: true }}} fullWidth />
                 <TextField label="الوحدة" value={selectedRecipe.unit} slotProps={{ input: { readOnly: true }}} fullWidth />
                 <TextField label="الحالة" value={selectedRecipe.status === 'active' ? 'فعال' : 'غير فعال'} slotProps={{ input: { readOnly: true }}} fullWidth />
               </Box>
@@ -977,7 +1025,7 @@ export function ManufacturingRecipesPage() {
                         <Box component="tr" key={item.id}>
                           <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{item.materialName}</Box>
                           <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{item.unit}</Box>
-                          <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{item.quantity}</Box>
+                          <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{formatNumber(item.quantity)}</Box>
                           <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{item.notes || '—'}</Box>
                         </Box>
                       ))}

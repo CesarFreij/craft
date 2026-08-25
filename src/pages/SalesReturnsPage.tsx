@@ -32,7 +32,8 @@ import {
 } from '../services/purchasesService'
 import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-
+import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
+import type { InvoicePrintData } from '../types/invoicePrint'
 
 const darkPopupPaperSx = {
   mt: 0.75,
@@ -642,6 +643,63 @@ export function SalesReturnsPage() {
     }
   }, [])
 
+  const buildSalesReturnExportData = useCallback((): InvoicePrintData | null => {
+    if (!selectedReturn) {
+      return null
+    }
+
+    const subtotal = (selectedReturn.items ?? []).reduce(
+      (sum, item) => sum + Number(item.lineTotal ?? 0),
+      0,
+    )
+
+    return {
+      documentType: 'sale_return' as InvoicePrintData['documentType'],
+      title: 'مرتجع مبيعات',
+      documentNumber: selectedReturn.returnNumber,
+      date: formatDateDMY(selectedReturn.date),
+
+      partyLabel: 'العميل',
+      partyName: selectedReturn.customerName,
+
+      referenceLabel: 'الفاتورة الأصلية',
+      referenceValue: selectedReturn.salesInvoiceNumber,
+
+      notes: selectedReturn.notes ?? '',
+
+      items: (selectedReturn.items ?? []).map((item) => ({
+        id: item.id,
+        materialNumber: item.materialNumber ?? '',
+        name: item.materialName,
+        unit: item.unit ?? '',
+        quantity: Number(item.quantity ?? 0),
+        price: Number(item.unitPrice ?? 0),
+        total: Number(item.lineTotal ?? 0),
+      })),
+
+      subtotal,
+      discount: 0,
+      total: Number(selectedReturn.netTotal ?? subtotal),
+    }
+  }, [selectedReturn])
+
+  const handleExportPdf = useCallback(() => {
+    const exportData = buildSalesReturnExportData()
+
+    if (!exportData) {
+      return
+    }
+
+    const latestSettings = loadCompanyPrintSettings()
+
+    navigate('/invoice-preview', {
+      state: {
+        invoiceData: exportData,
+        settings: latestSettings,
+      },
+    })
+  }, [buildSalesReturnExportData, navigate])
+
   const openReturnDetails = useCallback(async (returnId: string) => {
     try {
       const details = await salesService.getReturnById(returnId)
@@ -1035,8 +1093,9 @@ export function SalesReturnsPage() {
             </Box>
           )}
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
           <Button onClick={() => setDetailsOpen(false)}>إغلاق</Button>
+          <Button variant="contained" onClick={() => { void handleExportPdf() }}>تصدير PDF</Button>
         </DialogActions>
       </Dialog>
     </Box>
