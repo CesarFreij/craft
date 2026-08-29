@@ -24,7 +24,8 @@ import {
   type ManufacturingRecipeRecord,
 } from '../services/manufacturingService'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-
+import { formatNumberBySettings } from '../utils/displayFormatting'
+import { useNotifications } from '../contexts/useNotifications'
 
 const darkPopupPaperSx = {
   mt: 0.75,
@@ -425,11 +426,6 @@ function formatRecipeMaterialLabel(material: MaterialRecord): string {
   return `${material.materialNumber} - ${material.name}`
 }
 
-const numberFormatter = new Intl.NumberFormat('en-US', {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
-
 function roundToTwo(value: number): number {
   if (!Number.isFinite(value)) {
     return 0
@@ -439,8 +435,7 @@ function roundToTwo(value: number): number {
 }
 
 function formatNumber(value: number | string | null | undefined): string {
-  const numericValue = Number(value ?? 0)
-  return Number.isFinite(numericValue) ? numberFormatter.format(numericValue) : '0.00'
+  return formatNumberBySettings(value, 'quantity')
 }
 
 function formatEditableNumber(value: number | string | null | undefined): string {
@@ -485,6 +480,7 @@ function flattenStockableSubMaterials(nodes: MaterialRecord[]): MaterialRecord[]
 }
 
 export function ManufacturingRecipesPage() {
+  const notify = useNotifications()
   const [recipes, setRecipes] = useState<ManufacturingRecipeRecord[]>([])
   const [materials, setMaterials] = useState<MaterialRecord[]>([])
   const [newRecipeOpen, setNewRecipeOpen] = useState(false)
@@ -496,6 +492,7 @@ export function ManufacturingRecipesPage() {
   const [recipeNumberPreview, setRecipeNumberPreview] = useState('BOM-000001')
   const [form, setForm] = useState<RecipeFormState>(emptyFormState)
   const [errorMessage, setErrorMessage] = useState('')
+  const [deleteErrorMessage, setDeleteErrorMessage] = useState('')
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
 
@@ -725,8 +722,10 @@ export function ManufacturingRecipesPage() {
 
       if (editingRecipeId) {
         await manufacturingService.updateRecipe(editingRecipeId, payload)
+        notify.info('تم تعديل نموذج التصنيع بنجاح.')
       } else {
         await manufacturingService.createRecipe(payload)
+        notify.success('تم إنشاء نموذج التصنيع بنجاح.')
       }
 
       await loadRecipes()
@@ -743,12 +742,21 @@ export function ManufacturingRecipesPage() {
     }
 
     try {
-      await manufacturingService.deleteRecipe(recipeToDelete.id)
+      const deleted = await manufacturingService.deleteRecipe(recipeToDelete.id)
+      if (!deleted) {
+        setDeleteErrorMessage('لا يمكن حذف نموذج التصنيع لأنه مستخدم في أمر إنتاج.')
+        return
+      }
+
       setDeleteDialogOpen(false)
       setRecipeToDelete(null)
+      setDeleteErrorMessage('')
+      setErrorMessage('')
       await loadRecipes()
+      notify.error('تم حذف نموذج التصنيع بنجاح.')
     } catch (error) {
-      setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حذف نموذج التصنيع. يرجى المحاولة مرة أخرى.'))
+      const message = getUserFriendlyErrorMessage(error, 'تعذر حذف نموذج التصنيع. يرجى المحاولة مرة أخرى.')
+      setDeleteErrorMessage(message)
     }
   }
 
@@ -1041,9 +1049,13 @@ export function ManufacturingRecipesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
+      <Dialog open={deleteDialogOpen} onClose={() => {
+        setDeleteErrorMessage('')
+        setDeleteDialogOpen(false)
+      }} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>تأكيد حذف نموذج التصنيع</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2 }}>
+          {deleteErrorMessage ? <Alert severity="error" sx={craftErrorAlertSx}>{deleteErrorMessage}</Alert> : null}
           <Box>هل أنت متأكد من حذف نموذج التصنيع؟</Box>
           {recipeToDelete ? (
             <Box sx={{ display: 'grid', gap: 1 }}>
@@ -1053,7 +1065,10 @@ export function ManufacturingRecipesPage() {
           ) : null}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>تراجع</Button>
+          <Button onClick={() => {
+            setDeleteErrorMessage('')
+            setDeleteDialogOpen(false)
+          }}>تراجع</Button>
           <Button variant="contained" color="error" onClick={() => { void handleDeleteRecipe() }}>حذف</Button>
         </DialogActions>
       </Dialog>

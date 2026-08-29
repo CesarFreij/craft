@@ -5,7 +5,7 @@ import { SectionCard } from '../components/ui/SectionCard'
 import { SearchField } from '../components/ui/SearchField'
 import { inventoryService } from '../services/inventoryService'
 import type { StockBalanceRecord, WarehouseRecord } from '../services/inventoryService'
-import { formatDisplayNumber } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatNumberBySettings } from '../utils/displayFormatting'
 
 const darkPopupPaperSx = {
   mt: 0.75,
@@ -259,7 +259,7 @@ export function StockBalancesPage() {
               color: 'rgba(255, 255, 255, 0.94)',
             }}
           >
-            إجمالي قيمة المخزون: {formatDisplayNumber(totalStockValue, 2)}
+            إجمالي قيمة المخزون: {formatCurrencyValue(totalStockValue, 'price')}
           </Typography>
         </Box>
 
@@ -301,13 +301,13 @@ export function StockBalancesPage() {
                       {r.unit ?? ''}
                     </Box>
                     <Box component="td" sx={{ textAlign: 'center', p: 2, fontWeight: 700 }}>
-                      {formatDisplayNumber(r.quantity, 2)}
+                      {formatNumberBySettings(r.quantity, 'quantity')}
                     </Box>
                     <Box component="td" sx={{ textAlign: 'center', p: 2 }}>
-                      {formatDisplayNumber(r.averageCost, 4)}
+                      {formatCurrencyValue(r.averageCost, 'average')}
                     </Box>
                     <Box component="td" sx={{ textAlign: 'center', p: 2, fontWeight: 700 }}>
-                      {formatDisplayNumber(r.stockValue, 2)}
+                      {formatCurrencyValue(r.stockValue, 'price')}
                     </Box>
                   </Box>
                 ))}

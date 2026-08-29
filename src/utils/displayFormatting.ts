@@ -1,3 +1,4 @@
+import { loadSettings } from '../services/settingsService'
 const ARABIC_DIGITS: Record<string, string> = {
   '٠': '0',
   '١': '1',
@@ -41,6 +42,30 @@ export function formatDisplayNumber(value: number | string | null | undefined, d
   }).format(raw)
 
   return toEnglishDigits(formatted)
+}
+
+export function formatNumberBySettings(value: number | string | null | undefined, kind: 'quantity' | 'price' | 'average' = 'price'): string {
+  const { quantityDecimals, priceDecimals, averageDecimals } = loadSettings()
+  const digits = kind === 'quantity' ? quantityDecimals : kind === 'average' ? averageDecimals : priceDecimals
+  return formatDisplayNumber(value, digits)
+}
+
+export function formatCurrencyValue(
+  value: number | string | null | undefined,
+  kindOrDigits: 'quantity' | 'price' | 'average' | number = 'price',
+): string {
+  const { currencySymbol, quantityDecimals, priceDecimals, averageDecimals } = loadSettings()
+
+  const digits = typeof kindOrDigits === 'number'
+    ? kindOrDigits
+    : kindOrDigits === 'quantity'
+      ? quantityDecimals
+      : kindOrDigits === 'average'
+        ? averageDecimals
+        : priceDecimals
+
+  const formattedValue = formatDisplayNumber(value, digits)
+  return `${formattedValue} ${currencySymbol}`.trim()
 }
 
 export function formatDateYMD(value: string | Date | null | undefined): string {

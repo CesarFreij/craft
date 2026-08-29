@@ -154,6 +154,71 @@ export function getDatabase() {
   return dbInstance
 }
 
+export function resetDatabaseConnection() {
+  dbInstance = null
+  SQL = null
+}
+
+export function getDatabaseFilePath() {
+  return dbFile
+}
+
+export async function createDatabaseBackup(targetDirectory) {
+  await initDatabase()
+
+  if (!dbFile || !fs.existsSync(dbFile)) {
+    throw new Error('لا يوجد ملف قاعدة بيانات لعمل نسخة احتياطية.')
+  }
+
+  const backupDirectory = targetDirectory && targetDirectory.trim().length > 0 ? targetDirectory : path.dirname(dbFile)
+  fs.mkdirSync(backupDirectory, { recursive: true })
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupPath = path.join(backupDirectory, `craft-backup-${timestamp}.sqlite`)
+  fs.copyFileSync(dbFile, backupPath)
+
+  return { filePath: backupPath, fileName: path.basename(backupPath) }
+}
+
+export async function restoreDatabaseFromBackup(backupFilePath) {
+  if (!backupFilePath || !backupFilePath.trim()) {
+    throw new Error('لم يتم اختيار ملف النسخة الاحتياطية.')
+  }
+
+  if (!fs.existsSync(backupFilePath)) {
+    throw new Error('ملف النسخة الاحتياطية غير موجود.')
+  }
+
+  await initDatabase()
+
+  if (!dbFile) {
+    throw new Error('مسار قاعدة البيانات غير موجود.')
+  }
+
+  fs.copyFileSync(backupFilePath, dbFile)
+  resetDatabaseConnection()
+  await initDatabase()
+
+  return { dbFile }
+}
+
+export async function resetDatabase({ confirmationText } = {}) {
+  if (typeof confirmationText !== 'string' || confirmationText.trim() !== 'RESET DATABASE') {
+    throw new Error('تأكيد إعادة تعيين قاعدة البيانات غير صحيح.')
+  }
+
+  await initDatabase()
+
+  if (dbFile && fs.existsSync(dbFile)) {
+    fs.unlinkSync(dbFile)
+  }
+
+  resetDatabaseConnection()
+  await initDatabase()
+
+  return { dbFile }
+}
+
 function initializeSchema(db) {
   const ensureColumns = (tableName, columns) => {
     const existingColumns = db.exec(`PRAGMA table_info(${tableName})`)[0]?.values ?? []
@@ -558,6 +623,7 @@ function initializeSchema(db) {
       supplier_id TEXT NOT NULL,
       warehouse_id TEXT NOT NULL,
       purchase_invoice_id TEXT NOT NULL,
+      original_invoice_number TEXT,
       notes TEXT,
       subtotal REAL NOT NULL DEFAULT 0,
       discount_amount REAL NOT NULL DEFAULT 0,
@@ -590,6 +656,7 @@ function initializeSchema(db) {
       customer_id TEXT NOT NULL,
       warehouse_id TEXT NOT NULL,
       sales_invoice_id TEXT NOT NULL,
+      original_invoice_number TEXT,
       notes TEXT,
       subtotal REAL NOT NULL DEFAULT 0,
       discount_amount REAL NOT NULL DEFAULT 0,
@@ -694,6 +761,32 @@ function initializeSchema(db) {
       { name: 'updated_at', definition: 'updated_at TEXT' },
     ])
 
+    ensureColumns('purchase_returns', [
+      { name: 'original_invoice_number', definition: 'original_invoice_number TEXT' },
+    ])
+
+    ensureColumns('sales_returns', [
+      { name: 'original_invoice_number', definition: 'original_invoice_number TEXT' },
+    ])
+
+    const purchaseReturnsToBackfill = db.exec(`SELECT id, purchase_invoice_id FROM purchase_returns WHERE original_invoice_number IS NULL OR original_invoice_number = ''`)[0]?.values ?? []
+    for (const [returnId, purchaseInvoiceId] of purchaseReturnsToBackfill) {
+      if (!returnId || !purchaseInvoiceId) continue
+      const invoiceNumberRow = db.exec(`SELECT invoice_number FROM purchase_invoices WHERE id = ?`, [purchaseInvoiceId])[0]?.values?.[0]?.[0]
+      if (invoiceNumberRow) {
+        db.run(`UPDATE purchase_returns SET original_invoice_number = ? WHERE id = ?`, [String(invoiceNumberRow).trim(), returnId])
+      }
+    }
+
+    const salesReturnsToBackfill = db.exec(`SELECT id, sales_invoice_id FROM sales_returns WHERE original_invoice_number IS NULL OR original_invoice_number = ''`)[0]?.values ?? []
+    for (const [returnId, salesInvoiceId] of salesReturnsToBackfill) {
+      if (!returnId || !salesInvoiceId) continue
+      const invoiceNumberRow = db.exec(`SELECT invoice_number FROM sales_invoices WHERE id = ?`, [salesInvoiceId])[0]?.values?.[0]?.[0]
+      if (invoiceNumberRow) {
+        db.run(`UPDATE sales_returns SET original_invoice_number = ? WHERE id = ?`, [String(invoiceNumberRow).trim(), returnId])
+      }
+    }
+
     ensureColumns('purchase_invoice_items', [
       { name: 'invoice_id', definition: "invoice_id TEXT NOT NULL DEFAULT ''" },
       { name: 'material_id', definition: "material_id TEXT NOT NULL DEFAULT ''" },
@@ -709,6 +802,7 @@ function initializeSchema(db) {
       { name: 'date', definition: "date TEXT NOT NULL DEFAULT ''" },
       { name: 'amount', definition: 'amount REAL NOT NULL DEFAULT 0' },
       { name: 'notes', definition: 'notes TEXT' },
+      { name: 'payment_method', definition: "payment_method TEXT NOT NULL DEFAULT ''" },
       { name: 'created_at', definition: "created_at TEXT NOT NULL DEFAULT ''" },
     ])
 
@@ -757,6 +851,7 @@ function initializeSchema(db) {
       { name: 'date', definition: "date TEXT NOT NULL DEFAULT ''" },
       { name: 'amount', definition: 'amount REAL NOT NULL DEFAULT 0' },
       { name: 'notes', definition: 'notes TEXT' },
+      { name: 'payment_method', definition: "payment_method TEXT NOT NULL DEFAULT ''" },
       { name: 'created_at', definition: "created_at TEXT NOT NULL DEFAULT ''" },
     ])
   } catch (error) {
@@ -1187,7 +1282,7 @@ function buildPurchaseInvoiceDetails(db, invoiceId) {
 
   const paymentSummary = getPurchasePaymentSummary(db, invoiceId, Number(header[15] ?? 0))
   const paymentsRows = db.exec(
-    `SELECT id, invoice_id, date, amount, notes, created_at
+    `SELECT id, invoice_id, date, amount, notes, payment_method, created_at
      FROM purchase_payments
      WHERE invoice_id = ?
      ORDER BY date DESC, created_at DESC`,
@@ -1235,7 +1330,8 @@ function buildPurchaseInvoiceDetails(db, invoiceId) {
       date: row[2],
       amount: normalizeMoney(Number(row[3] ?? 0)),
       notes: row[4] ?? '',
-      createdAt: row[5],
+      paymentMethod: row[5] ?? '',
+      createdAt: row[6],
     })),
   }
 }
@@ -1364,26 +1460,32 @@ function buildPurchaseInvoiceList(filter = {}) {
   })
 }
 
-function getNextPurchaseInvoiceNumber(db) {
+function getNextDocumentNumberFromMax(db, tableName, columnName, prefix) {
   const rows = db.exec(
-    `SELECT invoice_number FROM purchase_invoices WHERE invoice_number LIKE 'PUR-%' ORDER BY invoice_number ASC`
+    `SELECT ${columnName} FROM ${tableName} WHERE ${columnName} LIKE ? ORDER BY ${columnName} ASC`,
+    [`${prefix}-%`]
   )[0]?.values ?? []
 
-  const used = new Set(
-    rows
-      .map((row) => String(row[0] ?? '').trim())
-      .filter((value) => /^PUR-\d{6}(?:-DRAFT)?$/i.test(value) || /^PUR-\d+(?:-DRAFT)?$/i.test(value))
-      .map((value) => value.toUpperCase())
-  )
+  let maxNumber = 0
 
-  let next = 1
-  while (true) {
-    const candidate = `PUR-${String(next).padStart(6, '0')}`
-    if (!used.has(candidate) && !used.has(`${candidate}-DRAFT`)) {
-      return candidate
+  for (const row of rows) {
+    const value = String(row[0] ?? '').trim()
+    const match = value.match(new RegExp(`^${prefix}-(\\d+)(?:-DRAFT)?$`, 'i'))
+    if (!match) {
+      continue
     }
-    next += 1
+
+    const parsed = Number(match[1])
+    if (Number.isFinite(parsed) && parsed > maxNumber) {
+      maxNumber = parsed
+    }
   }
+
+  return `${prefix}-${String(maxNumber + 1).padStart(6, '0')}`
+}
+
+function getNextPurchaseInvoiceNumber(db) {
+  return getNextDocumentNumberFromMax(db, 'purchase_invoices', 'invoice_number', 'PUR')
 }
 
 export function listSuppliers() {
@@ -1538,25 +1640,7 @@ function getValidSellableMaterial(db, materialId) {
 }
 
 function getNextSalesInvoiceNumber(db) {
-  const rows = db.exec(
-    `SELECT invoice_number FROM sales_invoices WHERE invoice_number LIKE 'SAL-%' ORDER BY invoice_number ASC`
-  )[0]?.values ?? []
-
-  const used = new Set(
-    rows
-      .map((row) => String(row[0] ?? '').trim())
-      .filter((value) => /^SAL-\d{6}(?:-DRAFT)?$/i.test(value) || /^SAL-\d+(?:-DRAFT)?$/i.test(value))
-      .map((value) => value.toUpperCase())
-  )
-
-  let next = 1
-  while (true) {
-    const candidate = `SAL-${String(next).padStart(6, '0')}`
-    if (!used.has(candidate) && !used.has(`${candidate}-DRAFT`)) {
-      return candidate
-    }
-    next += 1
-  }
+  return getNextDocumentNumberFromMax(db, 'sales_invoices', 'invoice_number', 'SAL')
 }
 
 function validateSalesInvoiceCore(db, payload) {
@@ -1742,7 +1826,7 @@ function buildSalesInvoiceDetails(db, invoiceId) {
     [invoiceId]
   )[0]?.values ?? []
   const paymentsRows = db.exec(
-    `SELECT id, invoice_id, date, amount, notes, created_at
+    `SELECT id, invoice_id, date, amount, notes, payment_method, created_at
      FROM sales_payments
      WHERE invoice_id = ?
      ORDER BY date DESC, created_at DESC`,
@@ -1798,7 +1882,8 @@ function buildSalesInvoiceDetails(db, invoiceId) {
       date: row[2],
       amount: normalizeMoney(Number(row[3] ?? 0)),
       notes: row[4] ?? '',
-      createdAt: row[5],
+      paymentMethod: row[5] ?? '',
+      createdAt: row[6],
     })),
   }
 }
@@ -2525,9 +2610,11 @@ export function addSalesPayment(invoiceId, payload = {}) {
   const amount = Number(payload.amount ?? 0)
   const date = String(payload.date ?? '').trim()
   const notes = String(payload.notes ?? '').trim()
+  const paymentMethod = String(payload.paymentMethod ?? '').trim()
 
   if (!invoiceId) throw new Error('لم يتم تحديد الفاتورة.')
   if (!date) throw new Error('تاريخ الدفعة مطلوب.')
+  if (!paymentMethod) throw new Error('طريقة الدفع مطلوبة.')
   if (!Number.isFinite(amount) || amount <= 0) throw new Error('قيمة الدفعة يجب أن تكون أكبر من صفر.')
 
   const invoice = db.exec(
@@ -2548,14 +2635,14 @@ export function addSalesPayment(invoiceId, payload = {}) {
   const paymentId = `sp-${crypto.randomUUID()}`
   const createdAt = new Date().toISOString()
   db.run(
-    `INSERT INTO sales_payments (id, invoice_id, date, amount, notes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)` ,
-    [paymentId, invoiceId, date, normalizeMoney(amount), notes || null, createdAt]
+    `INSERT INTO sales_payments (id, invoice_id, date, amount, notes, payment_method, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)` ,
+    [paymentId, invoiceId, date, normalizeMoney(amount), notes || null, paymentMethod, createdAt]
   )
   persistDatabase(db)
 
   const payment = db.exec(
-    `SELECT id, invoice_id, date, amount, notes, created_at FROM sales_payments WHERE id = ?`,
+    `SELECT id, invoice_id, date, amount, notes, payment_method, created_at FROM sales_payments WHERE id = ?`,
     [paymentId]
   )[0]?.values?.[0]
 
@@ -2567,14 +2654,15 @@ export function addSalesPayment(invoiceId, payload = {}) {
     date: payment[2],
     amount: normalizeMoney(Number(payment[3] ?? 0)),
     notes: payment[4] ?? '',
-    createdAt: payment[5],
+    paymentMethod: payment[5] ?? '',
+    createdAt: payment[6],
   }
 }
 
 export function deleteSalesPayment(paymentId) {
   const db = getDatabase()
   const payment = db.exec(
-    `SELECT id, invoice_id, date, amount, notes, created_at FROM sales_payments WHERE id = ?`,
+    `SELECT id, invoice_id, date, amount, notes, payment_method, created_at FROM sales_payments WHERE id = ?`,
     [paymentId]
   )[0]?.values?.[0]
 
@@ -2596,7 +2684,8 @@ export function deleteSalesPayment(paymentId) {
     date: payment[2],
     amount: normalizeMoney(Number(payment[3] ?? 0)),
     notes: payment[4] ?? '',
-    createdAt: payment[5],
+    paymentMethod: payment[5] ?? '',
+    createdAt: payment[6],
   }
 }
 
@@ -3202,12 +3291,16 @@ export function addPurchasePayment(invoiceId, payload = {}) {
   const amount = Number(payload.amount ?? 0)
   const date = String(payload.date ?? '').trim()
   const notes = String(payload.notes ?? '').trim()
+  const paymentMethod = String(payload.paymentMethod ?? '').trim()
 
   if (!invoiceId) {
     throw new Error('لم يتم تحديد الفاتورة.')
   }
   if (!date) {
     throw new Error('تاريخ الدفعة مطلوب.')
+  }
+  if (!paymentMethod) {
+    throw new Error('طريقة الدفع مطلوبة.')
   }
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error('قيمة الدفعة يجب أن تكون أكبر من صفر.')
@@ -3233,14 +3326,14 @@ export function addPurchasePayment(invoiceId, payload = {}) {
   const createdAt = new Date().toISOString()
 
   db.run(
-    `INSERT INTO purchase_payments (id, invoice_id, date, amount, notes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [paymentId, invoiceId, date, normalizeMoney(amount), notes || null, createdAt]
+    `INSERT INTO purchase_payments (id, invoice_id, date, amount, notes, payment_method, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [paymentId, invoiceId, date, normalizeMoney(amount), notes || null, paymentMethod, createdAt]
   )
   persistDatabase(db)
 
   const payment = db.exec(
-    `SELECT id, invoice_id, date, amount, notes, created_at
+    `SELECT id, invoice_id, date, amount, notes, payment_method, created_at
      FROM purchase_payments WHERE id = ?`,
     [paymentId]
   )[0]?.values?.[0]
@@ -3255,7 +3348,8 @@ export function addPurchasePayment(invoiceId, payload = {}) {
     date: payment[2],
     amount: normalizeMoney(Number(payment[3] ?? 0)),
     notes: payment[4] ?? '',
-    createdAt: payment[5],
+    paymentMethod: payment[5] ?? '',
+    createdAt: payment[6],
   }
 }
 
@@ -3263,7 +3357,7 @@ export function deletePurchasePayment(paymentId) {
   const db = getDatabase()
 
   const payment = db.exec(
-    `SELECT id, invoice_id, date, amount, notes, created_at
+    `SELECT id, invoice_id, date, amount, notes, payment_method, created_at
      FROM purchase_payments WHERE id = ?`,
     [paymentId]
   )[0]?.values?.[0]
@@ -3292,7 +3386,8 @@ export function deletePurchasePayment(paymentId) {
     date: payment[2],
     amount: normalizeMoney(Number(payment[3] ?? 0)),
     notes: payment[4] ?? '',
-    createdAt: payment[5],
+    paymentMethod: payment[5] ?? '',
+    createdAt: payment[6],
   }
 }
 
@@ -3420,6 +3515,17 @@ function parseOpeningCost(value) {
 function computeAvailableQuantity(db, warehouseId, materialId) {
   const qty = getStockLevel(db, warehouseId, materialId)
   return Number(qty ?? 0)
+}
+
+function getOriginalInvoiceNumberDisplay(invoiceNumber, originalInvoiceNumber, invoiceExists = true) {
+
+  const currentInvoiceNumber = String(invoiceNumber ?? '').trim()
+
+  if (invoiceExists && currentInvoiceNumber) {
+    return currentInvoiceNumber
+  }
+
+  return 'تم حذف الفاتورة الأصلية'
 }
 
 function generateSequentialReference(db, prefix) {
@@ -3561,7 +3667,7 @@ export function listPurchaseReturns(filter = {}) {
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
 
   const rows = db.exec(
-    `SELECT pr.id, pr.return_number, pr.date, pr.supplier_id, supplier.name, pr.warehouse_id, warehouse.name, pr.purchase_invoice_id, pi.invoice_number, pr.net_total, pr.status, pr.created_at, pr.updated_at
+    `SELECT pr.id, pr.return_number, pr.date, pr.supplier_id, supplier.name, pr.warehouse_id, warehouse.name, pr.purchase_invoice_id, pi.invoice_number, pr.original_invoice_number, pr.net_total, pr.status, pr.created_at, pr.updated_at
      FROM purchase_returns pr
      LEFT JOIN suppliers supplier ON supplier.id = pr.supplier_id
      LEFT JOIN warehouses warehouse ON warehouse.id = pr.warehouse_id
@@ -3580,18 +3686,18 @@ export function listPurchaseReturns(filter = {}) {
     warehouseId: row[5],
     warehouseName: row[6] ?? '-',
     purchaseInvoiceId: row[7],
-    purchaseInvoiceNumber: row[8] ?? '',
-    netTotal: Number(row[9] ?? 0),
-    status: row[10],
-    createdAt: row[11],
-    updatedAt: row[12],
+    purchaseInvoiceNumber: getOriginalInvoiceNumberDisplay(row[8], row[9]),
+    netTotal: Number(row[10] ?? 0),
+    status: row[11],
+    createdAt: row[12],
+    updatedAt: row[13],
   }))
 }
 
 export function getPurchaseReturnById(returnId) {
   const db = getDatabase()
   const header = db.exec(
-    `SELECT pr.id, pr.return_number, pr.date, pr.supplier_id, supplier.name, supplier.code, pr.warehouse_id, warehouse.name, pr.purchase_invoice_id, pi.invoice_number, pr.notes, pr.subtotal, pr.discount_amount, pr.net_total, pr.status, pr.created_at, pr.updated_at
+    `SELECT pr.id, pr.return_number, pr.date, pr.supplier_id, supplier.name, supplier.code, pr.warehouse_id, warehouse.name, pr.purchase_invoice_id, pi.invoice_number, pr.original_invoice_number, pr.notes, pr.subtotal, pr.discount_amount, pr.net_total, pr.status, pr.created_at, pr.updated_at
      FROM purchase_returns pr
      LEFT JOIN suppliers supplier ON supplier.id = pr.supplier_id
      LEFT JOIN warehouses warehouse ON warehouse.id = pr.warehouse_id
@@ -3619,14 +3725,14 @@ export function getPurchaseReturnById(returnId) {
     warehouseId: header[6],
     warehouseName: header[7] ?? '',
     purchaseInvoiceId: header[8],
-    purchaseInvoiceNumber: header[9] ?? '',
-    notes: header[10] ?? '',
-    subtotal: Number(header[11] ?? 0),
-    discountAmount: Number(header[12] ?? 0),
-    netTotal: Number(header[13] ?? 0),
-    status: header[14],
-    createdAt: header[15],
-    updatedAt: header[16],
+    purchaseInvoiceNumber: getOriginalInvoiceNumberDisplay(header[9], header[10]),
+    notes: header[11] ?? '',
+    subtotal: Number(header[12] ?? 0),
+    discountAmount: Number(header[13] ?? 0),
+    netTotal: Number(header[14] ?? 0),
+    status: header[15],
+    createdAt: header[16],
+    updatedAt: header[17],
     items: items.map((row) => ({
       id: row[0],
       materialId: row[1],
@@ -3718,11 +3824,12 @@ export function createPurchaseReturn(payload = {}) {
     const returnNotes = normalizeDocumentNote(payload.notes)
     const totalDiscount = 0
     const netTotal = normalizeMoney(subtotal - totalDiscount)
+    const originalInvoiceNumber = String(invoice[1] ?? '').trim()
 
     db.run(
-      `INSERT INTO purchase_returns (id, return_number, date, supplier_id, warehouse_id, purchase_invoice_id, notes, subtotal, discount_amount, net_total, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)`,
-      [returnId, returnNumber, date, supplierId, warehouseId, purchaseInvoiceId, returnNotes, normalizeMoney(subtotal), normalizeMoney(totalDiscount), netTotal, now, now]
+      `INSERT INTO purchase_returns (id, return_number, date, supplier_id, warehouse_id, purchase_invoice_id, original_invoice_number, notes, subtotal, discount_amount, net_total, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)` ,
+      [returnId, returnNumber, date, supplierId, warehouseId, purchaseInvoiceId, originalInvoiceNumber || null, returnNotes, normalizeMoney(subtotal), normalizeMoney(totalDiscount), netTotal, now, now]
     )
 
     db.run(
@@ -3873,11 +3980,13 @@ export function updatePurchaseReturn(returnId, payload = {}) {
       affectedMaterials.add(item.materialId)
     }
 
+    const originalInvoiceNumber = String(invoice[1] ?? '').trim()
+
     db.run(
       `UPDATE purchase_returns
-       SET date = ?, supplier_id = ?, warehouse_id = ?, purchase_invoice_id = ?, notes = ?, subtotal = ?, discount_amount = 0, net_total = ?, updated_at = ?
+       SET date = ?, supplier_id = ?, warehouse_id = ?, purchase_invoice_id = ?, original_invoice_number = ?, notes = ?, subtotal = ?, discount_amount = 0, net_total = ?, updated_at = ?
        WHERE id = ?`,
-      [returnDate, allowedSupplierId, allowedWarehouseId, allowedInvoiceId, returnNotes, normalizeMoney(subtotal), netTotal, now, returnId]
+      [returnDate, allowedSupplierId, allowedWarehouseId, allowedInvoiceId, originalInvoiceNumber || null, returnNotes, normalizeMoney(subtotal), netTotal, now, returnId]
     )
 
     db.run(
@@ -3950,7 +4059,7 @@ export function listSalesReturns(filter = {}) {
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
 
   const rows = db.exec(
-    `SELECT sr.id, sr.return_number, sr.date, sr.customer_id, customer.name, sr.warehouse_id, warehouse.name, sr.sales_invoice_id, si.invoice_number, sr.net_total, sr.status, sr.created_at, sr.updated_at
+    `SELECT sr.id, sr.return_number, sr.date, sr.customer_id, customer.name, sr.warehouse_id, warehouse.name, sr.sales_invoice_id, si.invoice_number, sr.original_invoice_number, sr.net_total, sr.status, sr.created_at, sr.updated_at
      FROM sales_returns sr
      LEFT JOIN customers customer ON customer.id = sr.customer_id
      LEFT JOIN warehouses warehouse ON warehouse.id = sr.warehouse_id
@@ -3969,18 +4078,18 @@ export function listSalesReturns(filter = {}) {
     warehouseId: row[5],
     warehouseName: row[6] ?? '-',
     salesInvoiceId: row[7],
-    salesInvoiceNumber: row[8] ?? '',
-    netTotal: Number(row[9] ?? 0),
-    status: row[10],
-    createdAt: row[11],
-    updatedAt: row[12],
+    salesInvoiceNumber: getOriginalInvoiceNumberDisplay(row[8], row[9]),
+    netTotal: Number(row[10] ?? 0),
+    status: row[11],
+    createdAt: row[12],
+    updatedAt: row[13],
   }))
 }
 
 export function getSalesReturnById(returnId) {
   const db = getDatabase()
   const header = db.exec(
-    `SELECT sr.id, sr.return_number, sr.date, sr.customer_id, customer.name, customer.code, sr.warehouse_id, warehouse.name, sr.sales_invoice_id, si.invoice_number, sr.notes, sr.subtotal, sr.discount_amount, sr.net_total, sr.status, sr.created_at, sr.updated_at
+    `SELECT sr.id, sr.return_number, sr.date, sr.customer_id, customer.name, customer.code, sr.warehouse_id, warehouse.name, sr.sales_invoice_id, si.invoice_number, sr.original_invoice_number, sr.notes, sr.subtotal, sr.discount_amount, sr.net_total, sr.status, sr.created_at, sr.updated_at
      FROM sales_returns sr
      LEFT JOIN customers customer ON customer.id = sr.customer_id
      LEFT JOIN warehouses warehouse ON warehouse.id = sr.warehouse_id
@@ -4013,14 +4122,14 @@ export function getSalesReturnById(returnId) {
     warehouseId: header[6],
     warehouseName: header[7] ?? '',
     salesInvoiceId: header[8],
-    salesInvoiceNumber: header[9] ?? '',
-    notes: header[10] ?? '',
-    subtotal: Number(header[11] ?? 0),
-    discountAmount: Number(header[12] ?? 0),
-    netTotal: Number(header[13] ?? 0),
-    status: header[14],
-    createdAt: header[15],
-    updatedAt: header[16],
+    salesInvoiceNumber: getOriginalInvoiceNumberDisplay(header[9], header[10]),
+    notes: header[11] ?? '',
+    subtotal: Number(header[12] ?? 0),
+    discountAmount: Number(header[13] ?? 0),
+    netTotal: Number(header[14] ?? 0),
+    status: header[15],
+    createdAt: header[16],
+    updatedAt: header[17],
     returns: returns.map((row) => ({
       id: row[0],
       returnNumber: row[1],
@@ -4132,10 +4241,41 @@ export function createSalesReturn(payload = {}) {
 
     const returnNotes = normalizeDocumentNote(payload.notes)
     const netTotal = normalizeMoney(subtotal)
+    const originalInvoiceNumber = String(invoice[1] ?? '').trim()
+
     db.run(
-      `INSERT INTO sales_returns (id, return_number, date, customer_id, warehouse_id, sales_invoice_id, notes, subtotal, discount_amount, net_total, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)`,
-      [returnId, returnNumber, date, customerId, warehouseId, salesInvoiceId, returnNotes, normalizeMoney(subtotal), 0, netTotal, now, now]
+      `INSERT INTO sales_returns (
+        id,
+        return_number,
+        date,
+        customer_id,
+        warehouse_id,
+        sales_invoice_id,
+        original_invoice_number,
+        notes,
+        subtotal,
+        discount_amount,
+        net_total,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)`,
+      [
+        returnId,
+        returnNumber,
+        date,
+        customerId,
+        warehouseId,
+        salesInvoiceId,
+        originalInvoiceNumber || null,
+        returnNotes,
+        normalizeMoney(subtotal),
+        normalizeMoney(discount),
+        normalizeMoney(netTotal),
+        now,
+        now
+      ]
     )
 
     db.run(
@@ -4305,11 +4445,13 @@ export function updateSalesReturn(returnId, payload = {}) {
       affectedMaterials.add(item.materialId)
     }
 
+    const originalInvoiceNumber = String(invoice[1] ?? '').trim()
+
     db.run(
       `UPDATE sales_returns
-       SET date = ?, customer_id = ?, warehouse_id = ?, sales_invoice_id = ?, notes = ?, subtotal = ?, discount_amount = 0, net_total = ?, updated_at = ?
+       SET date = ?, customer_id = ?, warehouse_id = ?, sales_invoice_id = ?, original_invoice_number = ?, notes = ?, subtotal = ?, discount_amount = 0, net_total = ?, updated_at = ?
        WHERE id = ?`,
-      [returnDate, allowedCustomerId, allowedWarehouseId, allowedInvoiceId, returnNotes, normalizeMoney(subtotal), netTotal, now, returnId]
+      [returnDate, allowedCustomerId, allowedWarehouseId, allowedInvoiceId, originalInvoiceNumber || null, returnNotes, normalizeMoney(subtotal), netTotal, now, returnId]
     )
 
     db.run(
@@ -6371,8 +6513,7 @@ export function deleteProductionOrder(orderId) {
         po.order_number,
         po.product_material_id,
         po.output_warehouse_id,
-        po.actual_output_quantity,
-        po.total_production_cost
+        po.actual_output_quantity
       FROM production_orders po
       WHERE po.id = ?
     `, [orderId])[0]?.values?.[0]
@@ -6381,7 +6522,7 @@ export function deleteProductionOrder(orderId) {
       throw new Error('أمر الإنتاج غير موجود.')
     }
 
-    const orderNumber = String(header[1])
+    const orderNumber = String(header[1] ?? '').trim()
     const productMaterialId = String(header[2] ?? '').trim()
     const outputWarehouseId = String(header[3] ?? '').trim()
     const actualOutputQuantity = Number(header[4] ?? 0)
@@ -6400,89 +6541,40 @@ export function deleteProductionOrder(orderId) {
       ORDER BY id ASC
     `, [orderId])[0]?.values ?? []
 
-    if (inputRows.length === 0 && outputRows.length === 0) {
-      throw new Error('لا يمكن حذف أمر الإنتاج لعدم وجود مواد مسجلة عليه.')
-    }
-
+    const affectedMaterialKeys = new Set()
     for (const row of inputRows) {
       const materialId = String(row[0] ?? '').trim()
       const warehouseId = String(row[1] ?? '').trim()
-      const qty = Number(row[2] ?? 0)
-      if (!materialId || !warehouseId || qty <= 0) continue
-
-      const available = computeAvailableQuantity(db, warehouseId, materialId)
-      if (available < qty) {
-        throw new Error(`لا يمكن حذف الأمر لأن مادة ${materialId} في المخزن ${warehouseId} لا تتوفر لإرجاعها.`)
+      if (materialId && warehouseId) {
+        affectedMaterialKeys.add(`${warehouseId}|${materialId}`)
       }
     }
 
     for (const row of outputRows) {
       const materialId = String(row[0] ?? '').trim()
       const warehouseId = String(row[1] ?? '').trim()
-      const qty = Number(row[2] ?? 0)
-      if (!materialId || !warehouseId || qty <= 0) continue
-
-      const available = computeAvailableQuantity(db, warehouseId, materialId)
-      if (available < qty) {
-        throw new Error(`لا يمكن حذف الأمر لأن رصيد المنتج ${materialId} في المخزن ${warehouseId} لا يكفي لإلغاء الإنتاج.`)
+      if (materialId && warehouseId) {
+        affectedMaterialKeys.add(`${warehouseId}|${materialId}`)
       }
     }
 
-    if (!productMaterialId || !outputWarehouseId) {
-      throw new Error('بيانات أمر الإنتاج غير مكتملة، لا يمكن إلغاءه.')
-    }
-
-    const reversalTargets = new Map()
-    for (const row of inputRows) {
-      const materialId = String(row[0] ?? '').trim()
-      const warehouseId = String(row[1] ?? '').trim()
-      const qty = Number(row[2] ?? 0)
-      if (!materialId || !warehouseId || qty <= 0) continue
-      const key = `${warehouseId}|${materialId}`
-      reversalTargets.set(key, (reversalTargets.get(key) ?? 0) + qty)
-    }
-
-    for (const row of outputRows) {
-      const materialId = String(row[0] ?? '').trim()
-      const warehouseId = String(row[1] ?? '').trim()
-      const qty = Number(row[2] ?? 0)
-      if (!materialId || !warehouseId || qty <= 0) continue
-      const key = `${warehouseId}|${materialId}`
-      reversalTargets.set(key, (reversalTargets.get(key) ?? 0) - qty)
-    }
-
-    for (const [key, delta] of reversalTargets.entries()) {
-      if (delta !== 0) {
-        const [warehouseId, materialId] = key.split('|')
-        if (warehouseId && materialId) {
-          recalculateStockLevel(db, warehouseId, materialId)
-        }
-      }
+    if (productMaterialId && outputWarehouseId && actualOutputQuantity > 0) {
+      affectedMaterialKeys.add(`${outputWarehouseId}|${productMaterialId}`)
     }
 
     db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [orderNumber])
     db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [orderNumber])
-    db.run(`DELETE FROM production_order_inputs WHERE production_order_id = ?`, [orderId])
-    db.run(`DELETE FROM production_order_outputs WHERE production_order_id = ?`, [orderId])
-    db.run(`DELETE FROM production_orders WHERE id = ?`, [orderId])
 
-    for (const row of inputRows) {
-      const materialId = String(row[0] ?? '').trim()
-      const warehouseId = String(row[1] ?? '').trim()
-      const qty = Number(row[2] ?? 0)
-      if (!materialId || !warehouseId || qty <= 0) continue
-      recalculateStockLevel(db, warehouseId, materialId)
-    }
-
-    if (outputRows.length > 0) {
-      for (const row of outputRows) {
-        const materialId = String(row[0] ?? '').trim()
-        const warehouseId = String(row[1] ?? '').trim()
-        const qty = Number(row[2] ?? 0)
-        if (!materialId || !warehouseId || qty <= 0) continue
+    for (const key of affectedMaterialKeys) {
+      const [warehouseId, materialId] = key.split('|')
+      if (warehouseId && materialId) {
         recalculateStockLevel(db, warehouseId, materialId)
       }
     }
+
+    db.run(`DELETE FROM production_order_inputs WHERE production_order_id = ?`, [orderId])
+    db.run(`DELETE FROM production_order_outputs WHERE production_order_id = ?`, [orderId])
+    db.run(`DELETE FROM production_orders WHERE id = ?`, [orderId])
 
     db.run('COMMIT')
     persistDatabase(db)
@@ -6491,6 +6583,151 @@ export function deleteProductionOrder(orderId) {
     try { db.run('ROLLBACK') } catch (_) {}
     console.error('DELETE PRODUCTION ORDER ERROR:', error)
     throw error
+  }
+}
+
+export function deleteRecipe(id) {
+  const db = getDatabase()
+
+  try {
+    db.run('BEGIN')
+
+    const recipeRow = db.exec(`
+      SELECT id
+      FROM manufacturing_recipes
+      WHERE id = ?
+    `, [id])[0]?.values?.[0]
+
+    if (!recipeRow) {
+      throw new Error('نموذج التصنيع غير موجود.')
+    }
+
+    const recipeInUse = db.exec(`
+      SELECT id
+      FROM production_orders
+      WHERE recipe_id = ?
+      LIMIT 1
+    `, [id])[0]?.values?.[0]
+
+    if (recipeInUse) {
+      throw new Error('لا يمكن حذف نموذج التصنيع لأنه مستخدم في أمر إنتاج.')
+    }
+
+    db.run(`DELETE FROM manufacturing_recipe_items WHERE recipe_id = ?`, [id])
+    db.run(`DELETE FROM manufacturing_recipes WHERE id = ?`, [id])
+    db.run('COMMIT')
+    persistDatabase(db)
+    return true
+  } catch (error) {
+    try { db.run('ROLLBACK') } catch (_) {}
+    console.error('DELETE RECIPE ERROR:', error)
+    throw error
+  }
+}
+
+export function createMaterial(input) {
+  const db = getDatabase()
+  const now = new Date().toISOString()
+  const id = input.id || `${input.type}-${crypto.randomUUID()}`
+
+  try {
+    db.run('BEGIN')
+
+    db.run(
+      `INSERT INTO materials (
+        id,
+        material_number,
+        name,
+        opening_balance,
+        opening_warehouse_id,
+        type,
+        parent_id,
+        returnability,
+        unit,
+        cost_price,
+        price1,
+        price2,
+        price3,
+        notes,
+        is_non_stock,
+        status,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+      [
+        id,
+        input.materialNumber,
+        input.name,
+        (typeof input.openingBalance !== 'undefined' && input.openingBalance !== null) ? Number(input.openingBalance) : null,
+        input.openingWarehouseId ?? null,
+        input.type,
+        input.parentId ?? null,
+        input.returnability ?? '',
+        input.unit ?? '',
+        input.costPrice ?? '',
+        input.price1 ?? '',
+        input.price2 ?? '',
+        input.price3 ?? '',
+        input.notes ?? '',
+        input.isNonStock ? 1 : 0,
+        'active',
+        now,
+        now,
+      ]
+    )
+
+    // If sub and stockable and openingBalance > 0, create opening adjustment document atomically
+    if (input.type === 'sub' && !input.isNonStock && input.openingBalance && Number(input.openingBalance) > 0) {
+      const whId = input.openingWarehouseId
+      const openingQty = Number(input.openingBalance)
+      const ensureWh = ensureWarehouseExists(db, whId)
+      if (!ensureWh || ensureWh.status !== 'active') {
+        db.run('ROLLBACK')
+        throw new Error('المخزن المختار غير موجود أو غير مفعل.')
+      }
+
+      // Legacy schema accepts adjustment document types for opening balance records.
+      // UI may label this as "رصيد افتتاحي", but the internal DB type must remain compatible.
+      const reference = generateSequentialReference(db, 'OPENING')
+      const openingCost = parseOpeningCost(input.costPrice)
+      const existing = db.exec(`SELECT 1 FROM stock_movement_documents WHERE reference = ?`, [reference])[0]?.values?.[0]?.[0]
+      if (existing) {
+        const current = db.exec(`SELECT SUM(quantity_in - quantity_out) FROM stock_movements WHERE document_reference = ? AND material_id = ?`, [reference, id])[0]?.values?.[0]?.[0] ?? 0
+        const diff = openingQty - Number(current)
+        if (diff !== 0) {
+          const now2 = new Date().toISOString()
+          const movId = `${reference}-adj-${crypto.randomUUID()}`
+          if (diff > 0) {
+            db.run(`INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [movId, reference, 'adjustment_in', reference, whId, id, diff, 0, input.unit ?? null, openingCost, 'synchronized opening increase', now2, null])
+            recalculateStockLevel(db, whId, id)
+          } else {
+            const out = Math.abs(diff)
+            const avail = computeAvailableQuantity(db, whId, id)
+            if (avail < out) {
+              db.run('ROLLBACK')
+              throw new Error('تعديل الرصيد الافتتاحي يؤدي إلى رصيد سلبي. استخدم تسوية الجرد بدلاً من ذلك.')
+            }
+            db.run(`INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [movId, reference, 'adjustment_out', reference, whId, id, 0, out, input.unit ?? null, null, 'synchronized opening decrease', now2, null])
+            recalculateStockLevel(db, whId, id)
+          }
+        }
+      } else {
+        const docId = `doc-${crypto.randomUUID()}`
+        const now2 = new Date().toISOString()
+        db.run(`INSERT INTO stock_movement_documents (id, reference, type, date, from_warehouse_id, to_warehouse_id, notes, created_by, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [docId, reference, 'adjustment', now2, null, whId, null, null, now2, 'completed'])
+        const movementId = `${reference}-0`
+        db.run(`INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [movementId, reference, 'adjustment_in', reference, whId, id, openingQty, 0, input.unit ?? null, openingCost, 'opening balance', now2, null])
+        recalculateStockLevel(db, whId, id)
+      }
+    }
+
+    db.run('COMMIT')
+    persistDatabase(db)
+    return getAllMaterials()
+  } catch (err) {
+    try { db.run('ROLLBACK') } catch(e){}
+    console.error('INSERT MATERIAL ERROR:', err)
+    throw err
   }
 }
 
@@ -6625,129 +6862,6 @@ export function updateRecipe(id, payload) {
     try { db.run('ROLLBACK') } catch (_) {}
     console.error('UPDATE RECIPE ERROR:', error)
     throw error
-  }
-}
-
-export function deleteRecipe(id) {
-  const db = getDatabase()
-
-  try {
-    db.run('BEGIN')
-    db.run(`DELETE FROM manufacturing_recipe_items WHERE recipe_id = ?`, [id])
-    db.run(`DELETE FROM manufacturing_recipes WHERE id = ?`, [id])
-    db.run('COMMIT')
-    persistDatabase(db)
-    return true
-  } catch (error) {
-    try { db.run('ROLLBACK') } catch (_) {}
-    console.error('DELETE RECIPE ERROR:', error)
-    throw error
-  }
-}
-
-export function createMaterial(input) {
-  const db = getDatabase()
-  const now = new Date().toISOString()
-  const id = input.id || `${input.type}-${crypto.randomUUID()}`
-
-  try {
-    db.run('BEGIN')
-
-    db.run(
-      `INSERT INTO materials (
-        id,
-        material_number,
-        name,
-        opening_balance,
-        opening_warehouse_id,
-        type,
-        parent_id,
-        returnability,
-        unit,
-        cost_price,
-        price1,
-        price2,
-        price3,
-        notes,
-        is_non_stock,
-        status,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
-      [
-        id,
-        input.materialNumber,
-        input.name,
-        (typeof input.openingBalance !== 'undefined' && input.openingBalance !== null) ? Number(input.openingBalance) : null,
-        input.openingWarehouseId ?? null,
-        input.type,
-        input.parentId ?? null,
-        input.returnability ?? '',
-        input.unit ?? '',
-        input.costPrice ?? '',
-        input.price1 ?? '',
-        input.price2 ?? '',
-        input.price3 ?? '',
-        input.notes ?? '',
-        input.isNonStock ? 1 : 0,
-        'active',
-        now,
-        now,
-      ]
-    )
-
-    // If sub and stockable and openingBalance > 0, create opening adjustment document atomically
-    if (input.type === 'sub' && !input.isNonStock && input.openingBalance && Number(input.openingBalance) > 0) {
-      const whId = input.openingWarehouseId
-      const openingQty = Number(input.openingBalance)
-      const ensureWh = ensureWarehouseExists(db, whId)
-      if (!ensureWh || ensureWh.status !== 'active') {
-        db.run('ROLLBACK')
-        throw new Error('المخزن المختار غير موجود أو غير مفعل.')
-      }
-
-      // Legacy schema accepts adjustment document types for opening balance records.
-      // UI may label this as "رصيد افتتاحي", but the internal DB type must remain compatible.
-      const reference = generateSequentialReference(db, 'OPENING')
-      const openingCost = parseOpeningCost(input.costPrice)
-      const existing = db.exec(`SELECT 1 FROM stock_movement_documents WHERE reference = ?`, [reference])[0]?.values?.[0]?.[0]
-      if (existing) {
-        const current = db.exec(`SELECT SUM(quantity_in - quantity_out) FROM stock_movements WHERE document_reference = ? AND material_id = ?`, [reference, id])[0]?.values?.[0]?.[0] ?? 0
-        const diff = openingQty - Number(current)
-        if (diff !== 0) {
-          const now2 = new Date().toISOString()
-          const movId = `${reference}-adj-${crypto.randomUUID()}`
-          if (diff > 0) {
-            db.run(`INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [movId, reference, 'adjustment_in', reference, whId, id, diff, 0, input.unit ?? null, openingCost, 'synchronized opening increase', now2, null])
-            recalculateStockLevel(db, whId, id)
-          } else {
-            const out = Math.abs(diff)
-            const avail = computeAvailableQuantity(db, whId, id)
-            if (avail < out) {
-              db.run('ROLLBACK')
-              throw new Error('تعديل الرصيد الافتتاحي يؤدي إلى رصيد سلبي. استخدم تسوية الجرد بدلاً من ذلك.')
-            }
-            db.run(`INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [movId, reference, 'adjustment_out', reference, whId, id, 0, out, input.unit ?? null, null, 'synchronized opening decrease', now2, null])
-            recalculateStockLevel(db, whId, id)
-          }
-        }
-      } else {
-        const docId = `doc-${crypto.randomUUID()}`
-        const now2 = new Date().toISOString()
-        db.run(`INSERT INTO stock_movement_documents (id, reference, type, date, from_warehouse_id, to_warehouse_id, notes, created_by, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [docId, reference, 'adjustment', now2, null, whId, null, null, now2, 'completed'])
-        const movementId = `${reference}-0`
-        db.run(`INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [movementId, reference, 'adjustment_in', reference, whId, id, openingQty, 0, input.unit ?? null, openingCost, 'opening balance', now2, null])
-        recalculateStockLevel(db, whId, id)
-      }
-    }
-
-    db.run('COMMIT')
-    persistDatabase(db)
-    return getAllMaterials()
-  } catch (err) {
-    try { db.run('ROLLBACK') } catch(e){}
-    console.error('INSERT MATERIAL ERROR:', err)
-    throw err
   }
 }
 
@@ -7024,3 +7138,1060 @@ export function searchMaterials(term) {
 
 // The following stock movement functions are implemented above and should remain the single source of truth.
 // Duplicate legacy definitions have been removed to keep the repository clean.
+
+
+function normalizeNumber(value) {
+  const num = Number(value ?? 0)
+  return Number.isFinite(num) ? num : 0
+}
+
+function readNumber(db, sql, params = []) {
+  const value = db.exec(sql, params)[0]?.values?.[0]?.[0]
+  return Number(value ?? 0)
+}
+
+const REPORT_PERIODS = new Set(['daily', 'weekly', 'monthly', 'yearly', 'custom'])
+
+function formatLocalDate(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function parseLocalDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? ''))
+  if (!match) return null
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12, 0, 0, 0)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function resolvePeriodDateRange(period, fromDate, toDate) {
+  if (period === 'custom') {
+    return { fromDate, toDate }
+  }
+
+  const today = new Date()
+  today.setHours(12, 0, 0, 0)
+
+  if (period === 'daily') {
+    const value = formatLocalDate(today)
+    return { fromDate: value, toDate: value }
+  }
+
+  if (period === 'weekly') {
+    const monday = new Date(today)
+    const day = monday.getDay()
+    const diffToMonday = day === 0 ? -6 : 1 - day
+    monday.setDate(monday.getDate() + diffToMonday)
+
+    const sunday = new Date(monday)
+    sunday.setDate(sunday.getDate() + 6)
+
+    return {
+      fromDate: formatLocalDate(monday),
+      toDate: formatLocalDate(sunday),
+    }
+  }
+
+  if (period === 'monthly') {
+    return {
+      fromDate: formatLocalDate(new Date(today.getFullYear(), today.getMonth(), 1, 12)),
+      toDate: formatLocalDate(new Date(today.getFullYear(), today.getMonth() + 1, 0, 12)),
+    }
+  }
+
+  if (period === 'yearly') {
+    return {
+      fromDate: `${today.getFullYear()}-01-01`,
+      toDate: `${today.getFullYear()}-12-31`,
+    }
+  }
+
+  return { fromDate, toDate }
+}
+
+function resolveChartGranularity(period, fromDate, toDate) {
+  if (period === 'yearly') return 'month'
+  if (period === 'daily' || period === 'weekly' || period === 'monthly') return 'day'
+
+  if (period === 'custom') {
+    const start = parseLocalDate(fromDate)
+    const end = parseLocalDate(toDate)
+    if (!start || !end) return 'month'
+
+    const days = Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000))
+    if (days <= 62) return 'day'
+    if (days <= 730) return 'month'
+    return 'year'
+  }
+
+  return 'month'
+}
+
+function getDateBucketExpression(dateField, granularity) {
+  if (granularity === 'day') return `substr(${dateField}, 1, 10)`
+  if (granularity === 'year') return `substr(${dateField}, 1, 4)`
+  return `substr(${dateField}, 1, 7)`
+}
+
+function buildBucketLabels(fromDate, toDate, granularity) {
+  const start = parseLocalDate(fromDate)
+  const end = parseLocalDate(toDate)
+  if (!start || !end || start > end) return []
+
+  const labels = []
+  const cursor = new Date(start)
+
+  if (granularity === 'year') {
+    cursor.setMonth(0, 1)
+    while (cursor <= end) {
+      labels.push(String(cursor.getFullYear()))
+      cursor.setFullYear(cursor.getFullYear() + 1)
+    }
+    return labels
+  }
+
+  if (granularity === 'month') {
+    cursor.setDate(1)
+    while (cursor <= end) {
+      labels.push(`${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`)
+      cursor.setMonth(cursor.getMonth() + 1)
+    }
+    return labels
+  }
+
+  while (cursor <= end) {
+    labels.push(formatLocalDate(cursor))
+    cursor.setDate(cursor.getDate() + 1)
+  }
+
+  return labels
+}
+
+function buildChartData(chartRows, series, fromDate, toDate, granularity) {
+  const mapped = new Map()
+
+  for (const row of chartRows) {
+    const label = String(row[0] ?? '')
+    const values = {}
+    series.forEach((item, index) => {
+      values[item.key] = normalizeNumber(row[index + 1])
+    })
+    mapped.set(label, { label, values })
+  }
+
+  const buckets = buildBucketLabels(fromDate, toDate, granularity)
+  if (buckets.length === 0) {
+    return Array.from(mapped.values())
+  }
+
+  return buckets.map((label) => {
+    const existing = mapped.get(label)
+    if (existing) return existing
+
+    const values = {}
+    series.forEach((item) => {
+      values[item.key] = 0
+    })
+    return { label, values }
+  })
+}
+
+function getBaseReportPayload(reportType, filters = {}) {
+  const page = Math.max(0, Number(filters.page ?? 0))
+  const pageSize = Math.min(1000, Math.max(1, Number(filters.pageSize ?? 10)))
+  const requestedPeriod = String(filters.period ?? 'weekly').trim()
+  const period = REPORT_PERIODS.has(requestedPeriod) ? requestedPeriod : 'weekly'
+  const requestedFromDate = String(filters.fromDate ?? '').trim() || null
+  const requestedToDate = String(filters.toDate ?? '').trim() || null
+  const range = resolvePeriodDateRange(period, requestedFromDate, requestedToDate)
+
+  return {
+    reportType,
+    page,
+    pageSize,
+    warehouseId: String(filters.warehouseId ?? '').trim() || null,
+    materialId: String(filters.materialId ?? '').trim() || null,
+    fromDate: range.fromDate,
+    toDate: range.toDate,
+    period,
+    chartGranularity: resolveChartGranularity(period, range.fromDate, range.toDate),
+  }
+}
+
+function buildPagination(totalCount, page, pageSize) {
+  const safeTotalCount = Number.isFinite(totalCount) ? Math.max(0, totalCount) : 0
+  const safePageSize = Math.max(1, Number(pageSize) || 10)
+  const totalPages = safeTotalCount === 0 ? 0 : Math.max(1, Math.ceil(safeTotalCount / safePageSize))
+
+  return {
+    page: Math.max(0, Number(page) || 0),
+    pageSize: safePageSize,
+    totalCount: safeTotalCount,
+    totalPages,
+  }
+}
+
+function addWhereClause(clauses, params, condition, value) {
+  if (!value) return
+  clauses.push(condition)
+  params.push(value)
+}
+
+function buildMaterialFilterClause() {
+  return ["m.status <> 'deleted'", 'COALESCE(m.is_non_stock, 0) = 0']
+}
+
+function buildDateRangeClauses(clauses, params, dateField, fromDate, toDate) {
+  addWhereClause(clauses, params, `${dateField} >= ?`, fromDate)
+  addWhereClause(clauses, params, `${dateField} <= ?`, toDate)
+}
+
+function buildFilteredStockQuery(baseTable, alias, warehouseId, materialId, fromDate, toDate, dateField = 'date') {
+  const clauses = [...buildMaterialFilterClause()]
+  const params = []
+  addWhereClause(clauses, params, `${alias}.warehouse_id = ?`, warehouseId)
+  addWhereClause(clauses, params, `${alias}.material_id = ?`, materialId)
+  if (fromDate || toDate) {
+    buildDateRangeClauses(clauses, params, `${baseTable}.${dateField}`, fromDate, toDate)
+  }
+  return { clauses, params }
+}
+
+function buildWarehouseChartData(db, rowsQuery, params) {
+  return db.exec(rowsQuery, params)[0]?.values ?? []
+}
+
+export function getReportData(db, reportType, filters = {}) {
+  const options = getBaseReportPayload(reportType, filters)
+  const { warehouseId, materialId, fromDate, toDate, page, pageSize, chartGranularity } = options
+
+  if (reportType === 'stock_balances') {
+    const clauses = [...buildMaterialFilterClause()]
+    const params = []
+    addWhereClause(clauses, params, 'sl.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'sl.material_id = ?', materialId)
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+    const totalRows = readNumber(db, `SELECT COUNT(*) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const rows = db.exec(
+      `SELECT sl.warehouse_id, w.name AS warehouse_name, sl.material_id, m.material_number, m.name AS material_name,
+              COALESCE(sl.quantity, 0) AS quantity,
+              COALESCE(sl.average_cost, 0) AS average_cost,
+              COALESCE(sl.quantity, 0) * COALESCE(sl.average_cost, 0) AS stock_value,
+              m.unit
+       FROM stock_levels sl
+       LEFT JOIN warehouses w ON w.id = sl.warehouse_id
+       LEFT JOIN materials m ON m.id = sl.material_id
+       ${where}
+       ORDER BY w.name, m.material_number
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, page * pageSize]
+    )[0]?.values ?? []
+
+    const totalQty = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sl.quantity, 0)), 0) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const totalValue = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sl.quantity, 0) * COALESCE(sl.average_cost, 0)), 0) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const materialCount = readNumber(db, `SELECT COUNT(DISTINCT sl.material_id) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const warehouseCount = readNumber(db, `SELECT COUNT(DISTINCT sl.warehouse_id) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const chartDataRows = db.exec(
+      `SELECT w.name AS label, SUM(COALESCE(sl.quantity, 0) * COALESCE(sl.average_cost, 0)) AS value
+       FROM stock_levels sl
+       LEFT JOIN warehouses w ON w.id = sl.warehouse_id
+       LEFT JOIN materials m ON m.id = sl.material_id
+       ${where}
+       GROUP BY w.id, w.name
+       ORDER BY w.name ASC`,
+      params
+    )[0]?.values ?? []
+
+    return {
+      reportType,
+      summary: [
+        { label: 'إجمالي الكمية', value: totalQty },
+        { label: 'إجمالي القيمة', value: totalValue },
+        { label: 'عدد المواد', value: materialCount },
+        { label: 'عدد المخازن', value: warehouseCount },
+      ],
+      rows: rows.map((row) => ({
+        warehouseId: row[0] ?? '',
+        warehouseName: row[1] ?? '',
+        materialId: row[2] ?? '',
+        materialNumber: row[3] ?? '',
+        materialName: row[4] ?? '',
+        quantity: normalizeNumber(row[5]),
+        averageCost: normalizeNumber(row[6]),
+        stockValue: normalizeNumber(row[7]),
+        unit: row[8] ?? '',
+      })),
+      chartSeries: [{ key: 'stockValue', label: 'قيمة المخزون' }],
+      chartData: chartDataRows.map((row) => ({
+        label: String(row[0] ?? ''),
+        values: { stockValue: normalizeNumber(row[1]) },
+      })),
+      pagination: buildPagination(totalRows, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  if (reportType === 'inventory_valuation') {
+    const clauses = [...buildMaterialFilterClause()]
+    const params = []
+    addWhereClause(clauses, params, 'sl.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'sl.material_id = ?', materialId)
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+    const totalRows = readNumber(db, `SELECT COUNT(*) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const rows = db.exec(
+      `SELECT w.name AS warehouse_name, m.material_number, m.name AS material_name,
+              COALESCE(sl.quantity, 0) AS quantity,
+              COALESCE(sl.average_cost, 0) AS average_cost,
+              COALESCE(sl.quantity, 0) * COALESCE(sl.average_cost, 0) AS stock_value,
+              m.unit
+       FROM stock_levels sl
+       LEFT JOIN warehouses w ON w.id = sl.warehouse_id
+       LEFT JOIN materials m ON m.id = sl.material_id
+       ${where}
+       ORDER BY w.name, m.material_number
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, page * pageSize]
+    )[0]?.values ?? []
+
+    const totalQty = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sl.quantity, 0)), 0) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const totalValue = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sl.quantity, 0) * COALESCE(sl.average_cost, 0)), 0) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const materialCount = readNumber(db, `SELECT COUNT(DISTINCT sl.material_id) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const warehouseCount = readNumber(db, `SELECT COUNT(DISTINCT sl.warehouse_id) FROM stock_levels sl LEFT JOIN materials m ON m.id = sl.material_id ${where}`, params)
+    const chartDataRows = db.exec(
+      `SELECT w.name AS label, SUM(COALESCE(sl.quantity, 0) * COALESCE(sl.average_cost, 0)) AS value
+       FROM stock_levels sl
+       LEFT JOIN warehouses w ON w.id = sl.warehouse_id
+       LEFT JOIN materials m ON m.id = sl.material_id
+       ${where}
+       GROUP BY w.id, w.name
+       ORDER BY w.name ASC`,
+      params
+    )[0]?.values ?? []
+
+    return {
+      reportType,
+      summary: [
+        { label: 'إجمالي الكمية', value: totalQty },
+        { label: 'إجمالي القيمة', value: totalValue },
+        { label: 'عدد المواد', value: materialCount },
+        { label: 'عدد المخازن', value: warehouseCount },
+      ],
+      rows: rows.map((row) => ({
+        warehouseName: row[0] ?? '',
+        materialNumber: row[1] ?? '',
+        materialName: row[2] ?? '',
+        quantity: normalizeNumber(row[3]),
+        averageCost: normalizeNumber(row[4]),
+        stockValue: normalizeNumber(row[5]),
+        unit: row[6] ?? '',
+      })),
+      chartSeries: [{ key: 'stockValue', label: 'قيمة المخزون' }],
+      chartData: chartDataRows.map((row) => ({
+        label: String(row[0] ?? ''),
+        values: { stockValue: normalizeNumber(row[1]) },
+      })),
+      pagination: buildPagination(totalRows, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  if (reportType === 'purchases') {
+    const clauses = ['pi.status = ?']
+    const params = ['completed']
+    addWhereClause(clauses, params, 'pi.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'EXISTS (SELECT 1 FROM purchase_invoice_items pii WHERE pii.invoice_id = pi.id AND pii.material_id = ?)', materialId)
+    buildDateRangeClauses(clauses, params, 'pi.date', fromDate, toDate)
+
+    const where = `WHERE ${clauses.join(' AND ')}`
+    const total = readNumber(db, `SELECT COUNT(*) FROM purchase_invoices pi ${where}`, params)
+    const rows = db.exec(
+      `SELECT pi.id, pi.invoice_number, pi.date, s.name AS supplier_name, w.name AS warehouse_name,
+              pi.net_total, COALESCE(pi.expenses, 0) AS expenses,
+              COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
+              COALESCE(pi.net_total - (SELECT COALESCE(SUM(pp.amount), 0) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS remaining_amount,
+              pi.status
+       FROM purchase_invoices pi
+       LEFT JOIN suppliers s ON s.id = pi.supplier_id
+       LEFT JOIN warehouses w ON w.id = pi.warehouse_id
+       ${where}
+       ORDER BY pi.date DESC, pi.invoice_number DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, page * pageSize]
+    )[0]?.values ?? []
+
+    const chartSeries = [
+      { key: 'total', label: 'إجمالي المشتريات' },
+      { key: 'expenses', label: 'المصاريف الإضافية' },
+      { key: 'paid', label: 'المدفوع' },
+      { key: 'remaining', label: 'المتبقي' },
+    ]
+    const bucketExpression = getDateBucketExpression('pi.date', chartGranularity)
+    const chartDataRows = db.exec(
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(pi.net_total, 0)) AS total_value,
+              SUM(COALESCE(pi.expenses, 0)) AS expenses_value,
+              SUM(COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)) AS paid_value,
+              SUM(
+                CASE
+                  WHEN COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) > 0
+                    THEN COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)
+                  ELSE 0
+                END
+              ) AS remaining_value
+       FROM purchase_invoices pi
+       ${where}
+       GROUP BY ${bucketExpression}
+       ORDER BY label ASC`,
+      params
+    )[0]?.values ?? []
+
+    const summaryNet = readNumber(db, `SELECT COALESCE(SUM(pi.net_total), 0) FROM purchase_invoices pi ${where}`, params)
+    const summaryExpenses = readNumber(db, `SELECT COALESCE(SUM(pi.expenses), 0) FROM purchase_invoices pi ${where}`, params)
+    const summaryPaid = readNumber(db, `SELECT COALESCE(SUM(COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)), 0) FROM purchase_invoices pi ${where}`, params)
+    return {
+      reportType,
+      summary: [
+        { label: 'عدد الفواتير', value: total },
+        { label: 'إجمالي المشتريات', value: summaryNet },
+        { label: 'المصاريف الإضافية', value: summaryExpenses },
+        { label: 'المبالغ المدفوعة', value: summaryPaid },
+      ],
+      rows: rows.map((row) => ({
+        id: row[0] ?? '',
+        invoiceNumber: row[1] ?? '',
+        date: row[2] ?? '',
+        supplierName: row[3] ?? '',
+        warehouseName: row[4] ?? '',
+        netTotal: normalizeNumber(row[5]),
+        expenses: normalizeNumber(row[6]),
+        paidAmount: normalizeNumber(row[7]),
+        remainingAmount: normalizeNumber(row[8]),
+        status: row[9] ?? '',
+      })),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
+      pagination: buildPagination(total, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  if (reportType === 'sales') {
+    const clauses = ['si.status = ?']
+    const params = ['completed']
+    addWhereClause(clauses, params, 'si.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'EXISTS (SELECT 1 FROM sales_invoice_items sii WHERE sii.invoice_id = si.id AND sii.material_id = ?)', materialId)
+    buildDateRangeClauses(clauses, params, 'si.date', fromDate, toDate)
+
+    const where = `WHERE ${clauses.join(' AND ')}`
+    const total = readNumber(db, `SELECT COUNT(*) FROM sales_invoices si ${where}`, params)
+    const rows = db.exec(
+      `SELECT si.id, si.invoice_number, si.date, c.name AS customer_name, w.name AS warehouse_name,
+              si.net_total, COALESCE(si.customer_additional_fees, 0) AS customer_additional_fees,
+              COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0) AS return_total,
+              COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) AS paid_amount,
+              si.status
+       FROM sales_invoices si
+       LEFT JOIN customers c ON c.id = si.customer_id
+       LEFT JOIN warehouses w ON w.id = si.warehouse_id
+       ${where}
+       ORDER BY si.date DESC, si.invoice_number DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, page * pageSize]
+    )[0]?.values ?? []
+
+    const chartSeries = [
+      { key: 'total', label: 'إجمالي المبيعات' },
+      { key: 'fees', label: 'رسوم إضافية على العميل' },
+      { key: 'paid', label: 'المستلم' },
+      { key: 'remaining', label: 'المتبقي' },
+    ]
+    const bucketExpression = getDateBucketExpression('si.date', chartGranularity)
+    const chartDataRows = db.exec(
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(si.net_total, 0)) AS total_value,
+              SUM(COALESCE(si.customer_additional_fees, 0)) AS fees_value,
+              SUM(COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)) AS paid_value,
+              SUM(
+                CASE
+                  WHEN COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) > 0
+                    THEN COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)
+                  ELSE 0
+                END
+              ) AS remaining_value
+       FROM sales_invoices si
+       ${where}
+       GROUP BY ${bucketExpression}
+       ORDER BY label ASC`,
+      params
+    )[0]?.values ?? []
+
+    const summaryNet = readNumber(db, `SELECT COALESCE(SUM(si.net_total), 0) FROM sales_invoices si ${where}`, params)
+    const summaryFees = readNumber(db, `SELECT COALESCE(SUM(si.customer_additional_fees), 0) FROM sales_invoices si ${where}`, params)
+    const summaryPaid = readNumber(db, `SELECT COALESCE(SUM(COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)), 0) FROM sales_invoices si ${where}`, params)
+    return {
+      reportType,
+      summary: [
+        { label: 'عدد الفواتير', value: total },
+        { label: 'إجمالي المبيعات', value: summaryNet },
+        { label: 'رسوم إضافية على العميل', value: summaryFees },
+        { label: 'المبالغ المستلمة', value: summaryPaid },
+      ],
+      rows: rows.map((row) => {
+        const netTotal = normalizeNumber(row[5])
+        const paidAmount = normalizeNumber(row[8])
+
+        return {
+          id: row[0] ?? '',
+          invoiceNumber: row[1] ?? '',
+          date: row[2] ?? '',
+          customerName: row[3] ?? '',
+          warehouseName: row[4] ?? '',
+          netTotal,
+          customerAdditionalFees: normalizeNumber(row[6]),
+          paidAmount,
+          remainingAmount: Math.max(netTotal - paidAmount, 0),
+          status: row[9] ?? '',
+        }
+      }),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
+      pagination: buildPagination(total, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  if (reportType === 'movements') {
+    const clauses = ['d.status = ?']
+    const params = ['completed']
+    addWhereClause(clauses, params, 'sm.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'sm.material_id = ?', materialId)
+    buildDateRangeClauses(clauses, params, 'd.date', fromDate, toDate)
+
+    const where = `WHERE ${clauses.join(' AND ')}`
+    const total = readNumber(db, `SELECT COUNT(*) FROM stock_movements sm LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference ${where}`, params)
+    const rows = db.exec(
+      `SELECT sm.id, d.reference, d.type, d.date, m.material_number, m.name AS material_name, sm.quantity_in, sm.quantity_out,
+              w.name AS warehouse_name, COALESCE(sm.cost, 0) AS cost, m.unit, sm.notes
+       FROM stock_movements sm
+       LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference
+       LEFT JOIN materials m ON m.id = sm.material_id
+       LEFT JOIN warehouses w ON w.id = sm.warehouse_id
+       ${where}
+       ORDER BY d.date DESC, d.reference DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, page * pageSize]
+    )[0]?.values ?? []
+
+    const incomingValue = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sm.quantity_in, 0) * COALESCE(sm.cost, 0)), 0) FROM stock_movements sm LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference ${where}`, params)
+    const outgoingValue = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sm.quantity_out, 0) * COALESCE(sm.cost, 0)), 0) FROM stock_movements sm LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference ${where}`, params)
+
+    const chartSeries = [
+      { key: 'incoming', label: 'قيمة الوارد' },
+      { key: 'outgoing', label: 'قيمة الصادر' },
+      { key: 'difference', label: 'الفرق' },
+    ]
+    const bucketExpression = getDateBucketExpression('d.date', chartGranularity)
+    const chartDataRows = db.exec(
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(sm.quantity_in, 0) * COALESCE(sm.cost, 0)) AS incoming_value,
+              SUM(COALESCE(sm.quantity_out, 0) * COALESCE(sm.cost, 0)) AS outgoing_value,
+              ABS(
+                SUM(COALESCE(sm.quantity_in, 0) * COALESCE(sm.cost, 0)) -
+                SUM(COALESCE(sm.quantity_out, 0) * COALESCE(sm.cost, 0))
+              ) AS difference_value
+       FROM stock_movements sm
+       LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference
+       ${where}
+       GROUP BY ${bucketExpression}
+       ORDER BY label ASC`,
+      params
+    )[0]?.values ?? []
+
+    return {
+      reportType,
+      summary: [
+        { label: 'عدد الحركات', value: total },
+        { label: 'قيمة الوارد', value: incomingValue },
+        { label: 'قيمة الصادر', value: outgoingValue },
+      ],
+      rows: rows.map((row) => {
+        const quantityIn = normalizeNumber(row[6])
+        const quantityOut = normalizeNumber(row[7])
+        const cost = normalizeNumber(row[9])
+        const movementValue = normalizeNumber((quantityIn > 0 ? quantityIn : quantityOut) * cost)
+
+        return {
+          movementId: row[0] ?? '',
+          reference: row[1] ?? '',
+          type: row[2] ?? '',
+          date: row[3] ?? '',
+          materialNumber: row[4] ?? '',
+          materialName: row[5] ?? '',
+          warehouseName: row[8] ?? '',
+          unit: row[10] ?? '',
+          quantityIn,
+          quantityOut,
+          cost,
+          movementValue,
+          notes: row[11] ?? '',
+        }
+      }),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
+      pagination: buildPagination(total, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  if (reportType === 'production') {
+    const clauses = []
+    const params = []
+    addWhereClause(clauses, params, 'po.output_warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'po.product_material_id = ?', materialId)
+    buildDateRangeClauses(clauses, params, 'po.date', fromDate, toDate)
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+    const total = readNumber(db, `SELECT COUNT(*) FROM production_orders po ${where}`, params)
+    const rows = db.exec(
+      `SELECT po.id, po.order_number, po.date, m.name AS product_name, w.name AS warehouse_name,
+              po.planned_output_quantity, po.actual_output_quantity, po.material_cost_total, po.labor_cost,
+              COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0) AS total_production_cost,
+              CASE
+                WHEN COALESCE(po.actual_output_quantity, 0) > 0
+                  THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
+                ELSE 0
+              END AS unit_production_cost
+       FROM production_orders po
+       LEFT JOIN materials m ON m.id = po.product_material_id
+       LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
+       ${where}
+       ORDER BY po.date DESC, po.order_number DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, page * pageSize]
+    )[0]?.values ?? []
+
+    const chartSeries = [
+      { key: 'planned', label: 'الإنتاج المخطط' },
+      { key: 'actual', label: 'الإنتاج الفعلي' },
+      { key: 'difference', label: 'الفرق' },
+    ]
+    const bucketExpression = getDateBucketExpression('po.date', chartGranularity)
+    const chartDataRows = db.exec(
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(po.planned_output_quantity, 0)) AS planned_value,
+              SUM(COALESCE(po.actual_output_quantity, 0)) AS actual_value,
+              ABS(
+                SUM(COALESCE(po.planned_output_quantity, 0)) -
+                SUM(COALESCE(po.actual_output_quantity, 0))
+              ) AS difference_value
+       FROM production_orders po
+       ${where}
+       GROUP BY ${bucketExpression}
+       ORDER BY label ASC`,
+      params
+    )[0]?.values ?? []
+
+    const plannedTotal = readNumber(db, `SELECT COALESCE(SUM(planned_output_quantity),0) FROM production_orders po ${where}`, params)
+    const actualTotal = readNumber(db, `SELECT COALESCE(SUM(actual_output_quantity),0) FROM production_orders po ${where}`, params)
+    return {
+      reportType,
+      summary: [
+        { label: 'عدد الأوامر', value: total },
+        { label: 'الإنتاج المخطط', value: plannedTotal },
+        { label: 'الإنتاج الفعلي', value: actualTotal },
+        {
+          label: 'تكلفة الإنتاج',
+          value: readNumber(
+            db,
+            `SELECT COALESCE(SUM(COALESCE(material_cost_total, 0) + COALESCE(labor_cost, 0)), 0)
+             FROM production_orders po ${where}`,
+            params,
+          ),
+        },
+      ],
+      rows: rows.map((row) => {
+        const plannedOutputQuantity = normalizeNumber(row[5])
+        const actualOutputQuantity = normalizeNumber(row[6])
+
+        return {
+          id: row[0] ?? '',
+          orderNumber: row[1] ?? '',
+          date: row[2] ?? '',
+          productName: row[3] ?? '',
+          warehouseName: row[4] ?? '',
+          plannedOutputQuantity,
+          actualOutputQuantity,
+          outputDifference: plannedOutputQuantity - actualOutputQuantity,
+          materialCostTotal: normalizeNumber(row[7]),
+          laborCost: normalizeNumber(row[8]),
+          totalProductionCost: normalizeNumber(row[9]),
+          unitProductionCost: normalizeNumber(row[10]),
+        }
+      }),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
+      pagination: buildPagination(total, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  if (reportType === 'production_cost') {
+    const clauses = []
+    const params = []
+    addWhereClause(clauses, params, 'po.output_warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'po.product_material_id = ?', materialId)
+    buildDateRangeClauses(clauses, params, 'po.date', fromDate, toDate)
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+    const total = readNumber(db, `SELECT COUNT(*) FROM production_orders po ${where}`, params)
+    const rows = db.exec(
+      `SELECT po.order_number, po.date, m.name AS product_name, w.name AS warehouse_name,
+              po.planned_output_quantity, po.actual_output_quantity, po.material_cost_total, po.labor_cost,
+              COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0) AS total_production_cost,
+              CASE
+                WHEN COALESCE(po.actual_output_quantity, 0) > 0
+                  THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
+                ELSE 0
+              END AS unit_production_cost
+       FROM production_orders po
+       LEFT JOIN materials m ON m.id = po.product_material_id
+       LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
+       ${where}
+       ORDER BY po.date DESC, po.order_number DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, page * pageSize]
+    )[0]?.values ?? []
+
+    const totalLabor = readNumber(db, `SELECT COALESCE(SUM(labor_cost), 0) FROM production_orders po ${where}`, params)
+    const totalMaterials = readNumber(db, `SELECT COALESCE(SUM(material_cost_total), 0) FROM production_orders po ${where}`, params)
+    const totalCost = totalMaterials + totalLabor
+
+    const chartSeries = [
+      { key: 'materials', label: 'تكلفة المواد' },
+      { key: 'labor', label: 'تكلفة الأجور' },
+      { key: 'total', label: 'إجمالي التكلفة' },
+    ]
+    const bucketExpression = getDateBucketExpression('po.date', chartGranularity)
+    const chartDataRows = db.exec(
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(po.material_cost_total, 0)) AS material_value,
+              SUM(COALESCE(po.labor_cost, 0)) AS labor_value,
+              SUM(COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) AS total_value
+       FROM production_orders po
+       ${where}
+       GROUP BY ${bucketExpression}
+       ORDER BY label ASC`,
+      params
+    )[0]?.values ?? []
+
+    return {
+      reportType,
+      summary: [
+        { label: 'عدد الأوامر', value: total },
+        { label: 'تكلفة المواد', value: totalMaterials },
+        { label: 'تكلفة الأجور', value: totalLabor },
+        { label: 'إجمالي التكلفة', value: totalCost },
+      ],
+      rows: rows.map((row) => ({
+        orderNumber: row[0] ?? '',
+        date: row[1] ?? '',
+        productName: row[2] ?? '',
+        warehouseName: row[3] ?? '',
+        plannedOutputQuantity: normalizeNumber(row[4]),
+        actualOutputQuantity: normalizeNumber(row[5]),
+        materialCostTotal: normalizeNumber(row[6]),
+        laborCost: normalizeNumber(row[7]),
+        totalProductionCost: normalizeNumber(row[8]),
+        unitProductionCost: normalizeNumber(row[9]),
+      })),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
+      pagination: buildPagination(total, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  throw new Error(`Unsupported report type: ${reportType}`)
+}
+
+export function getReportExportRows(db, reportType, filters = {}) {
+  const options = getBaseReportPayload(reportType, filters)
+  const { warehouseId, materialId, fromDate, toDate } = options
+
+  if (reportType === 'stock_balances') {
+    const clauses = [...buildMaterialFilterClause()]
+    const params = []
+    addWhereClause(clauses, params, 'sl.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'sl.material_id = ?', materialId)
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+
+    const rows = db.exec(
+      `SELECT sl.warehouse_id, w.name AS warehouse_name, sl.material_id, m.material_number, m.name AS material_name,
+              COALESCE(sl.quantity, 0) AS quantity,
+              COALESCE(sl.average_cost, 0) AS average_cost,
+              COALESCE(sl.quantity, 0) * COALESCE(sl.average_cost, 0) AS stock_value,
+              m.unit
+       FROM stock_levels sl
+       LEFT JOIN warehouses w ON w.id = sl.warehouse_id
+       LEFT JOIN materials m ON m.id = sl.material_id
+       ${where}
+       ORDER BY w.name, m.material_number`,
+      params
+    )[0]?.values ?? []
+
+    return rows.map((row) => ({
+      warehouseId: row[0] ?? '',
+      warehouseName: row[1] ?? '',
+      materialId: row[2] ?? '',
+      materialNumber: row[3] ?? '',
+      materialName: row[4] ?? '',
+      quantity: normalizeNumber(row[5]),
+      averageCost: normalizeNumber(row[6]),
+      stockValue: normalizeNumber(row[7]),
+      unit: row[8] ?? '',
+    }))
+  }
+
+  if (reportType === 'inventory_valuation') {
+    const clauses = [...buildMaterialFilterClause()]
+    const params = []
+    addWhereClause(clauses, params, 'sl.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'sl.material_id = ?', materialId)
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+
+    const rows = db.exec(
+      `SELECT w.name AS warehouse_name, m.material_number, m.name AS material_name,
+              COALESCE(sl.quantity, 0) AS quantity,
+              COALESCE(sl.average_cost, 0) AS average_cost,
+              COALESCE(sl.quantity, 0) * COALESCE(sl.average_cost, 0) AS stock_value,
+              m.unit
+       FROM stock_levels sl
+       LEFT JOIN warehouses w ON w.id = sl.warehouse_id
+       LEFT JOIN materials m ON m.id = sl.material_id
+       ${where}
+       ORDER BY w.name, m.material_number`,
+      params
+    )[0]?.values ?? []
+
+    return rows.map((row) => ({
+      warehouseName: row[0] ?? '',
+      materialNumber: row[1] ?? '',
+      materialName: row[2] ?? '',
+      quantity: normalizeNumber(row[3]),
+      averageCost: normalizeNumber(row[4]),
+      stockValue: normalizeNumber(row[5]),
+      unit: row[6] ?? '',
+    }))
+  }
+
+  if (reportType === 'purchases') {
+    const clauses = ['pi.status = ?']
+    const params = ['completed']
+    addWhereClause(clauses, params, 'pi.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'EXISTS (SELECT 1 FROM purchase_invoice_items pii WHERE pii.invoice_id = pi.id AND pii.material_id = ?)', materialId)
+    buildDateRangeClauses(clauses, params, 'pi.date', fromDate, toDate)
+    const where = `WHERE ${clauses.join(' AND ')}`
+
+    const rows = db.exec(
+      `SELECT pi.id, pi.invoice_number, pi.date, s.name AS supplier_name, w.name AS warehouse_name,
+              pi.net_total, COALESCE(pi.expenses, 0) AS expenses,
+              COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
+              COALESCE(pi.net_total - (SELECT COALESCE(SUM(pp.amount), 0) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS remaining_amount,
+              pi.status
+       FROM purchase_invoices pi
+       LEFT JOIN suppliers s ON s.id = pi.supplier_id
+       LEFT JOIN warehouses w ON w.id = pi.warehouse_id
+       ${where}
+       ORDER BY pi.date DESC, pi.invoice_number DESC`,
+      params
+    )[0]?.values ?? []
+
+    return rows.map((row) => ({
+      id: row[0] ?? '',
+      invoiceNumber: row[1] ?? '',
+      date: row[2] ?? '',
+      supplierName: row[3] ?? '',
+      warehouseName: row[4] ?? '',
+      netTotal: normalizeNumber(row[5]),
+      expenses: normalizeNumber(row[6]),
+      paidAmount: normalizeNumber(row[7]),
+      remainingAmount: normalizeNumber(row[8]),
+      status: row[9] ?? '',
+    }))
+  }
+
+  if (reportType === 'sales') {
+    const clauses = ['si.status = ?']
+    const params = ['completed']
+    addWhereClause(clauses, params, 'si.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'EXISTS (SELECT 1 FROM sales_invoice_items sii WHERE sii.invoice_id = si.id AND sii.material_id = ?)', materialId)
+    buildDateRangeClauses(clauses, params, 'si.date', fromDate, toDate)
+    const where = `WHERE ${clauses.join(' AND ')}`
+
+    const rows = db.exec(
+      `SELECT si.id, si.invoice_number, si.date, c.name AS customer_name, w.name AS warehouse_name,
+              si.net_total, COALESCE(si.customer_additional_fees, 0) AS customer_additional_fees,
+              COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0) AS return_total,
+              COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) AS paid_amount,
+              si.status
+       FROM sales_invoices si
+       LEFT JOIN customers c ON c.id = si.customer_id
+       LEFT JOIN warehouses w ON w.id = si.warehouse_id
+       ${where}
+       ORDER BY si.date DESC, si.invoice_number DESC`,
+      params
+    )[0]?.values ?? []
+
+    return rows.map((row) => {
+      const netTotal = normalizeNumber(row[5])
+      const customerAdditionalFees = normalizeNumber(row[6])
+      const paidAmount = normalizeNumber(row[8])
+
+      return {
+        id: row[0] ?? '',
+        invoiceNumber: row[1] ?? '',
+        date: row[2] ?? '',
+        customerName: row[3] ?? '',
+        warehouseName: row[4] ?? '',
+        netTotal,
+        customerAdditionalFees,
+        paidAmount,
+        remainingAmount: Math.max(netTotal - paidAmount, 0),
+        status: row[9] ?? '',
+      }
+    })
+  }
+
+  if (reportType === 'movements') {
+    const clauses = ['d.status = ?']
+    const params = ['completed']
+    addWhereClause(clauses, params, 'sm.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'sm.material_id = ?', materialId)
+    buildDateRangeClauses(clauses, params, 'd.date', fromDate, toDate)
+    const where = `WHERE ${clauses.join(' AND ')}`
+
+    const rows = db.exec(
+      `SELECT sm.id, d.reference, d.type, d.date, m.material_number, m.name AS material_name, sm.quantity_in, sm.quantity_out,
+              w.name AS warehouse_name, COALESCE(sm.cost, 0) AS cost, m.unit, sm.notes
+       FROM stock_movements sm
+       LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference
+       LEFT JOIN materials m ON m.id = sm.material_id
+       LEFT JOIN warehouses w ON w.id = sm.warehouse_id
+       ${where}
+       ORDER BY d.date DESC, d.reference DESC`,
+      params
+    )[0]?.values ?? []
+
+    return rows.map((row) => {
+      const quantityIn = normalizeNumber(row[6])
+      const quantityOut = normalizeNumber(row[7])
+      const cost = normalizeNumber(row[9])
+      return {
+        movementId: row[0] ?? '',
+        reference: row[1] ?? '',
+        type: row[2] ?? '',
+        date: row[3] ?? '',
+        materialNumber: row[4] ?? '',
+        materialName: row[5] ?? '',
+        warehouseName: row[8] ?? '',
+        unit: row[10] ?? '',
+        quantityIn,
+        quantityOut,
+        cost,
+        movementValue: normalizeNumber((quantityIn > 0 ? quantityIn : quantityOut) * cost),
+        notes: row[11] ?? '',
+      }
+    })
+  }
+
+  if (reportType === 'production') {
+    const clauses = []
+    const params = []
+    addWhereClause(clauses, params, 'po.output_warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'po.product_material_id = ?', materialId)
+    buildDateRangeClauses(clauses, params, 'po.date', fromDate, toDate)
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+
+    const rows = db.exec(
+      `SELECT po.id, po.order_number, po.date, m.name AS product_name, w.name AS warehouse_name,
+              po.planned_output_quantity, po.actual_output_quantity, po.material_cost_total, po.labor_cost,
+              COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0) AS total_production_cost,
+              CASE
+                WHEN COALESCE(po.actual_output_quantity, 0) > 0
+                  THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
+                ELSE 0
+              END AS unit_production_cost
+       FROM production_orders po
+       LEFT JOIN materials m ON m.id = po.product_material_id
+       LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
+       ${where}
+       ORDER BY po.date DESC, po.order_number DESC`,
+      params
+    )[0]?.values ?? []
+
+    return rows.map((row) => {
+      const plannedOutputQuantity = normalizeNumber(row[5])
+      const actualOutputQuantity = normalizeNumber(row[6])
+
+      return {
+        id: row[0] ?? '',
+        orderNumber: row[1] ?? '',
+        date: row[2] ?? '',
+        productName: row[3] ?? '',
+        warehouseName: row[4] ?? '',
+        plannedOutputQuantity,
+        actualOutputQuantity,
+        outputDifference: plannedOutputQuantity - actualOutputQuantity,
+        materialCostTotal: normalizeNumber(row[7]),
+        laborCost: normalizeNumber(row[8]),
+        totalProductionCost: normalizeNumber(row[9]),
+        unitProductionCost: normalizeNumber(row[10]),
+      }
+    })
+  }
+
+  if (reportType === 'production_cost') {
+    const clauses = []
+    const params = []
+    addWhereClause(clauses, params, 'po.output_warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'po.product_material_id = ?', materialId)
+    buildDateRangeClauses(clauses, params, 'po.date', fromDate, toDate)
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+
+    const rows = db.exec(
+      `SELECT po.order_number, po.date, m.name AS product_name, w.name AS warehouse_name,
+              po.planned_output_quantity, po.actual_output_quantity, po.material_cost_total, po.labor_cost,
+              COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0) AS total_production_cost,
+              CASE
+                WHEN COALESCE(po.actual_output_quantity, 0) > 0
+                  THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
+                ELSE 0
+              END AS unit_production_cost
+       FROM production_orders po
+       LEFT JOIN materials m ON m.id = po.product_material_id
+       LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
+       ${where}
+       ORDER BY po.date DESC, po.order_number DESC`,
+      params
+    )[0]?.values ?? []
+
+    return rows.map((row) => ({
+      orderNumber: row[0] ?? '',
+      date: row[1] ?? '',
+      productName: row[2] ?? '',
+      warehouseName: row[3] ?? '',
+      plannedOutputQuantity: normalizeNumber(row[4]),
+      actualOutputQuantity: normalizeNumber(row[5]),
+      materialCostTotal: normalizeNumber(row[6]),
+      laborCost: normalizeNumber(row[7]),
+      totalProductionCost: normalizeNumber(row[8]),
+      unitProductionCost: normalizeNumber(row[9]),
+    }))
+  }
+
+  throw new Error(`Unsupported report type: ${reportType}`)
+}

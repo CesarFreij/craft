@@ -30,10 +30,11 @@ import {
   type PurchaseInvoiceListItem,
   type PurchaseReturnRecord,
 } from '../services/purchasesService'
-import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, toInternalDate } from '../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
 import type { InvoicePrintData } from '../types/invoicePrint'
+import { useNotifications } from '../contexts/useNotifications'
 
 
 const darkPopupPaperSx = {
@@ -379,7 +380,7 @@ type ReturnLineForm = {
 }
 
 function currency(value: number): string {
-  return formatDisplayNumber(value, 2)
+  return formatCurrencyValue(value, 'price')
 }
 
 function DateFilterField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
@@ -461,6 +462,7 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
 }
 
 export function PurchaseReturnsPage() {
+  const notify = useNotifications()
   const location = useLocation()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
@@ -669,11 +671,12 @@ useEffect(() => {
     try {
       await purchasesService.deleteReturn(returnId)
       await loadData()
+      notify.error('تم حذف مرتجع الشراء بنجاح.')
     } catch (error) {
       console.error('DELETE PURCHASE RETURN FAILED', error)
       setReturnError(getUserFriendlyErrorMessage(error, 'تعذر حذف مرتجع الشراء.'))
     }
-  }, [loadData])
+  }, [loadData, notify])
 
   const confirmSaveReturn = useCallback(async () => {
     if (!selectedInvoiceId) {
@@ -707,6 +710,7 @@ useEffect(() => {
           notes: returnNotes,
           items: payloadItems,
         })
+        notify.info('تم تعديل مرتجع الشراء بنجاح.')
       } else {
         await purchasesService.createReturn({
           date: toInternalDate(returnDate || new Date().toISOString().slice(0, 10)),
@@ -716,6 +720,7 @@ useEffect(() => {
           notes: returnNotes,
           items: payloadItems,
         })
+        notify.success('تم إنشاء مرتجع الشراء بنجاح.')
       }
       await loadData()
       resetDialog()
@@ -727,7 +732,7 @@ useEffect(() => {
       setSaving(false)
       setSaveConfirmOpen(false)
     }
-  }, [editingReturnId, loadData, navigate, resetDialog, returnDate, returnLines, returnNotes, selectedInvoice, selectedInvoiceId])
+  }, [editingReturnId, loadData, navigate, notify, resetDialog, returnDate, returnLines, returnNotes, selectedInvoice, selectedInvoiceId])
 
   const openReturnDetails = useCallback(async (returnId: string) => {
     try {

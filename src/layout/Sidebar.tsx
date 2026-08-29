@@ -10,7 +10,7 @@ export const SIDEBAR_COLLAPSED_WIDTH = 96
 const inventoryMenuItems = [
   { label: 'إضافة مخازن', path: '/inventory/warehouses' },
   { label: 'أرصدة المخازن', path: '/inventory/balances' },
-  { label: 'تسوية المخازن', path: '/inventory/adjustments' },
+  { label: 'تسوية جرد', path: '/inventory/adjustments' },
   { label: 'حركات المخازن', path: '/inventory/movements' },
 ]
 
@@ -31,6 +31,24 @@ const manufacturingMenuItems = [
   { label: 'أوامر الإنتاج', path: '/manufacturing-orders' },
 ]
 
+const reportsMenuItems = [
+  { label: 'أرصدة المخزون', path: '/reports?type=stock_balances' },
+  { label: 'المشتريات', path: '/reports?type=purchases' },
+  { label: 'المبيعات', path: '/reports?type=sales' },
+  { label: 'حركات المخزون', path: '/reports?type=movements' },
+  { label: 'تسويات الجرد', path: '/reports?type=inventory_adjustments' },
+  { label: 'الإنتاج', path: '/reports?type=production' },
+  { label: 'تكلفة الإنتاج', path: '/reports?type=production_cost' },
+]
+
+const settingsMenuItems = [
+  { label: 'بيانات الشركة', path: '/settings?section=company' },
+  { label: 'العملة والأرقام', path: '/settings?section=numbers' },
+  { label: 'المبيعات', path: '/settings?section=sales' },
+  { label: 'طرق الدفع', path: '/settings?section=payments' },
+  { label: 'إدارة البيانات', path: '/settings?section=data' },
+]
+
 const navItems = [
   { key: 'home', label: 'الرئيسية', path: '/', icon: FiHome },
   { key: 'materials', label: 'دليل المواد', path: '/materials', icon: FiDatabase },
@@ -38,8 +56,8 @@ const navItems = [
   { key: 'purchases', label: 'المشتريات والموردين', path: '/purchases', icon: FiShoppingBag, submenu: purchasesMenuItems },
   { key: 'sales', label: 'المبيعات والعملاء', path: '/sales', icon: FiFileText, submenu: salesMenuItems },
   { key: 'manufacturing', label: 'الإنتاج والتصنيع', path: '/manufacturing', icon: FiPackage, submenu: manufacturingMenuItems },
-  { key: 'reports', label: 'التقارير', path: '/reports', icon: FiBarChart2 },
-  { key: 'settings', label: 'الإعدادات', path: '/settings', icon: FiSettings },
+  { key: 'reports', label: 'التقارير', path: '/reports', icon: FiBarChart2, submenu: reportsMenuItems },
+  { key: 'settings', label: 'الإعدادات', path: '/settings', icon: FiSettings, submenu: settingsMenuItems },
 ]
 
 export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
@@ -73,6 +91,18 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
         return
       }
 
+      if (location.pathname === '/reports') {
+        setExpandedSection('reports')
+        setActiveParentSection('reports')
+        return
+      }
+
+      if (location.pathname === '/settings') {
+        setExpandedSection('settings')
+        setActiveParentSection('settings')
+        return
+      }
+
       setExpandedSection(null)
       setActiveParentSection(null)
     }, 0)
@@ -80,6 +110,29 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
     return () => window.clearTimeout(timerId)
   }, [location.pathname])
 
+  const isSubItemActive = (subItemPath: string) => {
+    const [pathname, queryString = ''] = subItemPath.split('?')
+
+    if (location.pathname !== pathname) {
+      return false
+    }
+
+    if (!queryString) {
+      return true
+    }
+
+    const expectedParams = new URLSearchParams(queryString)
+    const currentParams = new URLSearchParams(location.search)
+
+    for (const [key, value] of expectedParams.entries()) {
+      if (currentParams.get(key) !== value) {
+        return false
+      }
+    }
+
+    return true
+  }
+  
   const renderNavButton = (item: (typeof navItems)[number]) => {
   const active = item.submenu
     ? activeParentSection === item.key
@@ -164,7 +217,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
           <Collapse in={isExpanded} timeout="auto" unmountOnExit>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.7, mt: 0.8, pe: 1, ps: 1.4 }}>
               {item.submenu.map((subItem) => {
-                const subActive = location.pathname === subItem.path || (subItem.path.includes('?') && location.search.includes(subItem.path.split('?')[1] || ''))
+                const subActive = isSubItemActive(subItem.path)
 
                 return (
                   <Box
@@ -214,12 +267,11 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
       transition={{ type: 'spring', stiffness: 180, damping: 20 }}
       sx={{
         position: 'fixed',
-        zIndex: '2',
-        top: 70,
+        zIndex: '1200',
         insetInlineStart: 0,
         insetInlineEnd: 'auto',
         bottom: 0,
-        height: 'calc(100vh - 70px)',
+        height: '100vh',
         borderInlineStart: '1px solid rgba(15, 23, 42, 0.08)',
         background: 'linear-gradient(135deg, #0a3697 0%, #0a6fcb 50%, #0cdbeb 100%)',
         boxShadow: '0 24px 60px rgba(15, 23, 42, 0.1)',

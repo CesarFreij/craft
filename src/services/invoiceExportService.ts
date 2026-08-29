@@ -1,3 +1,4 @@
+import { formatCurrencyValue, formatNumberBySettings } from '../utils/displayFormatting'
 import type { CompanyPrintSettings, InvoicePrintData } from '../types/invoicePrint'
 
 declare global {
@@ -41,9 +42,9 @@ function renderItems(data: InvoicePrintData): string {
           return `
             <tr>
               <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.name)}</td>
-              <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${Number(item.plannedQuantity ?? 0).toFixed(2)}</td>
-              <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${Number(item.actualQuantity ?? 0).toFixed(2)}</td>
-              <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${Number(item.cost ?? item.total ?? 0).toFixed(2)}</td>
+              <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatNumberBySettings(item.plannedQuantity ?? 0, 'quantity')}</td>
+              <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatNumberBySettings(item.actualQuantity ?? 0, 'quantity')}</td>
+              <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatCurrencyValue(item.cost ?? item.total ?? 0, 'price')}</td>
             </tr>
           `
         }
@@ -54,9 +55,9 @@ function renderItems(data: InvoicePrintData): string {
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.code || '—')}</td>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:right;">${escapeHtml(item.name)}</td>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.unit || '—')}</td>
-            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${Number(item.quantity ?? 0).toFixed(2)}</td>
-            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${Number(item.price ?? 0).toFixed(2)}</td>
-            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${Number(item.total ?? 0).toFixed(2)}</td>
+            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatNumberBySettings(item.quantity ?? 0, 'quantity')}</td>
+            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatCurrencyValue(item.price ?? 0, 'price')}</td>
+            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatCurrencyValue(item.total ?? 0, 'price')}</td>
           </tr>
         `
       }).join('')
@@ -300,14 +301,14 @@ export function buildInvoiceExportHtml(data: InvoicePrintData, settings: Company
             <div class="summary">
               <div class="payment-area">
                 <div class="payment-title">طريقة الدفع</div>
-                <div class="payment-value">—</div>
+                <div class="payment-value">${escapeHtml(data.paymentMethod || '—')}</div>
                 ${notesBlock ? `<div class="notes-area">${notesBlock}</div>` : ''}
               </div>
 
               <div class="totals">
-                <div class="totals-row"><span>المجموع:</span><span>${Number(data.subtotal).toFixed(2)}</span></div>
-                <div class="totals-row"><span>الخصم:</span><span>${Number(data.discount).toFixed(2)}</span></div>
-                <div class="totals-row total"><span>الإجمالي النهائي:</span><span>${Number(data.total).toFixed(2)}</span></div>
+                <div class="totals-row"><span>المجموع:</span><span>${formatCurrencyValue(data.subtotal, 'price')}</span></div>
+                <div class="totals-row"><span>الخصم:</span><span>${formatCurrencyValue(data.discount, 'price')}</span></div>
+                <div class="totals-row total"><span>الإجمالي النهائي:</span><span>${formatCurrencyValue(data.total, 'price')}</span></div>
               </div>
             </div>
           </div>
@@ -321,13 +322,13 @@ export function buildInvoiceCsv(data: InvoicePrintData): string {
   const headers = data.productionMode ? ['المادة', 'الكمية المخططة', 'الكمية المصروفة', 'التكلفة'] : ['الرقم', 'رقم المادة', 'اسم المادة', 'الوحدة', 'الكمية', 'السعر', 'الإجمالي']
   const rows = data.items.map((item, index) => {
     if (data.productionMode) {
-      return [item.name, Number(item.plannedQuantity ?? 0).toFixed(2), Number(item.actualQuantity ?? 0).toFixed(2), Number(item.cost ?? item.total ?? 0).toFixed(2)].join(',')
+      return [item.name, formatNumberBySettings(item.plannedQuantity ?? 0, 'quantity'), formatNumberBySettings(item.actualQuantity ?? 0, 'quantity'), formatCurrencyValue(item.cost ?? item.total ?? 0, 'price')].join(',')
     }
 
-    return [index + 1, item.code ?? '', item.name, item.unit, Number(item.quantity ?? 0).toFixed(2), Number(item.price ?? 0).toFixed(2), Number(item.total ?? 0).toFixed(2)].join(',')
+    return [index + 1, item.code ?? '', item.name, item.unit, formatNumberBySettings(item.quantity ?? 0, 'quantity'), formatCurrencyValue(item.price ?? 0, 'price'), formatCurrencyValue(item.total ?? 0, 'price')].join(',')
   })
 
-  const summary = `\n"المجموع","${Number(data.subtotal).toFixed(2)}"\n"الخصم","${Number(data.discount).toFixed(2)}"\n"الإجمالي النهائي","${Number(data.total).toFixed(2)}"`
+  const summary = `\n"المجموع","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"\n"الإجمالي النهائي","${formatCurrencyValue(data.total, 'price')}"`
   return `"${data.title}","${data.documentNumber}"\n"التاريخ","${data.date}"\n"${data.partyLabel}","${data.partyName}"\n${headers.join(',')}\n${rows.join('\n')}${summary}`
 }
 

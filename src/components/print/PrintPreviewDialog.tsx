@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle } from '@mui/material'
 import { InvoicePrintTemplate } from './InvoicePrintTemplate'
+import { formatCurrencyValue, formatNumberBySettings } from '../../utils/displayFormatting'
 import type { CompanyPrintSettings, InvoicePrintData } from '../../types/invoicePrint'
 
 interface PrintPreviewDialogProps {
@@ -16,9 +17,9 @@ function buildCsv(data: InvoicePrintData): string {
     if (data.productionMode) {
       return [
         item.name,
-        Number(item.plannedQuantity ?? 0).toFixed(2),
-        Number(item.actualQuantity ?? 0).toFixed(2),
-        Number(item.cost ?? item.total ?? 0).toFixed(2),
+        formatNumberBySettings(item.plannedQuantity ?? 0, 'quantity'),
+        formatNumberBySettings(item.actualQuantity ?? 0, 'quantity'),
+        formatCurrencyValue(item.cost ?? item.total ?? 0, 'price'),
       ].join(',')
     }
 
@@ -27,13 +28,13 @@ function buildCsv(data: InvoicePrintData): string {
       item.code ?? '',
       item.name,
       item.unit,
-      Number(item.quantity ?? 0).toFixed(2),
-      Number(item.price ?? 0).toFixed(2),
-      Number(item.total ?? 0).toFixed(2),
+      formatNumberBySettings(item.quantity ?? 0, 'quantity'),
+      formatCurrencyValue(item.price ?? 0, 'price'),
+      formatCurrencyValue(item.total ?? 0, 'price'),
     ].join(',')
   })
 
-  const summary = `\n"المجموع","${Number(data.subtotal).toFixed(2)}"\n"الخصم","${Number(data.discount).toFixed(2)}"\n"الإجمالي النهائي","${Number(data.total).toFixed(2)}"`
+  const summary = `\n"المجموع","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"\n"الإجمالي النهائي","${formatCurrencyValue(data.total, 'price')}"`
   return `"${data.title}","${data.documentNumber}"\n"التاريخ","${data.date}"\n"${data.partyLabel}","${data.partyName}"\n${headers.join(',')}\n${rows.join('\n')}${summary}`
 }
 

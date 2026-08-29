@@ -11,6 +11,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   FiActivity,
   FiBarChart2,
@@ -39,8 +40,14 @@ import {
 } from '../services/reportsService'
 import { inventoryService, type WarehouseRecord } from '../services/inventoryService'
 import { materialsService, type MaterialRecord } from '../services/materialsService'
-import { formatDateDMY, toInternalDate } from '../utils/displayFormatting'
+import {
+  formatCurrencyValue,
+  formatDateDMY,
+  formatNumberBySettings,
+  toInternalDate,
+} from '../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
+import { useNotifications } from '../contexts/useNotifications'
 
 type ReportConfig = {
   label: string
@@ -84,6 +91,23 @@ const darkSelectSlotProps = {
     MenuProps: {
       slotProps: {
         paper: { sx: darkPopupPaperSx },
+      },
+    },
+  },
+}
+
+const scrollableMaterialSelectSlotProps = {
+  select: {
+    MenuProps: {
+      slotProps: {
+        paper: {
+          sx: {
+            ...darkPopupPaperSx,
+            maxHeight: 340,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+          },
+        },
       },
     },
   },
@@ -170,17 +194,11 @@ const dashboardPanelSx = {
 }
 
 const money = (value: unknown) => {
-  const number = Number(value ?? 0)
-  return Number.isFinite(number)
-    ? new Intl.NumberFormat('ar', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)
-    : '0.00'
+  return formatCurrencyValue(Number(value ?? 0))
 }
 
 const number2 = (value: unknown) => {
-  const number = Number(value ?? 0)
-  return Number.isFinite(number)
-    ? new Intl.NumberFormat('ar', { maximumFractionDigits: 2 }).format(number)
-    : '0'
+  return formatNumberBySettings(Number(value ?? 0), 'quantity')
 }
 
 const dateCell = (value: unknown) => formatDateDMY(String(value ?? ''))
@@ -242,6 +260,68 @@ const productionDifferenceCell = (value: unknown) => {
       {isShortage
         ? `نقص ${number2(absoluteDifference)}`
         : `زيادة ${number2(absoluteDifference)}`}
+    </Box>
+  )
+}
+
+
+const adjustmentDifferenceCell = (value: unknown) => {
+  const difference = Number(value ?? 0)
+
+  if (!Number.isFinite(difference) || Math.abs(difference) < 0.000001) {
+    return (
+      <Box
+        component="span"
+        sx={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 0.6,
+          minWidth: 90,
+          px: 1,
+          py: 0.45,
+          borderRadius: '999px',
+          color: '#86EFAC',
+          background: 'rgba(34,197,94,.10)',
+          border: '1px solid rgba(134,239,172,.20)',
+          fontWeight: 800,
+        }}
+      >
+        <FiCheckCircle size={14} />
+        مطابق
+      </Box>
+    )
+  }
+
+  const isIncrease = difference > 0
+  const absoluteDifference = Math.abs(difference)
+  const DifferenceIcon = isIncrease ? FiTrendingUp : FiTrendingDown
+
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 0.6,
+        minWidth: 110,
+        px: 1,
+        py: 0.45,
+        borderRadius: '999px',
+        color: isIncrease ? '#86EFAC' : '#FCA5A5',
+        background: isIncrease ? 'rgba(34,197,94,.10)' : 'rgba(239,68,68,.10)',
+        border: isIncrease
+          ? '1px solid rgba(134,239,172,.20)'
+          : '1px solid rgba(252,165,165,.22)',
+        fontWeight: 800,
+        direction: 'rtl',
+      }}
+    >
+      <DifferenceIcon size={14} />
+      {isIncrease
+        ? `زيادة ${number2(absoluteDifference)}`
+        : `نقص ${number2(absoluteDifference)}`}
     </Box>
   )
 }
@@ -331,6 +411,27 @@ const reportConfigs: Record<ReportType, ReportConfig> = {
       { key: 'movementValue', label: 'قيمة الحركة', render: money },
     ],
   },
+  inventory_adjustments: {
+    label: 'تسويات الجرد',
+    subtitle: 'عرض فروقات الجرد المعتمدة بين الرصيد الدفتري والكمية الفعلية',
+    chartTitle: 'الزيادة والنقص في تسويات الجرد عبر الفترة',
+    distributionTitle: 'توزيع فروقات الجرد',
+    supportsDate: true,
+    columns: [
+      { key: 'reference', label: 'رقم التسوية' },
+      { key: 'date', label: 'التاريخ', render: dateCell },
+      { key: 'warehouseName', label: 'المخزن' },
+      { key: 'materialNumber', label: 'رقم المادة' },
+      { key: 'materialName', label: 'المادة' },
+      { key: 'unit', label: 'الوحدة' },
+      { key: 'systemQuantity', label: 'الكمية الدفترية', render: number2 },
+      { key: 'countedQuantity', label: 'الكمية الفعلية', render: number2 },
+      { key: 'difference', label: 'الفرق', render: adjustmentDifferenceCell },
+      { key: 'unitCost', label: 'تكلفة الوحدة', render: money },
+      { key: 'differenceValue', label: 'قيمة الفرق', render: money },
+      { key: 'notes', label: 'ملاحظات' },
+    ],
+  },
   production: {
     label: 'الإنتاج',
     subtitle: 'مقارنة المخطط والفعلي وتكلفة أوامر الإنتاج',
@@ -366,6 +467,18 @@ const reportConfigs: Record<ReportType, ReportConfig> = {
       { key: 'unitProductionCost', label: 'تكلفة الوحدة', render: money },
     ],
   },
+}
+
+const visibleReportTypes: ReportType[] = (
+  Object.keys(reportConfigs) as ReportType[]
+).filter((type) => type !== 'inventory_valuation')
+
+function getReportTypeFromSearch(search: string): ReportType {
+  const requestedType = new URLSearchParams(search).get('type') as ReportType | null
+
+  return requestedType && visibleReportTypes.includes(requestedType)
+    ? requestedType
+    : 'sales'
 }
 
 function DateFilterField({
@@ -477,6 +590,7 @@ function isFinancialMetric(reportType: ReportType, label: string) {
       'المبالغ المستلمة',
     ]),
     movements: new Set(['قيمة الوارد', 'قيمة الصادر']),
+    inventory_adjustments: new Set(['قيمة فروقات الجرد']),
     production: new Set(['تكلفة الإنتاج']),
     production_cost: new Set([
       'تكلفة المواد',
@@ -1133,6 +1247,23 @@ function buildReportDistributionModel(
     }
   }
 
+  if (reportType === 'inventory_adjustments') {
+    const increase = metricNumericValue(summary, 'إجمالي الزيادة')
+    const shortage = metricNumericValue(summary, 'إجمالي النقص')
+
+    return {
+      title: fallbackTitle,
+      centerLabel: 'إجمالي الفروقات',
+      centerValue: increase + shortage,
+      valueKind: 'number',
+      description: 'مقارنة كميات الزيادة بكميات النقص الناتجة عن تسويات الجرد',
+      data: [
+        { label: 'زيادة جرد', value: increase },
+        { label: 'نقص جرد', value: shortage },
+      ],
+    }
+  }
+
   if (reportType === 'production') {
     const planned = metricNumericValue(summary, 'الإنتاج المخطط')
     const actual = metricNumericValue(summary, 'الإنتاج الفعلي')
@@ -1747,8 +1878,13 @@ function buildExcelWorkbook(
 
 
 export function ReportsPage() {
+  const notify = useNotifications()
+  const location = useLocation()
+  const reportType = useMemo(
+    () => getReportTypeFromSearch(location.search),
+    [location.search],
+  )
   const initialWeeklyRange = getPresetDateRange('weekly')
-  const [reportType, setReportType] = useState<ReportType>('sales')
   const [warehouseId, setWarehouseId] = useState('')
   const [materialId, setMaterialId] = useState('')
   const [period, setPeriod] = useState<ReportPeriod>('weekly')
@@ -1866,23 +2002,6 @@ export function ReportsPage() {
     toDate,
   ])
 
-  const handleReportTypeChange = (nextType: ReportType) => {
-    setLoading(true)
-    setErrorMessage('')
-    setReportType(nextType)
-    setWarehouseId('')
-    setMaterialId('')
-    setPage(0)
-
-    if (reportConfigs[nextType].supportsDate) {
-      const nextPeriod: ReportPeriod = 'weekly'
-      const range = getPresetDateRange(nextPeriod)
-      setPeriod(nextPeriod)
-      setFromDate(range.fromDate)
-      setToDate(range.toDate)
-    }
-  }
-
   const handlePeriodChange = (nextPeriod: ReportPeriod) => {
     setPeriod(nextPeriod)
     setErrorMessage('')
@@ -1939,6 +2058,7 @@ export function ReportsPage() {
       anchor.download = `craft-${reportType}-${new Date().toISOString().slice(0, 10)}.xlsx`
       anchor.click()
       URL.revokeObjectURL(url)
+      notify.success('تم تصدير ملف Excel بنجاح.')
     } catch (error) {
       setErrorMessage(
         getUserFriendlyErrorMessage(error, 'تعذر تصدير التقرير إلى Excel.'),
@@ -1949,6 +2069,29 @@ export function ReportsPage() {
   }
 
   const summary = report?.summary ?? []
+  const visibleSummary = summary
+    .filter(
+      (metric) =>
+        !(
+          (reportType === 'stock_balances' || reportType === 'inventory_valuation') &&
+          metric.label === 'عدد المخازن' &&
+          Boolean(warehouseId)
+        ),
+    )
+    .map((metric) => {
+      if (
+        (reportType === 'stock_balances' || reportType === 'inventory_valuation') &&
+        metric.label === 'عدد المخازن' &&
+        !warehouseId
+      ) {
+        return {
+          ...metric,
+          value: warehouses.length,
+        }
+      }
+
+      return metric
+    })
   const chartData = report?.chartData ?? []
   const chartSeries = report?.chartSeries ?? []
   const distributionModel = buildReportDistributionModel(
@@ -1983,49 +2126,6 @@ export function ReportsPage() {
         </Alert>
       ) : null}
 
-      <Paper
-        elevation={0}
-        sx={{
-          ...dashboardPanelSx,
-          mb: 2,
-          display: 'flex',
-          alignItems: { xs: 'flex-start', md: 'center' },
-          justifyContent: 'space-between',
-          gap: 2,
-          flexDirection: { xs: 'column', md: 'row' },
-        }}
-      >
-        <Box>
-          <Typography sx={{ fontSize: 18, fontWeight: 850 }}>
-            {config.label}
-          </Typography>
-          <Typography
-            sx={{
-              mt: 0.5,
-              fontSize: 13,
-              color: 'rgba(255,255,255,.66) !important',
-            }}
-          >
-            {config.subtitle}
-          </Typography>
-        </Box>
-
-        <Box
-          sx={{
-            width: 48,
-            height: 48,
-            borderRadius: '14px',
-            display: 'grid',
-            placeItems: 'center',
-            color: '#67E8F9',
-            background: 'rgba(34, 211, 238, 0.10)',
-            border: '1px solid rgba(103, 232, 249, 0.18)',
-          }}
-        >
-          <FiBarChart2 size={23} />
-        </Box>
-      </Paper>
-
       <Paper elevation={0} sx={{ ...dashboardPanelSx, mb: 2 }}>
         <Box
           sx={{
@@ -2035,31 +2135,14 @@ export function ReportsPage() {
               sm: 'repeat(2, minmax(0, 1fr))',
               lg: config.supportsDate
                 ? period === 'custom'
-                  ? '1.2fr 1fr 1fr 1fr 1fr 1fr auto'
-                  : '1.2fr 1fr 1fr 1fr auto'
-                : '1.2fr 1fr 1fr auto',
+                  ? '1fr 1fr 1fr 1fr 1fr auto'
+                  : '1fr 1fr 1fr auto'
+                : '1fr 1fr auto',
             },
             gap: 1.5,
             alignItems: 'center',
           }}
         >
-          <TextField
-            select
-            label="نوع التقرير"
-            value={reportType}
-            onChange={(event) =>
-              handleReportTypeChange(event.target.value as ReportType)
-            }
-            fullWidth
-            slotProps={darkSelectSlotProps}
-          >
-            {(Object.keys(reportConfigs) as ReportType[]).map((type) => (
-              <MenuItem key={type} value={type}>
-                {reportConfigs[type].label}
-              </MenuItem>
-            ))}
-          </TextField>
-
           <TextField
             select
             label="المخزن"
@@ -2092,7 +2175,7 @@ export function ReportsPage() {
               setErrorMessage('')
             }}
             fullWidth
-            slotProps={darkSelectSlotProps}
+            slotProps={scrollableMaterialSelectSlotProps}
           >
             <MenuItem value="">جميع المواد</MenuItem>
             {materialOptions.map((material) => (
@@ -2207,13 +2290,13 @@ export function ReportsPage() {
           gridTemplateColumns: {
             xs: '1fr',
             sm: 'repeat(2, minmax(0, 1fr))',
-            xl: `repeat(${Math.max(1, Math.min(summary.length, 4))}, minmax(0, 1fr))`,
+            xl: `repeat(${Math.max(1, Math.min(visibleSummary.length, 4))}, minmax(0, 1fr))`,
           },
           gap: 1.5,
           mb: 2,
         }}
       >
-        {summary.map((metric, index) => (
+        {visibleSummary.map((metric, index) => (
           <MetricCard
             key={`${metric.label}-${index}`}
             metric={metric}

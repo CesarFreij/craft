@@ -41,8 +41,10 @@ import {
 } from '../services/purchasesService'
 import type { InvoicePrintData } from '../types/invoicePrint'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { loadSettings } from '../services/settingsService'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { useNotifications } from '../contexts/useNotifications'
 
 
 const darkPopupPaperSx = {
@@ -400,6 +402,11 @@ type SaleLine = {
   notes: string
 }
 
+type InvoicePrintDataWithDiscount = InvoicePrintData & {
+  discountType?: DiscountType
+  discountValue?: number
+}
+
 type CustomerForm = {
   id?: string
   code: string
@@ -417,7 +424,12 @@ const paymentStatusLabel: Record<PaymentStatus, string> = {
 }
 
 function currency(value: number): string {
-  return formatDisplayNumber(value, 2)
+  return formatCurrencyValue(value, 'price')
+}
+
+function formatDiscountPercentage(value: number | ''): string {
+  const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : 0
+  return `${numericValue}%`
 }
 
 function DateFilterField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
@@ -513,6 +525,7 @@ function createEmptyLine(): SaleLine {
 }
 
 export function SalesPage() {
+  const notify = useNotifications()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [customers, setCustomers] = useState<CustomerRecord[]>([])
@@ -574,7 +587,7 @@ export function SalesPage() {
   const [invoiceDeleteError, setInvoiceDeleteError] = useState('')
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false)
   const [paymentError, setPaymentError] = useState('')
-  const [paymentForm, setPaymentForm] = useState({ date: '', amount: '', notes: '' })
+  const [paymentForm, setPaymentForm] = useState({ date: '', amount: '', notes: '', paymentMethod: '' })
   const [paymentDeleteConfirm, setPaymentDeleteConfirm] = useState<{ paymentId: string; paymentDate: string; paymentAmount: number } | null>(null)
   const [paymentDeleteError, setPaymentDeleteError] = useState('')
 
@@ -685,10 +698,17 @@ export function SalesPage() {
     setInvoices(list)
   }, [search, fromDate, toDate, customerFilter, warehouseFilter])
 
-  const buildSalesExportData = useCallback((): InvoicePrintData | null => {
+  const buildSalesExportData = useCallback((): InvoicePrintDataWithDiscount | null => {
     if (!selectedInvoice) {
       return null
     }
+
+    const paymentMethods = [...new Set((selectedInvoice.payments ?? []).map((payment) => String(payment.paymentMethod ?? '').trim()).filter(Boolean))]
+    const normalizedPaymentMethod = paymentMethods.length === 0
+      ? '—'
+      : paymentMethods.length === 1
+        ? paymentMethods[0]
+        : paymentMethods.join('، ')
 
     return {
       documentType: 'sales',
@@ -710,8 +730,11 @@ export function SalesPage() {
       })),
       subtotal: selectedInvoice.subtotal,
       discount: selectedInvoice.discountAmount,
+      discountType: selectedInvoice.discountType,
+      discountValue: selectedInvoice.discountValue,
       additionalFees: selectedInvoice.customerAdditionalFees ?? 0,
       total: selectedInvoice.netTotal,
+      paymentMethod: normalizedPaymentMethod,
     }
   }, [selectedInvoice])
 
@@ -743,6 +766,8 @@ export function SalesPage() {
   }, [warehouseBalances])
 
   const validateInvoiceForm = useCallback((): string | null => {
+    const appSettings = loadSettings()
+
     if (!invoiceDate) return 'تاريخ الفاتورة مطلوب.'
     if (!invoiceCustomerId) return 'اختر العميل.'
     if (!invoiceWarehouseId) return 'اختر المخزن.'
@@ -761,6 +786,13 @@ export function SalesPage() {
       const quantity = typeof line.quantity === 'number' ? line.quantity : Number.NaN
       if (Number.isNaN(quantity) || quantity <= 0) {
         return 'يجب أن تكون كمية المادة أكبر من صفر.'
+      }
+
+      if (!appSettings.allowNegativeStock) {
+        const balance = Number(warehouseBalanceByMaterial.get(line.materialId)?.quantity ?? 0)
+        if (quantity > balance + 0.000001) {
+          return `الرصيد المتوفر للمادة غير كافٍ في المخزن. الكمية المطلوبة: ${formatNumberBySettings(quantity, 'quantity')}، الرصيد المتوفر: ${formatNumberBySettings(balance, 'quantity')}.`
+        }
       }
 
       const unitPrice = typeof line.unitPrice === 'number' ? line.unitPrice : Number.NaN
@@ -783,7 +815,7 @@ export function SalesPage() {
     }
 
     return null
-  }, [invoiceDate, invoiceCustomerId, invoiceWarehouseId, invoiceLines, materialById, discountValue, discountType, discountAmount, subtotal])
+  }, [invoiceDate, invoiceCustomerId, invoiceWarehouseId, invoiceLines, materialById, discountValue, discountType, discountAmount, subtotal, warehouseBalanceByMaterial])
 
   const buildInvoicePayload = useCallback(() => {
     return {
@@ -897,8 +929,10 @@ export function SalesPage() {
         } else {
           await salesService.updateDraft(editingInvoiceId, payload)
         }
+        notify.info('تم تعديل الفاتورة بنجاح.')
       } else {
         await salesService.createDraft(payload)
+        notify.success('تمت إضافة فاتورة البيع بنجاح.')
       }
       setInvoiceDialogOpen(false)
       await loadData()
@@ -909,7 +943,7 @@ export function SalesPage() {
     } finally {
       setSaving(false)
     }
-  }, [validateInvoiceForm, buildInvoicePayload, editingInvoiceId, editingInvoiceStatus, loadData, scrollInvoiceDialogToTop])
+  }, [validateInvoiceForm, buildInvoicePayload, editingInvoiceId, editingInvoiceStatus, loadData, scrollInvoiceDialogToTop, notify])
 
   const completeDraft = useCallback(async () => {
     const validationError = validateInvoiceForm()
@@ -933,6 +967,7 @@ export function SalesPage() {
       await salesService.complete(targetInvoiceId)
       setInvoiceDialogOpen(false)
       await loadData()
+      notify.success('تم اعتماد الفاتورة بنجاح.')
     } catch (error) {
       console.error('APPROVE SALES FAILED', error)
       setInvoiceFormError(getUserFriendlyErrorMessage(error, 'تعذر اعتماد الفاتورة. يرجى مراجعة البيانات والمحاولة مرة أخرى.'))
@@ -940,13 +975,14 @@ export function SalesPage() {
     } finally {
       setSaving(false)
     }
-  }, [validateInvoiceForm, editingInvoiceId, buildInvoicePayload, loadData, scrollInvoiceDialogToTop])
+  }, [validateInvoiceForm, editingInvoiceId, buildInvoicePayload, loadData, scrollInvoiceDialogToTop, notify])
 
   const deleteDraft = useCallback(async (invoiceId: string): Promise<boolean> => {
     try {
       setInvoiceDeleteError('')
       await salesService.deleteDraft(invoiceId)
       await reloadInvoices()
+      notify.error('تم حذف مسودة الفاتورة بنجاح.')
       return true
     } catch (error) {
       console.error('DELETE SALES DRAFT FAILED', error)
@@ -958,7 +994,7 @@ export function SalesPage() {
       )
       return false
     }
-  }, [reloadInvoices])
+  }, [reloadInvoices, notify])
 
   const deleteApprovedInvoice = useCallback(async (invoiceId: string): Promise<boolean> => {
     try {
@@ -969,6 +1005,7 @@ export function SalesPage() {
         const refreshed = await salesService.getInvoiceById(invoiceId)
         setSelectedInvoice(refreshed)
       }
+      notify.error('تم حذف الفاتورة بنجاح.')
       return true
     } catch (error) {
       console.error('DELETE APPROVED SALES INVOICE FAILED', error)
@@ -980,17 +1017,19 @@ export function SalesPage() {
       )
       return false
     }
-  }, [reloadInvoices, detailsOpen, selectedInvoice])
+  }, [reloadInvoices, detailsOpen, selectedInvoice, notify])
 
   const openPaymentDialog = useCallback(() => {
     if (!selectedInvoice) {
       return
     }
+    const paymentMethods = loadSettings().paymentMethods
     setPaymentError('')
     setPaymentForm({
       date: toInternalDate(selectedInvoice.date || new Date().toISOString().slice(0, 10)),
       amount: '',
       notes: '',
+      paymentMethod: paymentMethods[0] ?? '',
     })
     setPaymentDialogOpen(true)
   }, [selectedInvoice])
@@ -1001,6 +1040,10 @@ export function SalesPage() {
     const amount = Number(paymentForm.amount)
     if (!paymentForm.date) {
       setPaymentError('تاريخ الدفعة مطلوب.')
+      return
+    }
+    if (!paymentForm.paymentMethod) {
+      setPaymentError('طريقة الدفع مطلوبة.')
       return
     }
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -1018,16 +1061,18 @@ export function SalesPage() {
         date: toInternalDate(paymentForm.date),
         amount,
         notes: paymentForm.notes,
+        paymentMethod: paymentForm.paymentMethod,
       })
       setPaymentDialogOpen(false)
       const refreshed = await salesService.getInvoiceById(selectedInvoice.id)
       setSelectedInvoice(refreshed)
       await reloadInvoices()
+      notify.success('تمت إضافة الدفعة بنجاح.')
     } catch (error) {
       console.error('ADD SALES PAYMENT FAILED', error)
       setPaymentError(getUserFriendlyErrorMessage(error, 'تعذر تسجيل الدفعة.'))
     }
-  }, [paymentForm, reloadInvoices, selectedInvoice])
+  }, [paymentForm, reloadInvoices, selectedInvoice, notify])
 
   const deletePayment = useCallback(async (paymentId: string): Promise<boolean> => {
     try {
@@ -1039,6 +1084,7 @@ export function SalesPage() {
       }
       await reloadInvoices()
       setPaymentDeleteConfirm(null)
+      notify.error('تم حذف الدفعة بنجاح.')
       return true
     } catch (error) {
       console.error('DELETE SALES PAYMENT FAILED', error)
@@ -1050,7 +1096,7 @@ export function SalesPage() {
       )
       return false
     }
-  }, [reloadInvoices, selectedInvoice])
+  }, [reloadInvoices, selectedInvoice, notify])
 
   const openDetails = useCallback(async (invoiceId: string) => {
     try {
@@ -1104,6 +1150,7 @@ export function SalesPage() {
           notes: customerForm.notes,
           status: customerForm.status,
         })
+        notify.info('تم تعديل بيانات العميل بنجاح.')
       } else {
         await customersService.create({
           code,
@@ -1113,6 +1160,7 @@ export function SalesPage() {
           notes: customerForm.notes,
           status: customerForm.status,
         })
+        notify.success('تمت إضافة العميل بنجاح.')
       }
       setCustomerFormOpen(false)
       setCustomerForm({ code: '', name: '', phone: '', address: '', notes: '', status: 'active' })
@@ -1121,7 +1169,7 @@ export function SalesPage() {
       console.error('SAVE CUSTOMER FAILED', error)
       setCustomerFormError(getUserFriendlyErrorMessage(error, 'تعذر حفظ بيانات العميل.'))
     }
-  }, [customerForm, loadData])
+  }, [customerForm, loadData, notify])
 
   return (
     <Box sx={craftPageGlassSx}>
@@ -1512,6 +1560,7 @@ export function SalesPage() {
                 await customersService.delete(customerToDelete.id)
                 setCustomerToDelete(null)
                 await loadData()
+                notify.error('تم حذف العميل بنجاح.')
               } catch (error) {
                 console.error('DELETE CUSTOMER FAILED', error)
                 setCustomerDeleteError(getUserFriendlyErrorMessage(error, 'تعذر حذف العميل. قد يكون مرتبطاً بفواتير أو حركات أخرى، لذلك لا يمكن حذفه حالياً.'))
@@ -1674,17 +1723,27 @@ export function SalesPage() {
                             return
                           }
 
-                          const averageCost = Number(
-                            warehouseBalanceByMaterial.get(value.id)?.averageCost ?? 0,
-                          )
+                          const settings = loadSettings()
+                          const balance = warehouseBalanceByMaterial.get(value.id)
+                          const averageCost = Number(balance?.averageCost ?? 0)
+
+                          let defaultUnitPrice = 0
+
+                          if (settings.defaultSalesPriceType === 'average') {
+                            defaultUnitPrice = Number.isFinite(averageCost) ? averageCost : 0
+                          } else if (settings.defaultSalesPriceType === 'price1') {
+                            defaultUnitPrice = Number(value.price1 ?? 0)
+                          } else if (settings.defaultSalesPriceType === 'price2') {
+                            defaultUnitPrice = Number(value.price2 ?? 0)
+                          } else if (settings.defaultSalesPriceType === 'price3') {
+                            defaultUnitPrice = Number(value.price3 ?? 0)
+                          }
 
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? {
                             ...item,
                             materialId: value.id,
                             unit: value.unit ?? '',
-                            unitPrice: Number.isFinite(averageCost)
-                              ? Number(averageCost.toFixed(2))
-                              : 0,
+                            unitPrice: defaultUnitPrice,
                             quantity: typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1,
                           } : item))
                           setMaterialWarehouseHintLineKey(null)
@@ -1761,20 +1820,36 @@ export function SalesPage() {
 
           <SectionCard title="الحسم والإجماليات">
             <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
-              <TextField select label="نوع الحسم" value={discountType} onChange={(event) => setDiscountType(event.target.value as DiscountType)} slotProps={darkSelectSlotProps}>
+              <TextField
+                select
+                label="نوع الحسم"
+                value={discountType}
+                onChange={(event) => {
+                  const nextDiscountType = event.target.value as DiscountType
+                  setDiscountType(nextDiscountType)
+                  setDiscountValue(0)
+                }}
+                slotProps={darkSelectSlotProps}
+              >
                 <MenuItem value="none">بدون حسم</MenuItem>
                 <MenuItem value="percentage">نسبة مئوية</MenuItem>
                 <MenuItem value="fixed">مبلغ ثابت</MenuItem>
               </TextField>
               <TextField
-                label="قيمة الحسم"
+                label={discountType === 'percentage' ? 'نسبة الحسم (%)' : 'قيمة الحسم'}
                 type="number"
                 value={discountValue}
+                disabled={discountType === 'none'}
                 onChange={(event) => {
                   const raw = event.target.value
                   setDiscountValue(raw === '' ? '' : Number(raw))
                 }}
-                slotProps={{ htmlInput: { min: 0, max: discountType === 'percentage' ? 100 : undefined, step: 1 } }}
+                slotProps={{
+                  htmlInput: { min: 0, max: discountType === 'percentage' ? 100 : undefined, step: 1 },
+                  input: discountType === 'percentage'
+                    ? { endAdornment: <InputAdornment position="end">%</InputAdornment> }
+                    : undefined,
+                }}
               />
               <TextField
                 label="رسوم إضافية على العميل"
@@ -1787,11 +1862,14 @@ export function SalesPage() {
                 slotProps={{ htmlInput: { min: 0, step: 1 } }}
               />
             </Box>
-            <Table sx={{ mt: 2, width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
+            <Table sx={{ mt: 2, width: '100%', minWidth: discountType === 'percentage' ? 760 : 620, '& td, & th': { textAlign: 'center' } }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
-                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
+                  {discountType === 'percentage' ? (
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>نسبة الحسم</TableCell>
+                  ) : null}
+                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>قيمة الحسم</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رسوم إضافية على العميل</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي النهائي</TableCell>
                 </TableRow>
@@ -1799,6 +1877,9 @@ export function SalesPage() {
               <TableBody>
                 <TableRow sx={{ textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center' }}>{currency(subtotal)}</TableCell>
+                  {discountType === 'percentage' ? (
+                    <TableCell sx={{ textAlign: 'center' }}>{formatDiscountPercentage(discountValue)}</TableCell>
+                  ) : null}
                   <TableCell sx={{ textAlign: 'center' }}>{currency(discountAmount)}</TableCell>
                   <TableCell sx={{ textAlign: 'center' }}>{currency(customerFeesAmount)}</TableCell>
                   <TableCell sx={{ textAlign: 'center' }}>{currency(netTotal)}</TableCell>
@@ -1864,11 +1945,14 @@ export function SalesPage() {
                 </TableBody>
               </Table>
 
-              <Table sx={{ width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
+              <Table sx={{ width: '100%', minWidth: selectedInvoice.discountType === 'percentage' ? 760 : 620, '& td, & th': { textAlign: 'center' } }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
-                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
+                    {selectedInvoice.discountType === 'percentage' ? (
+                      <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>نسبة الحسم</TableCell>
+                    ) : null}
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>قيمة الحسم</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رسوم إضافية على العميل</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي النهائي</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المدفوع</TableCell>
@@ -1878,6 +1962,9 @@ export function SalesPage() {
                 <TableBody>
                   <TableRow sx={{ textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.subtotal)}</TableCell>
+                    {selectedInvoice.discountType === 'percentage' ? (
+                      <TableCell sx={{ textAlign: 'center' }}>{formatDiscountPercentage(selectedInvoice.discountValue)}</TableCell>
+                    ) : null}
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.discountAmount)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.customerAdditionalFees ?? 0)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(selectedInvoice.netTotal)}</TableCell>
@@ -1960,6 +2047,7 @@ export function SalesPage() {
                       <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                         <TableCell sx={{ textAlign: 'center' }}>التاريخ</TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>المبلغ</TableCell>
+                        <TableCell sx={{ textAlign: 'center' }}>طريقة الدفع</TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>ملاحظات</TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>الإجراءات</TableCell>
                       </TableRow>
@@ -1969,6 +2057,7 @@ export function SalesPage() {
                         <TableRow key={payment.id} sx={{ textAlignLast: 'center' }}>
                           <TableCell sx={{ textAlign: 'center' }}>{formatDateDMY(payment.date)}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>{currency(payment.amount)}</TableCell>
+                          <TableCell sx={{ textAlign: 'center' }}>{payment.paymentMethod || '—'}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>{payment.notes || '__'}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>
                             <IconButton
@@ -2015,6 +2104,18 @@ export function SalesPage() {
             }}
             required
           />
+          <TextField
+            select
+            label="طريقة الدفع"
+            value={paymentForm.paymentMethod}
+            onChange={(event) => setPaymentForm((prev) => ({ ...prev, paymentMethod: event.target.value }))}
+            slotProps={darkSelectSlotProps}
+            required
+          >
+            {loadSettings().paymentMethods.map((method) => (
+              <MenuItem key={method} value={method}>{method}</MenuItem>
+            ))}
+          </TextField>
           <TextField label="المبلغ" type="number" value={paymentForm.amount} onChange={(event) => setPaymentForm((prev) => ({ ...prev, amount: event.target.value }))} slotProps={{ htmlInput: { min: 0, step: 1 } }} required />
           <TextField label="ملاحظات" value={paymentForm.notes} onChange={(event) => setPaymentForm((prev) => ({ ...prev, notes: event.target.value }))} multiline minRows={2} />
         </DialogContent>

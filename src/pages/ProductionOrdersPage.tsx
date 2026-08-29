@@ -30,9 +30,9 @@ import {
 } from '../services/manufacturingService'
 import type { InvoicePrintData } from '../types/invoicePrint'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatDateDMY, toInternalDate } from '../utils/displayFormatting'
+import { formatDateDMY, toInternalDate, formatNumberBySettings } from '../utils/displayFormatting'
 import { useNavigate } from 'react-router-dom'
-
+import { useNotifications } from '../contexts/useNotifications'
 
 const darkPopupPaperSx = {
   mt: 0.75,
@@ -461,11 +461,6 @@ function formatMaterialLabel(material: MaterialRecord): string {
   return `${material.materialNumber} - ${material.name}`
 }
 
-const numberFormatter = new Intl.NumberFormat('en-US', {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-})
-
 function roundToTwo(value: number): number {
   if (!Number.isFinite(value)) {
     return 0
@@ -475,8 +470,7 @@ function roundToTwo(value: number): number {
 }
 
 function formatNumber(value: number | string | null | undefined): string {
-  const numericValue = Number(value ?? 0)
-  return Number.isFinite(numericValue) ? numberFormatter.format(numericValue) : '0.00'
+  return formatNumberBySettings(value, 'quantity')
 }
 
 function formatEditableNumber(value: number | string | null | undefined): string {
@@ -491,7 +485,7 @@ function formatSignedNumber(value: number | string | null | undefined): string {
     return '0.00'
   }
 
-  return `${numericValue > 0 ? '+' : ''}${formatNumber(numericValue)}`
+  return `${numericValue > 0 ? '+' : ''}${formatNumberBySettings(numericValue, 'quantity')}`
 }
 
 function nearlyEqual(a: number, b: number): boolean {
@@ -632,6 +626,7 @@ function DateFilterField({
 }
 
 export function ProductionOrdersPage() {
+  const notify = useNotifications()
   const navigate = useNavigate()
   const [orders, setOrders] = useState<ProductionOrderRecord[]>([])
   const [recipes, setRecipes] = useState<ManufacturingRecipeRecord[]>([])
@@ -645,6 +640,7 @@ export function ProductionOrdersPage() {
   const [editingOrderNumber, setEditingOrderNumber] = useState('')
   const [orderNumberPreview, setOrderNumberPreview] = useState('PRD-000001')
   const [form, setForm] = useState<OrderFormState>(emptyFormState)
+  const [deleteErrorMessage, setDeleteErrorMessage] = useState('')
   const [selectedRecipe, setSelectedRecipe] = useState<ManufacturingRecipeRecord | null>(null)
   const [detailsRecipe, setDetailsRecipe] = useState<ManufacturingRecipeRecord | null>(null)
   const [isRecipeLoading, setIsRecipeLoading] = useState(false)
@@ -1116,8 +1112,10 @@ export function ProductionOrdersPage() {
       setErrorMessage('')
       if (isEditMode && editingOrderId) {
         await manufacturingService.updateProductionOrder(editingOrderId, payload)
+        notify.info('تم تعديل أمر الإنتاج بنجاح.')
       } else {
         await manufacturingService.createProductionOrder(payload)
+        notify.success('تم إنشاء أمر الإنتاج بنجاح.')
       }
       await loadData()
       handleCloseOrderDialog()
@@ -1134,11 +1132,15 @@ export function ProductionOrdersPage() {
     try {
       setErrorMessage('')
       await manufacturingService.deleteProductionOrder(orderId)
+      setDeleteConfirmId(null)
+      setDeleteErrorMessage('')
       setSelectedOrder(null)
       setDetailsOpen(false)
       await loadData()
+      notify.error('تم حذف أمر الإنتاج بنجاح.')
     } catch (error) {
-      setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حذف أمر الإنتاج، يرجى التحقق من رصيد المخزون والمواد قبل الحذف.'))
+      const message = getUserFriendlyErrorMessage(error, 'لا يمكن حذف أمر الإنتاج لأنه مرتبط بنموذج تصنيع أو تم استخدامه في الإنتاج.')
+      setDeleteErrorMessage(message)
     }
   }
 
@@ -1484,19 +1486,26 @@ export function ProductionOrdersPage() {
 
       <Dialog
         open={Boolean(deleteConfirmId)}
-        onClose={() => setDeleteConfirmId(null)}
+        onClose={() => {
+          setDeleteErrorMessage('')
+          setDeleteConfirmId(null)
+        }}
         maxWidth="sm"
         fullWidth
         slotProps={craftDialogSlotProps}
       >
         <DialogTitle>تأكيد حذف أمر الإنتاج</DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
+        <DialogContent sx={{ pt: 2, display: 'grid', gap: 2 }}>
+          {deleteErrorMessage ? <Alert severity="error" sx={craftErrorAlertSx}>{deleteErrorMessage}</Alert> : null}
           <Typography>
             هل أنت متأكد من حذف هذا الأمر؟ سيتم إلغاء أثر المخزون والتكلفة المرتبط به.
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteConfirmId(null)}>تراجع</Button>
+          <Button onClick={() => {
+            setDeleteErrorMessage('')
+            setDeleteConfirmId(null)
+          }}>تراجع</Button>
           <Button
             variant="contained"
             color="error"

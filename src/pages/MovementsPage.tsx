@@ -7,7 +7,8 @@ import { SearchField } from '../components/ui/SearchField'
 import { SectionCard } from '../components/ui/SectionCard'
 import { PageHeader } from '../components/ui/PageHeader'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { useNotifications } from '../contexts/useNotifications'
 
 
 const darkPopupPaperSx = {
@@ -821,6 +822,7 @@ export default function MovementsPage() {
 }
 
 function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boolean; onClose: () => void; warehouses: WarehouseRecord[]; materials: MaterialRecord[] }) {
+  const notify = useNotifications()
   const [toWarehouse, setToWarehouse] = useState<string | ''>('')
   const [fromWarehouse, setFromWarehouse] = useState<string | ''>('')
   const [notes, setNotes] = useState('')
@@ -969,6 +971,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
       setNotes('')
       setItems([{ materialId: '', quantity: '', unit: '', notes: '' }])
       setTransferReference('')
+      notify.success('تمت إضافة حركة المخزن بنجاح.')
     } catch (error) {
       console.error('CREATE TRANSFER FAILED', error)
       showFormError(getUserFriendlyErrorMessage(error, 'تعذر تنفيذ التحويل بين المخازن. يرجى المحاولة مرة أخرى.'))
@@ -1148,10 +1151,10 @@ function MovementDetailsDialog({ open, onClose, details }: { open: boolean; onCl
                     <TableRow key={index}>
                       <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.materialNumber ? `${item.materialNumber} - ${item.materialName ?? ''}` : item.materialName ?? '__'}</TableCell>
                       <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.warehouseName || '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityIn ?? 0) > 0 ? formatDisplayNumber(item.quantityIn ?? 0, 2) : '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityOut ?? 0) > 0 ? formatDisplayNumber(item.quantityOut ?? 0, 2) : '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityIn ?? 0) > 0 ? formatNumberBySettings(item.quantityIn ?? 0, 'quantity') : '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityOut ?? 0) > 0 ? formatNumberBySettings(item.quantityOut ?? 0, 'quantity') : '__'}</TableCell>
                       <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.unit || '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.cost !== null && item.cost !== undefined ? formatDisplayNumber(item.cost, 2) : '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.cost !== null && item.cost !== undefined ? formatCurrencyValue(item.cost, 'price') : '__'}</TableCell>
                       <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.notes?.trim() ? item.notes : '__'}</TableCell>
                     </TableRow>
                   ))}

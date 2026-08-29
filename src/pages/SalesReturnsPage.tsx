@@ -30,10 +30,11 @@ import {
   type SalesInvoiceListItem,
   type SalesReturnRecord,
 } from '../services/purchasesService'
-import { formatDateDMY, formatDisplayNumber, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, toInternalDate } from '../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
 import type { InvoicePrintData } from '../types/invoicePrint'
+import { useNotifications } from '../contexts/useNotifications'
 
 const darkPopupPaperSx = {
   mt: 0.75,
@@ -378,7 +379,7 @@ type ReturnLineForm = {
 }
 
 function currency(value: number): string {
-  return formatDisplayNumber(value, 2)
+  return formatCurrencyValue(value, 'price')
 }
 
 function DateFilterField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
@@ -460,6 +461,7 @@ function DateFilterField({ label, value, onChange }: { label: string; value: str
 }
 
 export function SalesReturnsPage() {
+  const notify = useNotifications()
   const location = useLocation()
   const navigate = useNavigate()
   const [loading, setLoading] = useState(true)
@@ -742,11 +744,12 @@ export function SalesReturnsPage() {
     try {
       await salesService.deleteReturn(returnId)
       await loadData()
+      notify.error('تم حذف مرتجع البيع بنجاح.')
     } catch (error) {
       console.error('DELETE SALES RETURN FAILED', error)
       setReturnError(getUserFriendlyErrorMessage(error, 'تعذر حذف مرتجع البيع.'))
     }
-  }, [loadData])
+  }, [loadData, notify])
 
   const confirmSaveReturn = useCallback(async () => {
     if (!selectedInvoiceId) {
@@ -780,6 +783,7 @@ export function SalesReturnsPage() {
           notes: returnNotes,
           items: payloadItems,
         })
+        notify.info('تم تعديل مرتجع البيع بنجاح.')
       } else {
         await salesService.createReturn({
           date: toInternalDate(returnDate || new Date().toISOString().slice(0, 10)),
@@ -789,6 +793,7 @@ export function SalesReturnsPage() {
           notes: returnNotes,
           items: payloadItems,
         })
+        notify.success('تم إنشاء مرتجع البيع بنجاح.')
       }
       await loadData()
       resetDialog()
@@ -800,7 +805,7 @@ export function SalesReturnsPage() {
       setSaving(false)
       setSaveConfirmOpen(false)
     }
-  }, [editingReturnId, loadData, navigate, resetDialog, returnDate, returnLines, returnNotes, selectedInvoice, selectedInvoiceId])
+  }, [editingReturnId, loadData, navigate, notify, resetDialog, returnDate, returnLines, returnNotes, selectedInvoice, selectedInvoiceId])
 
   const selectedInvoiceOption = useMemo(
     () => invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null,

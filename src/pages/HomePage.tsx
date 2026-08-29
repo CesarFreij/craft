@@ -22,8 +22,6 @@ function AnalogClock({ time }: { time: Date }) {
     { value: '9', x: 57, y: 166 },
   ]
 
-  // باقي الكود كما هو...
-
   return (
     <Box
       sx={{
@@ -211,6 +209,32 @@ function AnalogClock({ time }: { time: Date }) {
 
 export function HomePage() {
   const [now, setNow] = useState(() => new Date())
+  const [pageAnimationReady, setPageAnimationReady] = useState(() => !('craftAppAPI' in window))
+
+  useEffect(() => {
+    type CraftAppAPI = {
+      onSplashFinished: (callback: () => void) => void
+      offSplashFinished: (callback: () => void) => void
+    }
+
+    const craftWindow = window as Window & { craftAppAPI?: CraftAppAPI }
+    const appApi = craftWindow.craftAppAPI
+
+    if (!appApi) {
+      return
+    }
+
+    const handleSplashFinished = () => {
+      setPageAnimationReady(true)
+    }
+
+    appApi.onSplashFinished(handleSplashFinished)
+
+    return () => {
+      appApi.offSplashFinished(handleSplashFinished)
+    }
+  }, [])
+
   useEffect(() => {
     const intervalId = window.setInterval(() => {
       setNow(new Date())
@@ -236,7 +260,7 @@ export function HomePage() {
       <Box
         component={motion.section}
         initial={{ opacity: 0, scale: 0.992 }}
-        animate={{ opacity: 1, scale: 1 }}
+        animate={pageAnimationReady ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.992 }}
         transition={{ duration: 0.5, ease: 'easeOut' }}
         sx={{
           position: 'relative',
@@ -337,7 +361,7 @@ export function HomePage() {
             <Box
               component={motion.div}
               initial={{ opacity: 0, x: 24 }}
-              animate={{ opacity: 1, x: 0 }}
+              animate={pageAnimationReady ? { opacity: 1, x: 0 } : { opacity: 0, x: 24 }}
               transition={{ duration: 0.7, delay: 0.12, ease: 'easeOut' }}
               sx={{
                 position: 'relative',
@@ -354,7 +378,7 @@ export function HomePage() {
           <Box
             component={motion.div}
             initial={{ opacity: 0, x: -30 }}
-            animate={{ opacity: 1, x: 0 }}
+            animate={pageAnimationReady ? { opacity: 1, x: 0 } : { opacity: 0, x: -30 }}
             transition={{ duration: 0.7, ease: 'easeOut' }}
             sx={{
               minWidth: 0,

@@ -47,6 +47,7 @@ export interface PurchaseInvoicePayment {
   date: string
   amount: number
   notes?: string
+  paymentMethod?: string
   createdAt?: string
 }
 
@@ -235,6 +236,7 @@ export interface SalesInvoicePayment {
   date: string
   amount: number
   notes?: string
+  paymentMethod?: string
   createdAt?: string
 }
 
@@ -337,7 +339,7 @@ declare global {
       deleteDraft: (invoiceId: string) => Promise<PurchaseInvoiceListItem[]>
       complete: (invoiceId: string) => Promise<PurchaseInvoiceDetails>
       deleteApproved: (invoiceId: string) => Promise<PurchaseInvoiceListItem[]>
-      addPayment: (invoiceId: string, payload: { date: string; amount: number; notes?: string }) => Promise<PurchaseInvoicePayment>
+      addPayment: (invoiceId: string, payload: { date: string; amount: number; notes?: string; paymentMethod?: string }) => Promise<PurchaseInvoicePayment>
       deletePayment: (paymentId: string) => Promise<PurchaseInvoicePayment>
       listReturns: (filter?: Record<string, string>) => Promise<Array<{ id: string; returnNumber: string; date: string; supplierId: string; supplierName: string; warehouseId: string; warehouseName: string; purchaseInvoiceId: string; purchaseInvoiceNumber: string; netTotal: number; status: string }>>
       getReturnById: (returnId: string) => Promise<PurchaseReturnRecord>
@@ -362,7 +364,7 @@ declare global {
       deleteDraft: (invoiceId: string) => Promise<SalesInvoiceListItem[]>
       complete: (invoiceId: string) => Promise<SalesInvoiceDetails>
       deleteApproved: (invoiceId: string) => Promise<SalesInvoiceListItem[]>
-      addPayment: (invoiceId: string, payload: { date: string; amount: number; notes?: string }) => Promise<SalesInvoicePayment>
+      addPayment: (invoiceId: string, payload: { date: string; amount: number; notes?: string; paymentMethod?: string }) => Promise<SalesInvoicePayment>
       deletePayment: (paymentId: string) => Promise<SalesInvoicePayment>
       listReturns: (filter?: Record<string, string>) => Promise<Array<{ id: string; returnNumber: string; date: string; customerId: string; customerName: string; warehouseId: string; warehouseName: string; salesInvoiceId: string; salesInvoiceNumber: string; netTotal: number; status: string }>>
       getReturnById: (returnId: string) => Promise<SalesReturnRecord>
@@ -433,7 +435,7 @@ export const purchasesService = {
   async deleteApproved(invoiceId: string): Promise<PurchaseInvoiceListItem[]> {
     return getPurchasesApi().deleteApproved(invoiceId)
   },
-  async addPayment(invoiceId: string, payload: { date: string; amount: number; notes?: string }): Promise<PurchaseInvoicePayment> {
+  async addPayment(invoiceId: string, payload: { date: string; amount: number; notes?: string; paymentMethod?: string }): Promise<PurchaseInvoicePayment> {
     return getPurchasesApi().addPayment(invoiceId, payload)
   },
   async deletePayment(paymentId: string): Promise<PurchaseInvoicePayment> {
@@ -516,7 +518,7 @@ export const salesService = {
   async deleteApproved(invoiceId: string): Promise<SalesInvoiceListItem[]> {
     return getSalesApi().deleteApproved(invoiceId)
   },
-  async addPayment(invoiceId: string, payload: { date: string; amount: number; notes?: string }): Promise<SalesInvoicePayment> {
+  async addPayment(invoiceId: string, payload: { date: string; amount: number; notes?: string; paymentMethod?: string }): Promise<SalesInvoicePayment> {
     return getSalesApi().addPayment(invoiceId, payload)
   },
   async deletePayment(paymentId: string): Promise<SalesInvoicePayment> {

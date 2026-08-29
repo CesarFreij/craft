@@ -1,21 +1,42 @@
 import { Box, Typography } from '@mui/material'
 import { InvoiceDetailsTable } from './InvoiceDetailsTable'
+import { formatCurrencyValue } from '../../utils/displayFormatting'
 import type { CompanyPrintSettings, InvoicePrintData } from '../../types/invoicePrint'
 
+type InvoicePrintDataWithDiscount = InvoicePrintData & {
+  discountType?: 'none' | 'percentage' | 'fixed'
+  discountValue?: number
+}
+
 interface InvoicePrintTemplateProps {
-  data: InvoicePrintData
+  data: InvoicePrintDataWithDiscount
   settings: CompanyPrintSettings
 }
 
 function formatMoney(value: number | undefined): string {
-  return new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(Number(value ?? 0))
+  return formatCurrencyValue(value ?? 0, 'price')
+}
+
+function formatPercentage(value: number | undefined): string {
+  const numericValue = Number(value ?? 0)
+  if (!Number.isFinite(numericValue)) {
+    return '0%'
+  }
+
+  const normalizedValue = Number.isInteger(numericValue)
+    ? String(numericValue)
+    : numericValue.toFixed(2).replace(/\.?0+$/, '')
+
+  return `${normalizedValue}%`
 }
 
 export function InvoicePrintTemplate({ data, settings }: InvoicePrintTemplateProps) {
   const hasLogo = Boolean(settings.logoDataUrl?.trim())
+  const companyName = settings.companyName?.trim() ?? ''
+  const companyAddress = settings.address?.trim() ?? ''
+  const companyPhone = settings.phone?.trim() ?? ''
+  const companyEmail = settings.email?.trim() ?? ''
+  const companyTaxNumber = settings.taxNumber?.trim() ?? ''
   const hasReference = Boolean(data.referenceLabel && data.referenceValue)
 
   return (
@@ -44,7 +65,6 @@ export function InvoicePrintTemplate({ data, settings }: InvoicePrintTemplatePro
         },
       }}
     >
-
       {/* الشعار مستقل */}
       <Box
         sx={{
@@ -60,190 +80,162 @@ export function InvoicePrintTemplate({ data, settings }: InvoicePrintTemplatePro
             src={settings.logoDataUrl}
             alt="شعار الشركة"
             sx={{
-              width: 210,
-              height: 210,
+              width: 350,
+              height: 200,
               objectFit: 'contain',
               display: 'block',
               position: 'absolute',
-              right: '12mm'
+              right: '12mm',
+              objectPosition: 'right',
             }}
           />
         ) : null}
       </Box>
 
-
-      {/* معلومات الشركة مستقلة تحت الشعار */}
+      {/* رأس الفاتورة: اسم الشركة ثم عنوان الفاتورة ثم جميع البيانات */}
       <Box
         sx={{
           mb: 3,
-          textAlign: 'left',
+          pb: 2,
+          borderBottom: '1px solid rgba(15,23,42,0.12)',
         }}
       >
+        {companyName ? (
+          <Typography
+            sx={{
+              fontSize: 30,
+              fontWeight: 800,
+              lineHeight: 1.2,
+              color: '#0F172A',
+            }}
+          >
+            {companyName}
+          </Typography>
+        ) : null}
 
         <Typography
           sx={{
-            fontSize: 30,
+            fontSize: 25,
             fontWeight: 800,
-            lineHeight: 1.2,
             color: '#0F172A',
+            mt: companyName ? 1 : 0,
           }}
         >
-          {settings.companyName || 'اسم الشركة'}
+          {data.title}
         </Typography>
-
-
-        {settings.address && (
-          <Typography
-            sx={{
-              mt: 0.5,
-              fontSize: 14,
-              color: '#475569',
-            }}
-          >
-            {settings.address}
-          </Typography>
-        )}
-
 
         <Box
           sx={{
-            mt: 1,
-            display: 'flex',
-            gap: 2,
-            flexWrap: 'wrap',
-            fontSize: 13,
-            color: '#475569',
+            display: 'grid',
+            gap: 0.35,
+            color: '#334155',
           }}
         >
-
-          {settings.phone && (
-            <Typography sx={{ fontSize: 13 }}>
-              {settings.phone}
+          {companyAddress ? (
+            <Typography sx={{ fontSize: 13, color: '#334155' }}>
+              <b>العنوان:</b> {companyAddress}
             </Typography>
-          )}
+          ) : null}
 
-          {settings.email && (
-            <Typography
-              sx={{ direction:'ltr', fontSize: 13 }}
-            >
-              {settings.email}
+          {companyPhone ? (
+            <Typography sx={{ fontSize: 13, color: '#334155' }}>
+              <b>الهاتف:</b> {companyPhone}
             </Typography>
-          )}
+          ) : null}
 
-          {settings.taxNumber && (
-            <Typography sx={{ fontSize: 13 }}>
-              الرقم الضريبي: {settings.taxNumber}
+          {companyEmail ? (
+            <Typography sx={{ fontSize: 13, color: '#334155' }}>
+              <b>البريد الإلكتروني:</b>{' '}
+              <Box component="span" dir="ltr" sx={{ unicodeBidi: 'embed' }}>
+                {companyEmail}
+              </Box>
             </Typography>
-          )}
+          ) : null}
 
-        </Box>
+          {companyTaxNumber ? (
+            <Typography sx={{ fontSize: 13, color: '#334155' }}>
+              <b>الرقم الضريبي:</b> {companyTaxNumber}
+            </Typography>
+          ) : null}
 
-      </Box>
-
-
-      {/* معلومات الفاتورة */}
-      <Box
-        sx={{
-          borderBottom:'1px solid rgba(15,23,42,0.12)',
-          pb:2,
-          mb:3,
-          display:'flex',
-          justifyContent:'space-between',
-          alignItems:'flex-start',
-        }}
-      >
-
-        <Box>
-
-          <Typography
-            sx={{
-              fontSize:25,
-              fontWeight:800,
-              mb:1,
-            }}
-          >
-            {data.title}
-          </Typography>
-
-
-          <Typography sx={{ fontSize: 13 }}>
+          <Typography sx={{ fontSize: 13, color: '#334155' }}>
             <b>رقم المستند:</b> {data.documentNumber || '—'}
           </Typography>
 
-
-          <Typography sx={{ fontSize: 13 }}>
+          <Typography sx={{ fontSize: 13, color: '#334155' }}>
             <b>التاريخ:</b> {data.date || '—'}
           </Typography>
 
-
-          <Typography sx={{ fontSize: 13 }}>
+          <Typography sx={{ fontSize: 13, color: '#334155' }}>
             <b>{data.partyLabel}:</b> {data.partyName || '—'}
           </Typography>
 
-
-          {hasReference && (
-            <Typography sx={{ fontSize: 13 }}>
+          {hasReference ? (
+            <Typography sx={{ fontSize: 13, color: '#334155' }}>
               <b>{data.referenceLabel}:</b> {data.referenceValue}
             </Typography>
-          )}
-
-
-          {data.warehouseName && (
-            <Typography sx={{ fontSize: 13 }}>
-              <b>المخزن:</b> {data.warehouseName}
-            </Typography>
-          )}
-
+          ) : null}
         </Box>
-
       </Box>
-            {/* جدول التفاصيل */}
-      <Box sx={{ width:'100%' }}>
+
+      {/* جدول التفاصيل */}
+      <Box sx={{ width: '100%' }}>
         <InvoiceDetailsTable
           items={data.items}
           productionMode={Boolean(data.productionMode)}
         />
       </Box>
 
+      {data.notes?.trim() ? (
+        <Box
+          className="invoice-document-notes"
+          sx={{
+            mt: 2,
+            border: '1px solid rgba(15, 23, 42, 0.12)',
+            borderRadius: 2,
+            background: 'rgba(15, 23, 42, 0.02)',
+            p: 1.5,
+          }}
+        >
+          <Typography sx={{ fontWeight: 700, color: '#0F172A', mb: 0.5, fontSize: 12.5 }}>
+            ملاحظات
+          </Typography>
+          <Typography sx={{ color: '#475569', fontSize: 12.5 }}>
+            {data.notes}
+          </Typography>
+        </Box>
+      ) : null}
 
       {/* الأسفل: الدفع + المجموع */}
       <Box
+        className="invoice-summary"
         sx={{
-          mt:4,
-          display:'flex',
-          justifyContent:'flex-end',
-          alignItems:'flex-end',
-          direction:'ltr',
-          gap:3,
+          mt: 4,
+          display: 'flex',
+          justifyContent: 'flex-end',
+          alignItems: 'flex-end',
+          direction: 'ltr',
+          gap: 3,
         }}
       >
-
-
-        {/* الملاحظات وطريقة الدفع */}
-
-
-
         {/* المجموع */}
         <Box
           sx={{
-            width:280,
-            minWidth:250,
+            width: 280,
+            minWidth: 250,
           }}
         >
-
-
           <Box
             sx={{
-              display:'flex',
-              justifyContent:'space-between',
-              py:0.75,
+              display: 'flex',
+              justifyContent: 'space-between',
+              py: 0.75,
             }}
           >
-
             <Typography
               sx={{
-                fontSize:13,
-                fontWeight:700,
+                fontSize: 13,
+                fontWeight: 700,
               }}
             >
               طريقة الدفع:
@@ -251,117 +243,123 @@ export function InvoicePrintTemplate({ data, settings }: InvoicePrintTemplatePro
 
             <Typography
               sx={{
-                fontSize:13,
+                fontSize: 13,
               }}
             >
-              لاحقاً
+              {data.paymentMethod || '—'}
             </Typography>
-
           </Box>
-
 
           <Box
             sx={{
-              display:'flex',
-              justifyContent:'space-between',
-              py:0.75,
+              display: 'flex',
+              justifyContent: 'space-between',
+              py: 0.75,
             }}
           >
-
             <Typography
               sx={{
-                fontSize:13,
-                fontWeight:700,
+                fontSize: 13,
+                fontWeight: 700,
               }}
             >
               المجموع:
             </Typography>
 
-
             <Typography
               sx={{
-                fontSize:13,
-                direction:'ltr',
+                fontSize: 13,
+                direction: 'ltr',
               }}
             >
               {formatMoney(data.subtotal)}
             </Typography>
-
           </Box>
 
+          {data.discountType === 'percentage' ? (
+            <Box
+              sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                py: 0.75,
+              }}
+            >
+              <Typography
+                sx={{
+                  fontSize: 13,
+                  fontWeight: 700,
+                }}
+              >
+                نسبة الحسم:
+              </Typography>
 
+              <Typography
+                sx={{
+                  fontSize: 13,
+                  direction: 'ltr',
+                }}
+              >
+                {formatPercentage(data.discountValue)}
+              </Typography>
+            </Box>
+          ) : null}
 
           <Box
             sx={{
-              display:'flex',
-              justifyContent:'space-between',
-              py:0.75,
+              display: 'flex',
+              justifyContent: 'space-between',
+              py: 0.75,
             }}
           >
-
             <Typography
               sx={{
-                fontSize:13,
-                fontWeight:700,
+                fontSize: 13,
+                fontWeight: 700,
               }}
             >
-              الخصم:
+              قيمة الحسم:
             </Typography>
-
 
             <Typography
               sx={{
-                fontSize:13,
-                direction:'ltr',
+                fontSize: 13,
+                direction: 'ltr',
               }}
             >
               {formatMoney(data.discount)}
             </Typography>
-
           </Box>
-
-
 
           <Box
             sx={{
-              mt:1,
-              pt:1.5,
-              borderTop:'1px solid rgba(15,23,42,0.15)',
-              display:'flex',
-              justifyContent:'space-between',
+              mt: 1,
+              pt: 1.5,
+              borderTop: '1px solid rgba(15,23,42,0.15)',
+              display: 'flex',
+              justifyContent: 'space-between',
             }}
           >
-
             <Typography
               sx={{
-                fontSize:15,
-                fontWeight:800,
+                fontSize: 15,
+                fontWeight: 800,
               }}
             >
               الإجمالي النهائي:
             </Typography>
 
-
             <Typography
               sx={{
-                fontSize:15,
-                fontWeight:800,
-                direction:'ltr',
+                fontSize: 15,
+                fontWeight: 800,
+                direction: 'ltr',
               }}
             >
               {formatMoney(data.total)}
             </Typography>
-
-
           </Box>
-
-
         </Box>
-
-
       </Box>
-
-
     </Box>
   )
 }

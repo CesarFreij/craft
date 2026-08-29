@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type WheelEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { InvoicePrintTemplate } from '../components/print/InvoicePrintTemplate'
 import type { CompanyPrintSettings, InvoicePrintData, InvoicePrintItem } from '../types/invoicePrint'
+import { useNotifications } from '../contexts/useNotifications'
 
 declare global {
   interface Window {
@@ -44,13 +45,18 @@ const CONTINUATION_PAGE_ROWS = 21
 const LAST_PAGE_ROWS = 17
 const LAST_PAGE_ROWS_WITH_NOTES = 14
 
+type InvoicePrintDataWithDiscount = InvoicePrintData & {
+  discountType?: 'none' | 'percentage' | 'fixed'
+  discountValue?: number
+}
+
 interface InvoicePageChunk {
   items: InvoicePrintItem[]
   isFirst: boolean
   isLast: boolean
 }
 
-function buildPageChunks(data: InvoicePrintData): InvoicePageChunk[] {
+function buildPageChunks(data: InvoicePrintDataWithDiscount): InvoicePageChunk[] {
   const items = data.items ?? []
 
   if (items.length <= FIRST_PAGE_ROWS) {
@@ -66,9 +72,10 @@ function buildPageChunks(data: InvoicePrintData): InvoicePageChunk[] {
   const firstItems = items.slice(0, FIRST_PAGE_ROWS)
   const remainingItems = items.slice(FIRST_PAGE_ROWS)
 
+  const hasPercentageDiscount = data.discountType === 'percentage'
   const finalPageCapacity = data.notes?.trim()
-    ? LAST_PAGE_ROWS_WITH_NOTES
-    : LAST_PAGE_ROWS
+    ? LAST_PAGE_ROWS_WITH_NOTES - (hasPercentageDiscount ? 1 : 0)
+    : LAST_PAGE_ROWS - (hasPercentageDiscount ? 1 : 0)
 
   let continuationPageCount = 1
 
@@ -125,6 +132,7 @@ function buildPageChunks(data: InvoicePrintData): InvoicePageChunk[] {
 }
 
 export default function InvoicePrintPage() {
+  const notify = useNotifications()
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -254,11 +262,19 @@ export default function InvoicePrintPage() {
       payload.invoiceData.documentNumber || 'invoice'
     ).replace(/[^a-zA-Z0-9\-_]+/g, '_')}.pdf`
 
-    await window.craftExportAPI?.exportInvoicePdf({
-      invoiceData: payload.invoiceData,
-      settings: payload.settings,
-      fileName,
-    })
+    try {
+      await window.craftExportAPI?.exportInvoicePdf({
+        invoiceData: payload.invoiceData,
+        settings: payload.settings,
+        fileName,
+      })
+      notify.success('تم حفظ ملف PDF بنجاح.')
+    } catch (error) {
+      // User cancelled save dialog or error occurred
+      if (!(error instanceof Error && error.message.includes('Cancelled'))) {
+        console.error('PDF EXPORT FAILED', error)
+      }
+    }
   }
 
   if (!payload) {
@@ -284,7 +300,7 @@ export default function InvoicePrintPage() {
   ) => {
     const pageNumber = pageIndex + 1
 
-    const pageData: InvoicePrintData = {
+    const pageData: InvoicePrintDataWithDiscount = {
       ...payload.invoiceData,
       items: chunk.items,
     }
@@ -337,7 +353,7 @@ export default function InvoicePrintPage() {
 
             ...(hideSummary
               ? {
-                  '& .craft-print-visible > :last-child': {
+                  '& .invoice-document-notes, & .invoice-summary': {
                     display: 'none !important',
                   },
                 }

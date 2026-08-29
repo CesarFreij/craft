@@ -4,6 +4,7 @@ export type ReportType =
   | 'purchases'
   | 'sales'
   | 'movements'
+  | 'inventory_adjustments'
   | 'production'
   | 'production_cost'
 

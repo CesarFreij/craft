@@ -1,5 +1,37 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+let splashFinished = false
+const splashFinishedCallbacks = new Set()
+
+ipcRenderer.on('app:splashFinished', () => {
+  splashFinished = true
+
+  for (const callback of splashFinishedCallbacks) {
+    callback()
+  }
+
+  splashFinishedCallbacks.clear()
+})
+
+contextBridge.exposeInMainWorld('craftAppAPI', {
+  onSplashFinished: (callback) => {
+    if (typeof callback !== 'function') {
+      return
+    }
+
+    if (splashFinished) {
+      queueMicrotask(() => callback())
+      return
+    }
+
+    splashFinishedCallbacks.add(callback)
+  },
+
+  offSplashFinished: (callback) => {
+    splashFinishedCallbacks.delete(callback)
+  },
+})
+
 contextBridge.exposeInMainWorld('craftMaterialsAPI', {
   listMaterials: () => ipcRenderer.invoke('materials:list'),
   createMaterial: (payload) => ipcRenderer.invoke('materials:create', payload),
@@ -107,6 +139,16 @@ contextBridge.exposeInMainWorld('craftReportsAPI', {
   getReportExportRows: (reportType, filters) => ipcRenderer.invoke('reports:getReportExportRows', { reportType, filters }),
 })
 
+contextBridge.exposeInMainWorld('craftDataManagementAPI', {
+  chooseBackupFolder: () => ipcRenderer.invoke('data:chooseBackupFolder'),
+  chooseBackupFile: () => ipcRenderer.invoke('data:chooseBackupFile'),
+  createBackup: (targetDirectory) => ipcRenderer.invoke('data:createBackup', targetDirectory),
+  restoreBackup: (backupFilePath) => ipcRenderer.invoke('data:restoreBackup', backupFilePath),
+  resetDatabase: (confirmationText) => ipcRenderer.invoke('data:resetDatabase', confirmationText),
+  getAutoBackupSettings: () => ipcRenderer.invoke('data:getAutoBackupSettings'),
+  setAutoBackupSettings: (settings) => ipcRenderer.invoke('data:setAutoBackupSettings', settings),
+})
+
 contextBridge.exposeInMainWorld('craftExportAPI', {
   exportInvoicePdf: ({ invoiceData, settings, fileName }) => ipcRenderer.invoke('invoice:exportPdf', { invoiceData, settings, fileName }),
 })
@@ -115,9 +157,11 @@ contextBridge.exposeInMainWorld('invoicePrintAPI', {
   onInvoiceData: (callback) => {
     ipcRenderer.on('invoice-preview:data', (_event, payload) => callback(payload))
   },
+
   offInvoiceData: () => {
     ipcRenderer.removeAllListeners('invoice-preview:data')
   },
+
   notifyReady: () => {
     ipcRenderer.send('invoice-preview:ready')
   },

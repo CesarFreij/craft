@@ -76,12 +76,130 @@ import {
   getSalesReturnById,
   createSalesReturn,
   updateSalesReturn,
-  deleteSalesReturn
+  deleteSalesReturn,
+  createDatabaseBackup,
+  restoreDatabaseFromBackup,
+  resetDatabase,
+  getDatabaseFilePath,
 } from './materialsRepository.js'
 import { fileURLToPath } from 'node:url'
 import { getReportData, getReportExportRows } from './reports.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Keep Chromium cache/session files separate between development and the installed app.
+// This prevents npm run dev from fighting with a packaged Craft process over the same cache.
+app.setPath(
+  'sessionData',
+  path.join(
+    app.getPath('userData'),
+    app.isPackaged ? 'session-data' : 'session-data-dev',
+  ),
+)
+
+const defaultAutoBackupSettings = {
+  enabled: false,
+  mode: 'new',
+  backupDirectory: '',
+  lastBackupAt: '',
+}
+
+let databaseInitialized = false
+let allowQuitAfterBackup = false
+let quitBackupPromise = null
+
+function normalizeAutoBackupSettings(value = {}) {
+  return {
+    enabled: value.enabled === true,
+    mode: value.mode === 'replace' ? 'replace' : 'new',
+    backupDirectory:
+      typeof value.backupDirectory === 'string'
+        ? value.backupDirectory.trim()
+        : '',
+    lastBackupAt:
+      typeof value.lastBackupAt === 'string'
+        ? value.lastBackupAt.trim()
+        : '',
+  }
+}
+
+function getAutoBackupSettingsFilePath() {
+  return path.join(app.getPath('userData'), 'auto-backup-settings.json')
+}
+
+async function readAutoBackupSettings() {
+  try {
+    const raw = await fs.readFile(getAutoBackupSettingsFilePath(), 'utf8')
+    return normalizeAutoBackupSettings(JSON.parse(raw))
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('READ AUTO BACKUP SETTINGS FAILED', error)
+    }
+    return { ...defaultAutoBackupSettings }
+  }
+}
+
+async function writeAutoBackupSettings(settings) {
+  const normalized = normalizeAutoBackupSettings(settings)
+  const settingsPath = getAutoBackupSettingsFilePath()
+
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+  await fs.writeFile(
+    settingsPath,
+    JSON.stringify(normalized, null, 2),
+    'utf8',
+  )
+
+  return normalized
+}
+
+async function createAutomaticBackupOnExit() {
+  const settings = await readAutoBackupSettings()
+
+  if (!settings.enabled) {
+    return null
+  }
+
+  if (!settings.backupDirectory) {
+    console.warn('AUTO BACKUP SKIPPED: backup directory is not configured.')
+    return null
+  }
+
+  if (!databaseInitialized) {
+    console.warn('AUTO BACKUP SKIPPED: database is not initialized.')
+    return null
+  }
+
+  const databaseFile = getDatabaseFilePath()
+  if (!databaseFile) {
+    console.warn('AUTO BACKUP SKIPPED: database file path is unavailable.')
+    return null
+  }
+
+  await fs.mkdir(settings.backupDirectory, { recursive: true })
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const fileName =
+    settings.mode === 'replace'
+      ? 'craft-auto-backup.sqlite'
+      : `craft-auto-backup-${timestamp}.sqlite`
+  const backupPath = path.join(settings.backupDirectory, fileName)
+
+  await fs.copyFile(databaseFile, backupPath)
+
+  const lastBackupAt = new Date().toISOString()
+  await writeAutoBackupSettings({
+    ...settings,
+    lastBackupAt,
+  })
+
+  console.log('AUTO BACKUP CREATED:', backupPath)
+  return {
+    filePath: backupPath,
+    fileName,
+    lastBackupAt,
+  }
+}
 
 async function exportInvoicePdfFromHtml({ invoiceData, settings, fileName }) {
   const defaultFileName = String(fileName || 'invoice.pdf').replace(/\.[^/.]+$/, '') + '.pdf'
@@ -105,6 +223,7 @@ async function exportInvoicePdfFromHtml({ invoiceData, settings, fileName }) {
     show: false,
     width: 900,
     height: 1200,
+    icon: path.join(__dirname, 'icon.ico'),
     backgroundColor: '#FFFFFF',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -223,16 +342,236 @@ async function exportInvoicePdfFromHtml({ invoiceData, settings, fileName }) {
   }
 }
 
-function createWindow() {
+async function waitUntilMaximized(win) {
+  if (win.isDestroyed() || win.isMaximized()) {
+    return
+  }
+
+  await new Promise((resolve) => {
+    let done = false
+
+    const finish = () => {
+      if (done) {
+        return
+      }
+
+      done = true
+      clearTimeout(timeoutId)
+
+      if (!win.isDestroyed()) {
+        win.removeListener('maximize', finish)
+      }
+
+      resolve()
+    }
+
+    const timeoutId = setTimeout(finish, 600)
+
+    win.once('maximize', finish)
+    win.maximize()
+
+    if (win.isMaximized()) {
+      finish()
+    }
+  })
+}
+
+function createSplashWindow() {
+  const splash = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    show: false,
+    frame: true,
+    resizable: true,
+    movable: true,
+    minimizable: true,
+    maximizable: true,
+    fullscreenable: true,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    backgroundColor: '#06142F',
+    icon: path.join(__dirname, 'icon.ico'),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+
+  splash.center()
+
+  splash.once('ready-to-show', async () => {
+    if (splash.isDestroyed()) {
+      return
+    }
+
+    // Maximize while still hidden so the user never sees 1200x800 first.
+    await waitUntilMaximized(splash)
+
+    if (!splash.isDestroyed()) {
+      splash.show()
+      splash.focus()
+    }
+  })
+
+  void splash.loadFile(path.join(__dirname, 'splash.html'))
+
+  splash.webContents.on('did-fail-load', (_event, code, description) => {
+    console.error('SPLASH LOAD FAILED:', code, description)
+  })
+
+  return splash
+}
+
+async function waitForRendererReady(win) {
+  const timeoutMs = 30000
+  const pollIntervalMs = 80
+  const startedAt = Date.now()
+
+  while (!win.isDestroyed() && Date.now() - startedAt < timeoutMs) {
+    try {
+      const ready = await win.webContents.executeJavaScript(`
+        (() => {
+          const root = document.getElementById('root')
+          if (!root) return false
+
+          const hasRenderedContent =
+            root.childElementCount > 0 ||
+            root.textContent.trim().length > 0
+
+          if (!hasRenderedContent) return false
+
+          const firstElement = root.firstElementChild
+          if (!firstElement) return false
+
+          const rect = firstElement.getBoundingClientRect()
+          return rect.width > 0 && rect.height > 0
+        })()
+      `)
+
+      if (ready) {
+        return true
+      }
+    } catch {
+      // Renderer may still be navigating/loading. Keep waiting.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs))
+  }
+
+  return false
+}
+
+async function revealMainWindow(win, splash) {
+  if (win.isDestroyed()) {
+    return
+  }
+
+  // IMPORTANT:
+  // Do not use setBounds(workArea) here.
+  // The BrowserWindow was created at 1200x800, so Windows keeps that as
+  // the restore-down size. We only maximize it while hidden.
+  await waitUntilMaximized(win)
+
+  if (win.isDestroyed()) {
+    return
+  }
+
+  // Paint the already-maximized main window under the splash.
+  win.showInactive()
+
+  await new Promise((resolve) => setTimeout(resolve, 140))
+
+  if (win.isDestroyed()) {
+    return
+  }
+
+  if (!splash || splash.isDestroyed()) {
+    win.show()
+    win.focus()
+    win.webContents.send('app:splashFinished')
+    return
+  }
+
+  void splash.webContents
+    .executeJavaScript(`
+      document.documentElement.classList.add('is-leaving')
+    `)
+    .catch(() => undefined)
+
+  setTimeout(() => {
+    if (!splash.isDestroyed()) {
+      splash.destroy()
+    }
+
+    if (!win.isDestroyed()) {
+      win.show()
+      win.focus()
+      win.webContents.send('app:splashFinished')
+    }
+  }, 430)
+}
+
+function createWindow(splash = null) {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    show: false,
+    fullscreenable: true,
+    maximizable: true,
+    minimizable: true,
+    resizable: true,
+    icon: path.join(__dirname, 'icon.ico'),
+    backgroundColor: '#07142F',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
+  })
+
+  win.center()
+
+  let wasMaximizedBeforeFullscreen = false
+
+  win.webContents.on('before-input-event', (event, input) => {
+    const key = String(input.key ?? '').toUpperCase()
+    const isKeyDown = input.type === 'keyDown' || input.type === 'rawKeyDown'
+
+    if (key === 'F11' && isKeyDown && !input.isAutoRepeat) {
+      event.preventDefault()
+
+      if (win.isFullScreen()) {
+        win.setFullScreen(false)
+
+        if (wasMaximizedBeforeFullscreen) {
+          setTimeout(() => {
+            if (!win.isDestroyed()) {
+              win.maximize()
+            }
+          }, 100)
+        }
+      } else {
+        wasMaximizedBeforeFullscreen = win.isMaximized()
+        win.setFullScreen(true)
+      }
+
+      return
+    }
+
+    if (key === 'ESCAPE' && isKeyDown && win.isFullScreen()) {
+      event.preventDefault()
+      win.setFullScreen(false)
+
+      if (wasMaximizedBeforeFullscreen) {
+        setTimeout(() => {
+          if (!win.isDestroyed()) {
+            win.maximize()
+          }
+        }, 100)
+      }
+    }
   })
 
   win.webContents.on('context-menu', (_event, params) => {
@@ -282,9 +621,36 @@ function createWindow() {
     }
   })
 
-  win.loadURL('http://localhost:5173')
-  win.webContents.openDevTools()
+  const loadMainWindow = async () => {
+    try {
+      if (app.isPackaged) {
+        await win.loadFile(path.join(__dirname, '../dist/index.html'))
+      } else {
+        await win.loadURL('http://localhost:5173')
+      }
+
+      const rendererReady = await waitForRendererReady(win)
+
+      if (!rendererReady) {
+        console.warn('RENDERER READY TIMEOUT: showing main window after timeout.')
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      await revealMainWindow(win, splash)
+    } catch (error) {
+      console.error('MAIN WINDOW LOAD FAILED:', error)
+
+      if (!win.isDestroyed()) {
+        win.destroy()
+      }
+    }
+  }
+
+  void loadMainWindow()
+
+  return win
 }
+
   ipcMain.handle('materials:list', async () => {
     return listMaterials()
 })
@@ -617,22 +983,132 @@ ipcMain.handle('sales:deleteReturn', async (_, returnId) => {
   return deleteSalesReturn(returnId)
 })
 
+ipcMain.handle('data:getAutoBackupSettings', async () => {
+  return readAutoBackupSettings()
+})
+
+ipcMain.handle('data:setAutoBackupSettings', async (_, settings) => {
+  const current = await readAutoBackupSettings()
+  return writeAutoBackupSettings({
+    ...current,
+    ...(settings && typeof settings === 'object' ? settings : {}),
+  })
+})
+
+ipcMain.handle('data:chooseBackupFolder', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'اختر مجلد النسخ الاحتياطي',
+    properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+  })
+
+  if (canceled || filePaths.length === 0) {
+    return ''
+  }
+
+  const folder = filePaths[0]
+  const current = await readAutoBackupSettings()
+  await writeAutoBackupSettings({
+    ...current,
+    backupDirectory: folder,
+  })
+
+  return folder
+})
+
+ipcMain.handle('data:chooseBackupFile', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'اختر ملف النسخة الاحتياطية',
+    properties: ['openFile'],
+    filters: [{ name: 'SQLite Database', extensions: ['sqlite', 'db', 'db3'] }],
+  })
+
+  if (canceled || filePaths.length === 0) {
+    return ''
+  }
+
+  return filePaths[0]
+})
+
+ipcMain.handle('data:createBackup', async (_, targetDirectory) => {
+  const current = await readAutoBackupSettings()
+  const backupDirectory =
+    typeof targetDirectory === 'string' && targetDirectory.trim()
+      ? targetDirectory.trim()
+      : current.backupDirectory ||
+        path.dirname(getDatabaseFilePath() || app.getPath('userData'))
+
+  const result = await createDatabaseBackup(backupDirectory)
+  const lastBackupAt = new Date().toISOString()
+
+  await writeAutoBackupSettings({
+    ...current,
+    backupDirectory,
+    lastBackupAt,
+  })
+
+  return {
+    ...result,
+    lastBackupAt,
+  }
+})
+
+ipcMain.handle('data:restoreBackup', async (_, backupFilePath) => {
+  return restoreDatabaseFromBackup(backupFilePath)
+})
+
+ipcMain.handle('data:resetDatabase', async (_, confirmationText) => {
+  return resetDatabase({ confirmationText })
+})
+
+app.on('before-quit', (event) => {
+  if (allowQuitAfterBackup) {
+    return
+  }
+
+  event.preventDefault()
+
+  if (quitBackupPromise) {
+    return
+  }
+
+  quitBackupPromise = (async () => {
+    try {
+      await createAutomaticBackupOnExit()
+    } catch (error) {
+      console.error('AUTO BACKUP ON EXIT FAILED', error)
+    } finally {
+      allowQuitAfterBackup = true
+      app.quit()
+    }
+  })()
+})
+
 app.whenReady().then(async () => {
+  const splash = createSplashWindow()
+
   try {
     const { dbFile } = await initDatabase()
+    databaseInitialized = true
     console.log('DATABASE PATH:', dbFile)
     console.log('DATABASE CREATED/OPENED SUCCESSFULLY')
   } catch (err) {
     console.error('DATABASE INITIALIZATION FAILED', err)
     console.error('Quitting application because database initialization failed.')
+
+    if (!splash.isDestroyed()) {
+      splash.destroy()
+    }
+
     app.quit()
     return
   }
 
-  createWindow()
+  Menu.setApplicationMenu(null)
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+  createWindow(splash)
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
     }
   })

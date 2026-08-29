@@ -1,49 +1,62 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Avatar, Box, IconButton, Typography } from '@mui/material'
-import { FiBell, FiSettings, FiWifi } from 'react-icons/fi'
+import { useEffect, useState } from 'react'
+import {  Box, Typography } from '@mui/material'
 import { motion } from 'framer-motion'
-import { SIDEBAR_EXPANDED_WIDTH } from './Sidebar'
-import craftImage from '../assets/craft-removebg-preview.png'
+import { SIDEBAR_EXPANDED_WIDTH, SIDEBAR_COLLAPSED_WIDTH } from './Sidebar'
+import craftImage from '../assets/craft-no-background.png'
 
-const statusMap = {
-  online: { label: 'متصل', color: '#22C55E' },
-  offline: { label: 'غير متصل', color: '#EF4444' },
-  syncing: { label: 'جارٍ المزامنة', color: '#F59E0B' },
-} as const
+const levantineMonths = [
+  'كانون الثاني',
+  'شباط',
+  'آذار',
+  'نيسان',
+  'أيار',
+  'حزيران',
+  'تموز',
+  'آب',
+  'أيلول',
+  'تشرين الأول',
+  'تشرين الثاني',
+  'كانون الأول',
+]
 
-type ConnectionStatus = keyof typeof statusMap
+const levantineWeekdays = [
+  'الأحد',
+  'الاثنين',
+  'الثلاثاء',
+  'الأربعاء',
+  'الخميس',
+  'الجمعة',
+  'السبت',
+]
+
+const arabicNumber = new Intl.NumberFormat('ar-SY', {
+  useGrouping: false,
+})
 
 function formatTime(date: Date) {
-  return date.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
-}
-
-function formatDate(date: Date) {
-  return date.toLocaleDateString('ar-EG', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
+  return date.toLocaleTimeString('ar-SY', {
+    hour: '2-digit',
+    minute: '2-digit',
   })
 }
 
-export function TopBar({ sidebarOffset }: { sidebarOffset?: number }) {
+function formatDate(date: Date) {
+  const weekday = levantineWeekdays[date.getDay()]
+  const day = arabicNumber.format(date.getDate())
+  const month = levantineMonths[date.getMonth()]
+  const year = arabicNumber.format(date.getFullYear())
+
+  return `${weekday}، ${day} ${month} ${year}`
+}
+
+export function TopBar({ sidebarOffset, collapsed }: { sidebarOffset?: number, collapsed: boolean }) {
   const [now, setNow] = useState(new Date())
-  const [status, setStatus] = useState<ConnectionStatus>('online')
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(new Date()), 1000)
-    const updateStatus = () => setStatus(navigator.onLine ? 'online' : 'offline')
-    updateStatus()
-    window.addEventListener('online', updateStatus)
-    window.addEventListener('offline', updateStatus)
-    return () => {
-      window.clearInterval(interval)
-      window.removeEventListener('online', updateStatus)
-      window.removeEventListener('offline', updateStatus)
-    }
-  }, [])
 
-  const badge = useMemo(() => statusMap[status], [status])
+    return () => window.clearInterval(interval)
+  }, [])
 
   return (
     <Box
@@ -58,41 +71,138 @@ export function TopBar({ sidebarOffset }: { sidebarOffset?: number }) {
         zIndex: 1200,
         height: 70,
         px: { xs: 2, sm: 3, md: 4 },
-        paddingInlineEnd: `${sidebarOffset ?? SIDEBAR_EXPANDED_WIDTH}px`,
-        transition: 'padding-inline-end 250ms ease',
-        backdropFilter: 'blur(20px)',
-        background: 'rgba(255,255,255,0.82)',
-        borderBottom: '1px solid rgba(15, 23, 42, 0.08)',
+
+        // بما أن الـSidebar موجود على اليمين في RTL،
+        // نحجز مساحته من اليمين بدل دفع الشعار الموجود على اليسار.
+        paddingInlineStart: {
+          xs: 2,
+          md: `${sidebarOffset ?? SIDEBAR_EXPANDED_WIDTH}px`,
+        },
+        paddingInlineEnd: { xs: 2, sm: 3, md: 4 },
+
+        transition: 'padding-inline-start 250ms ease',
+        background: ' rgba(2,6,23,.22)',
+        backdropFilter: 'blur(22px) saturate(120%)',
+        WebkitBackdropFilter: 'blur(22px) saturate(120%)',
+        borderBottom: '1px solid rgba(103,232,249,.14)',
+        boxShadow: '0 8px 30px rgba(2,6,23,.22)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        boxShadow: '0 10px 24px rgba(15, 23, 42, 0.04)',
+        gap: 2,
+        color: '#F8FAFC',
+        overflow: 'hidden',
+
+        '&::after': {
+          content: '""',
+          position: 'absolute',
+          bottom: 0,
+          right: '50%',
+          transform: collapsed ? `translateX(calc(-50% - ${SIDEBAR_COLLAPSED_WIDTH/2}px))` : `translateX(calc(-50% - ${SIDEBAR_EXPANDED_WIDTH/2}px))`,
+          width: '18%',
+          height: '1px',
+          background:
+            'linear-gradient(90deg, transparent, rgba(34,211,238,.82), transparent)',
+          boxShadow: '0 0 16px rgba(34,211,238,.65)',
+          pointerEvents: 'none',
+        },
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <Box component="img" src={craftImage} sx={{ width: 44, height: 44, borderRadius: 2.2, background: 'transparent' }} />
-        <Box>
-          <Typography sx={{ fontWeight: 800, fontSize: 17, lineHeight: 1.1 }}>CRAFT</Typography>
-          <Typography sx={{ color: 'text.secondary', fontSize: 12 }}>نظام إدارة المخازن والتصنيع</Typography>
+      {/* اليمين: التاريخ والوقت + حالة الاتصال + الأدوات */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: { xs: 0.8, sm: 1.2 },
+          minWidth: 0,
+          direction: 'rtl',
+          paddingLeft: '28px'
+        }}
+      >
+        <Box
+          sx={{
+            textAlign: 'right',
+            minWidth: { xs: 130, sm: 190 },
+            px: 0.5,
+          }}
+        >
+          <Typography
+            sx={{
+              fontWeight: 800,
+              color: 'rgba(248,250,252,.96)',
+              whiteSpace: 'nowrap',
+              textAlign: 'start',
+              fontSize: '22px'
+            }}
+          >
+            {formatDate(now)}
+          </Typography>
+
+          <Typography
+            sx={{
+              mt: 0.2,
+              color: 'rgba(203,213,225,.72)',
+              fontSize: 16,
+              fontWeight: 650,
+              textAlign: 'start'
+            }}
+          >
+            {formatTime(now)}
+          </Typography>
         </Box>
+
       </Box>
 
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.4, flexWrap: 'wrap' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.6, py: 1, borderRadius: 3, border: '1px solid rgba(37, 99, 235, 0.12)', background: 'rgba(255,255,255,0.9)' }}>
-          <FiWifi size={17} color={badge.color} />
-          <Typography sx={{ color: badge.color, fontWeight: 700, fontSize: 13 }}>{badge.label}</Typography>
+      {/* اليسار: شعار CRAFT واسم البرنامج */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1.2,
+          direction: 'ltr',
+          flexShrink: 0,
+        }}
+      >
+
+        <Box sx={{ direction: 'ltr' }}>
+          <Typography
+            sx={{
+              fontWeight: 950,
+              fontSize: 22,
+              lineHeight: 1,
+              letterSpacing: 15,
+              color: '#FFFFFF',
+              textAlign: 'right'
+            }}
+          >
+            CRAFT
+          </Typography>
+
+          <Typography
+            sx={{
+              display: { xs: 'none', sm: 'block' },
+              mt: 0.45,
+              color: 'rgba(203,213,225,.66)',
+              fontSize: 11.5,
+              direction: 'rtl',
+            }}
+          >
+            نظام إدارة المخازن والتصنيع
+          </Typography>
         </Box>
-        <Box sx={{ textAlign: 'right', minWidth: 170, px: 0.5 }}>
-          <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{formatDate(now)}</Typography>
-          <Typography sx={{ color: 'text.secondary', fontSize: 12 }}>{formatTime(now)}</Typography>
-        </Box>
-        <IconButton size="medium" sx={{ borderRadius: 2.2, width: 40, height: 40, background: 'rgba(15, 23, 42, 0.04)', color: '#1F2937', '&:hover': { background: 'rgba(37, 99, 235, 0.09)', color: '#1D4ED8' } }}>
-          <FiBell size={17} />
-        </IconButton>
-        <IconButton size="medium" sx={{ borderRadius: 2.2, width: 40, height: 40, background: 'rgba(15, 23, 42, 0.04)', color: '#1F2937', '&:hover': { background: 'rgba(37, 99, 235, 0.09)', color: '#1D4ED8' } }}>
-          <FiSettings size={17} />
-        </IconButton>
-        <Avatar sx={{ width: 42, height: 42, bgcolor: '#06B6D4', color: '#fff', fontSize: 15, fontWeight: 700, boxShadow: '0 10px 24px rgba(6, 182, 212, 0.2)' }}>A</Avatar>
+        <Box
+          component="img"
+          src={craftImage}
+          alt="CRAFT"
+          sx={{
+            width: 55,
+            height: 55,
+            objectFit: 'contain',
+            // borderRadius: '50%',
+            background: 'transparent',
+            filter: 'drop-shadow(0 5px 12px rgba(34,211,238,.12))',
+          }}
+        />
       </Box>
     </Box>
   )

@@ -5,6 +5,7 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
 import { inventoryService, type WarehouseRecord } from '../services/inventoryService'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
+import { useNotifications } from '../contexts/useNotifications'
 
 const craftPageGlassSx = {
   '& .MuiPaper-root:not(.MuiAlert-root)': {
@@ -314,6 +315,7 @@ const craftErrorAlertSx = {
 }
 
 export function WarehousesPage() {
+  const notify = useNotifications()
   const [warehouses, setWarehouses] = useState<WarehouseRecord[]>([])
   const [open, setOpen] = useState(false)
   const [editingWarehouseId, setEditingWarehouseId] = useState<string | null>(null)
@@ -366,6 +368,10 @@ export function WarehousesPage() {
       await inventoryService.toggleWarehouseStatus(w.id, nextStatus)
       setPageErrorMessage('')
       await load()
+      if(nextStatus === 'active') 
+        notify.success('تم تفعيل المخزن بنجاح.')
+      else 
+        notify.info('تم تعطيل المخزن بنجاح.')
     } catch (error) {
       console.error('TOGGLE WAREHOUSE STATUS FAILED', error)
       showPageError(getUserFriendlyErrorMessage(error, 'تعذر تغيير حالة المخزن. يرجى المحاولة مرة أخرى.'))
@@ -388,6 +394,7 @@ export function WarehousesPage() {
       setDeleteDialogOpen(false)
       setWarehouseToDelete(null)
       await load()
+      notify.error('تم حذف المخزن بنجاح.')
     } catch (error) {
       console.error('DELETE WAREHOUSE FAILED', error)
       setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حذف المخزن. يرجى المحاولة مرة أخرى.'))
@@ -414,8 +421,10 @@ export function WarehousesPage() {
       }
       if (editingWarehouseId) {
         await inventoryService.updateWarehouse(editingWarehouseId, payload)
+        notify.info('تم تعديل المخزن بنجاح.')
       } else {
         await inventoryService.createWarehouse(payload)
+        notify.success('تمت إضافة المخزن بنجاح.')
       }
       setOpen(false)
       setEditingWarehouseId(null)

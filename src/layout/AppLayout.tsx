@@ -29,12 +29,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           minHeight: '100vh',
         }}
       >
-        <TopBar sidebarOffset={sidebarOffset} />
+        <TopBar sidebarOffset={sidebarOffset} collapsed={collapsed} />
 
         <Box
           component="main"
           sx={{
-            pt: '70px',
             height: '100vh',
             minHeight: 0,
             overflow: 'hidden',
@@ -152,6 +151,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 overflowX: 'hidden',
                 padding: isHomePage ? 0 : '24px',
                 background: 'transparent',
+                marginTop: isHomePage ? 0 : '70px',
+                paddingTop: isHomePage ? 0 : '24px',
+                '&::-webkit-scrollbar-track': {
+                  marginTop: '70px !important',
+                },
               }}
             >
               {children}

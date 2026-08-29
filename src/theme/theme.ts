@@ -5,7 +5,7 @@ import type {
   BorderRadiusOption,
   FontSizeOption,
   SidebarStyleOption,
-} from '../contexts/ThemeContext'
+} from '../services/settingsService'
 
 interface ThemeOptions {
   mode: PaletteMode
@@ -37,7 +37,7 @@ const paletteVariants = {
  */
 const shapeRadiusMap: Record<BorderRadiusOption, number> = {
   small: 4,
-  medium: 6,
+  medium: 60,
   large: 8,
 }
 
@@ -46,14 +46,14 @@ const shapeRadiusMap: Record<BorderRadiusOption, number> = {
  */
 const componentRadiusMap: Record<BorderRadiusOption, string> = {
   small: '10px',
-  medium: '14px',
+  medium: '18px',
   large: '18px',
 }
 
 const popupRadiusMap: Record<BorderRadiusOption, string> = {
-  small: '8px',
-  medium: '12px',
-  large: '16px',
+  small: '80px',
+  medium: '120px',
+  large: '160px',
 }
 
 const fontSizeMap: Record<FontSizeOption, number> = {

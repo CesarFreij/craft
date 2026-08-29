@@ -32,8 +32,10 @@ import {
 } from 'react-icons/fi'
 import { materialsService } from '../../services/materialsService'
 import type { MaterialRecord } from '../../services/materialsService'
-import { formatDisplayNumber } from '../../utils/displayFormatting'
+import { loadSettings } from '../../services/settingsService'
+import { formatCurrencyValue } from '../../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../../utils/errorMessages'
+import { useNotifications } from '../../contexts/useNotifications'
 
 export type MaterialType = 'main' | 'sub'
 
@@ -313,6 +315,12 @@ function getNodeReturnabilityDisplay(materials: MaterialNode[], node: MaterialNo
 }
 
 export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
+  const settings = loadSettings()
+  const notify = useNotifications()
+  const salesPrice1Label = settings.salesPrice1Name || 'سعر البيع الأول'
+  const salesPrice2Label = settings.salesPrice2Name || 'سعر البيع الثاني'
+  const salesPrice3Label = settings.salesPrice3Name || 'سعر البيع الثالث'
+
   const [materials, setMaterials] = useState<MaterialNode[]>(initialTree)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [treeWidth, setTreeWidth] = useState(40)
@@ -653,12 +661,13 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
       setSelectedNodeId(payload.id ?? null)
       setDialog({ open: false, mode: null })
       setFormErrors({})
+      notify.success('تمت إضافة المادة بنجاح.')
     } catch (error) {
       console.error('FAILED_TO_CREATE_MAIN_MATERIAL', error)
       setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حفظ المادة. يرجى المحاولة مرة أخرى.'))
       setDialog({ open: true, mode: 'error' })
     }
-  }, [formData, dialog, validateForm, createNodeId, buildTreeFromRecords, extractUnitsFromRecords])
+  }, [formData, dialog, validateForm, createNodeId, buildTreeFromRecords, extractUnitsFromRecords, notify])
 
   const handleSaveSub = useCallback(async () => {
     const errors = validateForm(formData, 'sub')
@@ -710,12 +719,13 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
       setSelectedNodeId(payload.id ?? null)
       setDialog({ open: false, mode: null })
       setFormErrors({})
+      notify.success('تمت إضافة المادة بنجاح.')
     } catch (error) {
       console.error('FAILED_TO_CREATE_SUB_MATERIAL', error)
       setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حفظ المادة. يرجى المحاولة مرة أخرى.'))
       setDialog({ open: true, mode: 'error' })
     }
-  }, [formData, dialog, validateForm, createNodeId, buildTreeFromRecords])
+  }, [formData, dialog, validateForm, createNodeId, buildTreeFromRecords, notify])
 
   const handleSaveEdit = useCallback(async () => {
     if (!dialog.nodeId) return
@@ -757,12 +767,13 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
       }
       setDialog({ open: false, mode: null })
       setFormErrors({})
+      notify.info('تم تعديل المادة بنجاح.')
     } catch (error) {
       console.error('FAILED_TO_UPDATE_MATERIAL', error)
       setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر تحديث المادة. يرجى المحاولة مرة أخرى.'))
       setDialog({ open: true, mode: 'error' })
     }
-  }, [dialog.nodeId, formData, validateForm, materials, buildTreeFromRecords, extractUnitsFromRecords])
+  }, [dialog.nodeId, formData, validateForm, materials, buildTreeFromRecords, extractUnitsFromRecords, notify])
 
   const handleConfirmDelete = useCallback(async () => {
     if (!dialog.nodeId) return
@@ -777,12 +788,13 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
         console.error('FAILED_TO_EXTRACT_UNITS_AFTER_DELETE', e)
       }
       setDialog({ open: false, mode: null })
+      notify.error('تم حذف المادة بنجاح.')
     } catch (error) {
       console.error('FAILED_TO_DELETE_MATERIAL', error)
       setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حذف المادة. يرجى المحاولة مرة أخرى.'))
       setDialog({ open: true, mode: 'error' })
     }
-  }, [dialog.nodeId, buildTreeFromRecords, extractUnitsFromRecords])
+  }, [dialog.nodeId, buildTreeFromRecords, extractUnitsFromRecords, notify])
 
   const handleFormChange = useCallback(
     (field: keyof FormData, value: FormData[keyof FormData]) => {
@@ -1183,7 +1195,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                         سعر التكلفة
                       </Typography>
                       <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
-                        {selectedNode.costPrice}
+                        {formatCurrencyValue(selectedNode.costPrice ?? 0, 'price')}
                       </Typography>
                     </Box>
 
@@ -1192,31 +1204,31 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                         متوسط التكلفة
                       </Typography>
                       <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
-                        {formatDisplayNumber(subMaterialAverageCost, 2)}
+                        {formatCurrencyValue(subMaterialAverageCost ?? 0, 'average')}
                       </Typography>
                     </Box>
 
                     <Box>
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
-                        سعر البيع الأول
+                        {salesPrice1Label}
                       </Typography>
                       <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
-                        {selectedNode.price1}
+                        {formatCurrencyValue(selectedNode.price1 ?? 0, 'price')}
                       </Typography>
                     </Box>
 
                     <Box>
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
-                        سعر البيع الثاني
+                        {salesPrice2Label}
                       </Typography>
                       <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
-                        {selectedNode.price2}
+                        {formatCurrencyValue(selectedNode.price2 ?? 0, 'price')}
                       </Typography>
                     </Box>
 
                     <Box>
                       <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
-                        سعر البيع الثالث
+                        {salesPrice3Label}
                       </Typography>
                       <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
                         {selectedNode.price3}
@@ -1467,7 +1479,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
             slotProps={{ htmlInput: { min: 0 } }}
           />
           <TextField
-            label="سعر البيع الأول"
+            label={salesPrice1Label}
             fullWidth
             type="number"
             value={formData.price1}
@@ -1475,7 +1487,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
             slotProps={{ htmlInput: { min: 0 } }}
           />
           <TextField
-            label="سعر البيع الثاني"
+            label={salesPrice2Label}
             fullWidth
             type="number"
             value={formData.price2}
@@ -1483,7 +1495,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
             slotProps={{ htmlInput: { min: 0 } }}
           />
           <TextField
-            label="سعر البيع الثالث"
+            label={salesPrice3Label}
             fullWidth
             type="number"
             value={formData.price3}
@@ -1625,7 +1637,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                 slotProps={{ htmlInput: { min: 0 } }}
               />
               <TextField
-                label="سعر البيع الأول"
+                label={salesPrice1Label}
                 fullWidth
                 type="number"
                 value={formData.price1}
@@ -1633,7 +1645,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                 slotProps={{ htmlInput: { min: 0 } }}
               />
               <TextField
-                label="سعر البيع الثاني"
+                label={salesPrice2Label}
                 fullWidth
                 type="number"
                 value={formData.price2}
@@ -1641,7 +1653,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                 slotProps={{ htmlInput: { min: 0 } }}
               />
               <TextField
-                label="سعر البيع الثالث"
+                label={salesPrice3Label}
                 fullWidth
                 type="number"
                 value={formData.price3}

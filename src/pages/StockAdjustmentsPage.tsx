@@ -34,7 +34,8 @@ import { materialsService, type MaterialRecord } from '../services/materialsServ
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatDateDMY, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { useNotifications } from '../contexts/useNotifications'
 
 
 const darkPopupPaperSx = {
@@ -515,8 +516,7 @@ const roundTo2 = (value: number): number =>
   Math.round((value + Number.EPSILON) * 100) / 100
 
 const formatNumber2 = (value: number | string | null | undefined): string => {
-  const number = Number(value ?? 0)
-  return Number.isFinite(number) ? number.toFixed(2) : '0.00'
+  return formatNumberBySettings(value, 'quantity')
 }
 
 const normalizeNumberInput = (value: string): string => {
@@ -619,6 +619,7 @@ function getAdjustmentItemValues(item: AdjustmentDetailItem) {
 }
 
 export default function StockAdjustmentsPage() {
+  const notify = useNotifications()
   const [warehouses, setWarehouses] = useState<WarehouseRecord[]>([])
   const [materials, setMaterials] = useState<MaterialRecord[]>([])
   const [balances, setBalances] = useState<StockBalanceRecord[]>([])
@@ -915,8 +916,10 @@ export default function StockAdjustmentsPage() {
 
       if (editingReference) {
         await adjustmentService.update(editingReference, payload)
+        notify.info('تم تعديل تسوية الجرد بنجاح.')
       } else {
         await adjustmentService.create(payload)
+        notify.success('تمت إضافة تسوية جرد بنجاح.')
       }
 
       await refreshRecords()
@@ -1013,6 +1016,7 @@ export default function StockAdjustmentsPage() {
       }
 
       setDeleteReference(null)
+      notify.error('تم حذف تسوية الجرد بنجاح.')
     } catch (error) {
       setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر حذف تسوية الجرد.'))
     } finally {
@@ -1085,7 +1089,7 @@ export default function StockAdjustmentsPage() {
                           {record.reference}
                         </TableCell>
                         <TableCell>{record.warehouseSummary || '—'}</TableCell>
-                        <TableCell>{formatNumber2(record.itemCount ?? 0)}</TableCell>
+                        <TableCell>{formatNumberBySettings(record.itemCount ?? 0, 'quantity')}</TableCell>
                         <TableCell>{record.documentNotes?.trim() || '__'}</TableCell>
                         <TableCell>
                           <Box
@@ -1541,11 +1545,11 @@ export default function StockAdjustmentsPage() {
                               {item.materialName || item.materialId || '—'}
                             </TableCell>
                             <TableCell>{item.unit || '—'}</TableCell>
-                            <TableCell>{formatNumber2(values.systemQuantity)}</TableCell>
-                            <TableCell>{formatNumber2(values.countedQuantity)}</TableCell>
-                            <TableCell>{formatNumber2(values.difference)}</TableCell>
+                            <TableCell>{formatNumberBySettings(values.systemQuantity, 'quantity')}</TableCell>
+                            <TableCell>{formatNumberBySettings(values.countedQuantity, 'quantity')}</TableCell>
+                            <TableCell>{formatNumberBySettings(values.difference, 'quantity')}</TableCell>
                             <TableCell>{getDifferenceLabel(values.difference)}</TableCell>
-                            <TableCell>{formatNumber2(values.unitCost)}</TableCell>
+                            <TableCell>{formatCurrencyValue(values.unitCost)}</TableCell>
                             <TableCell>{item.notes?.trim() || '__'}</TableCell>
                           </TableRow>
                         )

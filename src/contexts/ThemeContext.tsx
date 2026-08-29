@@ -1,3 +1,5 @@
+/* eslint-disable react-refresh/only-export-components */
+
 import { CacheProvider } from '@emotion/react'
 import createCache from '@emotion/cache'
 import rtlPlugin from 'stylis-plugin-rtl'
@@ -5,23 +7,20 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CssBaseline, ThemeProvider } from '@mui/material'
 import type { PaletteMode } from '@mui/material'
+import { loadSettings, saveSettings } from '../services/settingsService'
+import type { AppSettings, BorderRadiusOption, FontSizeOption, PrimaryColorOption, SidebarStyleOption, ThemeMode } from '../services/settingsService'
 import { createCraftTheme } from '../theme/theme'
 
 const cacheRtl = createCache({ key: 'mui-rtl', stylisPlugins: [rtlPlugin] })
 
-type ThemeMode = 'light' | 'dark' | 'system'
-export type BorderRadiusOption = 'small' | 'medium' | 'large'
-export type SidebarStyleOption = 'glass' | 'solid'
-export type FontSizeOption = 'small' | 'medium' | 'large'
-
 interface ThemeContextValue {
   mode: ThemeMode
-  primaryColor: 'blue' | 'cyan'
+  primaryColor: PrimaryColorOption
   sidebarStyle: SidebarStyleOption
   borderRadius: BorderRadiusOption
   fontSize: FontSizeOption
   setMode: (mode: ThemeMode) => void
-  setPrimaryColor: (color: 'blue' | 'cyan') => void
+  setPrimaryColor: (color: PrimaryColorOption) => void
   setSidebarStyle: (style: SidebarStyleOption) => void
   setBorderRadius: (value: BorderRadiusOption) => void
   setFontSize: (value: FontSizeOption) => void
@@ -29,21 +28,14 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined)
 
-const defaultState = {
-  mode: 'system' as ThemeMode,
-  primaryColor: 'blue' as 'blue' | 'cyan',
-  sidebarStyle: 'glass' as SidebarStyleOption,
-  borderRadius: 'medium' as BorderRadiusOption,
-  fontSize: 'medium' as FontSizeOption,
-}
-
 export function ThemeProviderWrapper({ children }: { children: ReactNode }) {
-  const [mode, setMode] = useState<ThemeMode>(defaultState.mode)
-  const [primaryColor, setPrimaryColor] = useState<'blue' | 'cyan'>(defaultState.primaryColor)
-  const [sidebarStyle, setSidebarStyle] = useState<SidebarStyleOption>(defaultState.sidebarStyle)
-  const [borderRadius, setBorderRadius] = useState<BorderRadiusOption>(defaultState.borderRadius)
-  const [fontSize, setFontSize] = useState<FontSizeOption>(defaultState.fontSize)
+  const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
+  const { mode, primaryColor, sidebarStyle, borderRadius, fontSize } = settings
   const [resolvedMode, setResolvedMode] = useState<PaletteMode>('light')
+
+  const persistTheme = (patch: Partial<AppSettings>) => {
+    setSettings((current) => saveSettings({ ...current, ...patch }))
+  }
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -78,11 +70,21 @@ export function ThemeProviderWrapper({ children }: { children: ReactNode }) {
       sidebarStyle,
       borderRadius,
       fontSize,
-      setMode,
-      setPrimaryColor,
-      setSidebarStyle,
-      setBorderRadius,
-      setFontSize,
+      setMode: (nextMode: ThemeMode) => {
+        persistTheme({ mode: nextMode })
+      },
+      setPrimaryColor: (nextColor: PrimaryColorOption) => {
+        persistTheme({ primaryColor: nextColor })
+      },
+      setSidebarStyle: (nextStyle: SidebarStyleOption) => {
+        persistTheme({ sidebarStyle: nextStyle })
+      },
+      setBorderRadius: (nextRadius: BorderRadiusOption) => {
+        persistTheme({ borderRadius: nextRadius })
+      },
+      setFontSize: (nextFontSize: FontSizeOption) => {
+        persistTheme({ fontSize: nextFontSize })
+      },
     }),
     [mode, primaryColor, sidebarStyle, borderRadius, fontSize],
   )

@@ -1,4 +1,5 @@
 import { Box, Typography } from '@mui/material'
+import { formatCurrencyValue, formatNumberBySettings } from '../../utils/displayFormatting'
 import type { InvoicePrintItem } from '../../types/invoicePrint'
 
 interface InvoiceDetailsTableProps {
@@ -7,18 +8,37 @@ interface InvoiceDetailsTableProps {
 }
 
 function formatNumber(value: number | undefined): string {
-  return new Intl.NumberFormat('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(Number(value ?? 0))
+  return formatNumberBySettings(Number(value ?? 0), 'quantity')
 }
 
 const cellSx = {
   border: '1px solid rgba(15, 23, 42, 0.12)',
-  p: 1.15,
+  px: 0.8,
+  py: 1.05,
   textAlign: 'center',
   color: '#0F172A',
-  overflowWrap: 'anywhere',
+  verticalAlign: 'middle',
+}
+
+const noWrapCellSx = {
+  ...cellSx,
+  whiteSpace: 'nowrap',
+  overflowWrap: 'normal',
+  wordBreak: 'normal',
+}
+
+const numericCellSx = {
+  ...noWrapCellSx,
+  direction: 'ltr',
+  fontVariantNumeric: 'tabular-nums',
+}
+
+const nameCellSx = {
+  ...cellSx,
+  whiteSpace: 'normal',
+  overflowWrap: 'break-word',
+  wordBreak: 'normal',
+  minWidth: 0,
 }
 
 export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDetailsTableProps) {
@@ -46,7 +66,7 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
         sx={{
           width: '100%',
           borderCollapse: 'collapse',
-          tableLayout: 'fixed',
+          tableLayout: 'auto',
           fontSize: 13,
           '@media print': {
             breakInside: 'auto',
@@ -69,7 +89,8 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
                 key={header}
                 sx={{
                   border: '1px solid rgba(15, 23, 42, 0.12)',
-                  p: 1.15,
+                  px: 0.8,
+                  py: 1.05,
                   textAlign: 'center',
                   fontWeight: 800,
                   color: '#0F172A',
@@ -113,20 +134,20 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
               >
                 {productionMode ? (
                   <>
-                    <Box component="td" sx={cellSx}>{item.name}</Box>
-                    <Box component="td" sx={cellSx}>{formatNumber(item.plannedQuantity)}</Box>
-                    <Box component="td" sx={cellSx}>{formatNumber(item.actualQuantity)}</Box>
-                    <Box component="td" sx={cellSx}>{formatNumber(item.cost ?? item.total)}</Box>
+                    <Box component="td" sx={nameCellSx}>{item.name}</Box>
+                    <Box component="td" sx={numericCellSx}>{formatNumber(item.plannedQuantity)}</Box>
+                    <Box component="td" sx={numericCellSx}>{formatNumber(item.actualQuantity)}</Box>
+                    <Box component="td" sx={numericCellSx}>{formatCurrencyValue(item.cost ?? item.total ?? 0, 'price')}</Box>
                   </>
                 ) : (
                   <>
-                    <Box component="td" sx={cellSx}>{index + 1}</Box>
-                    <Box component="td" sx={cellSx}>{item.code || '—'}</Box>
-                    <Box component="td" sx={{ ...cellSx }}>{item.name}</Box>
-                    <Box component="td" sx={cellSx}>{item.unit || '—'}</Box>
-                    <Box component="td" sx={cellSx}>{formatNumber(item.quantity)}</Box>
-                    <Box component="td" sx={cellSx}>{formatNumber(item.price)}</Box>
-                    <Box component="td" sx={cellSx}>{formatNumber(item.total)}</Box>
+                    <Box component="td" sx={noWrapCellSx}>{index + 1}</Box>
+                    <Box component="td" sx={noWrapCellSx}>{item.code || '—'}</Box>
+                    <Box component="td" sx={nameCellSx}>{item.name}</Box>
+                    <Box component="td" sx={noWrapCellSx}>{item.unit || '—'}</Box>
+                    <Box component="td" sx={numericCellSx}>{formatNumber(item.quantity)}</Box>
+                    <Box component="td" sx={numericCellSx}>{formatCurrencyValue(item.price ?? 0, 'price')}</Box>
+                    <Box component="td" sx={numericCellSx}>{formatCurrencyValue(item.total ?? 0, 'price')}</Box>
                   </>
                 )}
               </Box>

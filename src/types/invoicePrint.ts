@@ -41,5 +41,6 @@ export interface InvoicePrintData {
   discount: number
   additionalFees?: number
   total: number
+  paymentMethod?: string
   productionMode?: boolean
 }

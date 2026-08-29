@@ -3,6 +3,67 @@ function normalizeNumber(value) {
   return Number.isFinite(num) ? num : 0
 }
 
+function parseAdjustmentReportNotes(rawNotes) {
+  const raw = typeof rawNotes === 'string' ? rawNotes.trim() : ''
+  if (!raw) {
+    return { snapshot: null, lineNotes: '' }
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { snapshot: null, lineNotes: raw }
+    }
+
+    const snapshot = parsed.snapshot && typeof parsed.snapshot === 'object' && !Array.isArray(parsed.snapshot)
+      ? parsed.snapshot
+      : null
+    const lineNotes = typeof parsed.lineNotes === 'string' ? parsed.lineNotes.trim() : ''
+
+    return { snapshot, lineNotes }
+  } catch {
+    return { snapshot: null, lineNotes: raw }
+  }
+}
+
+function mapAdjustmentReportRow(row) {
+  const quantityIn = normalizeNumber(row[7])
+  const quantityOut = normalizeNumber(row[8])
+  const movementCost = normalizeNumber(row[9])
+  const parsedNotes = parseAdjustmentReportNotes(row[10])
+  const snapshot = parsedNotes.snapshot
+
+  const fallbackDifference = quantityIn - quantityOut
+  const systemQuantity = snapshot && Number.isFinite(Number(snapshot.systemQuantity))
+    ? Number(snapshot.systemQuantity)
+    : 0
+  const countedQuantity = snapshot && Number.isFinite(Number(snapshot.countedQuantity))
+    ? Number(snapshot.countedQuantity)
+    : systemQuantity + fallbackDifference
+  const difference = snapshot && Number.isFinite(Number(snapshot.difference))
+    ? Number(snapshot.difference)
+    : fallbackDifference
+  const unitCost = snapshot && Number.isFinite(Number(snapshot.unitCost))
+    ? Number(snapshot.unitCost)
+    : movementCost
+
+  return {
+    movementId: row[0] ?? '',
+    reference: row[1] ?? '',
+    date: row[2] ?? '',
+    warehouseName: row[3] ?? '',
+    materialNumber: row[4] ?? '',
+    materialName: row[5] ?? '',
+    unit: row[6] ?? '',
+    systemQuantity,
+    countedQuantity,
+    difference,
+    unitCost,
+    differenceValue: Math.abs(difference) * unitCost,
+    notes: parsedNotes.lineNotes || row[11] || '',
+  }
+}
+
 function readNumber(db, sql, params = []) {
   const value = db.exec(sql, params)[0]?.values?.[0]?.[0]
   return Number(value ?? 0)
@@ -605,6 +666,81 @@ export function getReportData(db, reportType, filters = {}) {
     }
   }
 
+  if (reportType === 'inventory_adjustments') {
+    const clauses = [
+      "d.status = 'completed'",
+      "d.type = 'adjustment'",
+      "sm.type IN ('adjustment_in', 'adjustment_out')",
+      "d.reference NOT LIKE 'OPENING-%'",
+    ]
+    const params = []
+    addWhereClause(clauses, params, 'sm.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'sm.material_id = ?', materialId)
+    buildDateRangeClauses(clauses, params, 'd.date', fromDate, toDate)
+
+    const where = `WHERE ${clauses.join(' AND ')}`
+    const fromSql = `FROM stock_movements sm
+      LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference
+      LEFT JOIN materials m ON m.id = sm.material_id
+      LEFT JOIN warehouses w ON w.id = sm.warehouse_id`
+
+    const totalRows = readNumber(db, `SELECT COUNT(*) ${fromSql} ${where}`, params)
+    const adjustmentCount = readNumber(db, `SELECT COUNT(DISTINCT d.reference) ${fromSql} ${where}`, params)
+    const totalIncrease = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sm.quantity_in, 0)), 0) ${fromSql} ${where}`, params)
+    const totalShortage = readNumber(db, `SELECT COALESCE(SUM(COALESCE(sm.quantity_out, 0)), 0) ${fromSql} ${where}`, params)
+    const totalDifferenceValue = readNumber(
+      db,
+      `SELECT COALESCE(SUM((COALESCE(sm.quantity_in, 0) + COALESCE(sm.quantity_out, 0)) * COALESCE(sm.cost, 0)), 0) ${fromSql} ${where}`,
+      params,
+    )
+
+    const rows = db.exec(
+      `SELECT sm.id, d.reference, d.date, w.name AS warehouse_name,
+              m.material_number, m.name AS material_name, COALESCE(sm.unit, m.unit, '') AS unit,
+              COALESCE(sm.quantity_in, 0) AS quantity_in,
+              COALESCE(sm.quantity_out, 0) AS quantity_out,
+              COALESCE(sm.cost, 0) AS cost,
+              sm.notes AS line_notes,
+              d.notes AS document_notes
+       ${fromSql}
+       ${where}
+       ORDER BY d.date DESC, d.reference DESC, sm.rowid ASC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, page * pageSize],
+    )[0]?.values ?? []
+
+    const chartSeries = [
+      { key: 'increase', label: 'زيادة الجرد' },
+      { key: 'shortage', label: 'نقص الجرد' },
+    ]
+    const bucketExpression = getDateBucketExpression('d.date', chartGranularity)
+    const chartDataRows = db.exec(
+      `SELECT ${bucketExpression} AS label,
+              SUM(COALESCE(sm.quantity_in, 0)) AS increase_quantity,
+              SUM(COALESCE(sm.quantity_out, 0)) AS shortage_quantity
+       ${fromSql}
+       ${where}
+       GROUP BY ${bucketExpression}
+       ORDER BY label ASC`,
+      params,
+    )[0]?.values ?? []
+
+    return {
+      reportType,
+      summary: [
+        { label: 'عدد التسويات', value: adjustmentCount },
+        { label: 'إجمالي الزيادة', value: totalIncrease },
+        { label: 'إجمالي النقص', value: totalShortage },
+        { label: 'قيمة فروقات الجرد', value: totalDifferenceValue },
+      ],
+      rows: rows.map(mapAdjustmentReportRow),
+      chartSeries,
+      chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
+      pagination: buildPagination(totalRows, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
   if (reportType === 'production') {
     const clauses = []
     const params = []
@@ -964,6 +1100,39 @@ export function getReportExportRows(db, reportType, filters = {}) {
         notes: row[11] ?? '',
       }
     })
+  }
+
+  if (reportType === 'inventory_adjustments') {
+    const clauses = [
+      "d.status = 'completed'",
+      "d.type = 'adjustment'",
+      "sm.type IN ('adjustment_in', 'adjustment_out')",
+      "d.reference NOT LIKE 'OPENING-%'",
+    ]
+    const params = []
+    addWhereClause(clauses, params, 'sm.warehouse_id = ?', warehouseId)
+    addWhereClause(clauses, params, 'sm.material_id = ?', materialId)
+    buildDateRangeClauses(clauses, params, 'd.date', fromDate, toDate)
+    const where = `WHERE ${clauses.join(' AND ')}`
+
+    const rows = db.exec(
+      `SELECT sm.id, d.reference, d.date, w.name AS warehouse_name,
+              m.material_number, m.name AS material_name, COALESCE(sm.unit, m.unit, '') AS unit,
+              COALESCE(sm.quantity_in, 0) AS quantity_in,
+              COALESCE(sm.quantity_out, 0) AS quantity_out,
+              COALESCE(sm.cost, 0) AS cost,
+              sm.notes AS line_notes,
+              d.notes AS document_notes
+       FROM stock_movements sm
+       LEFT JOIN stock_movement_documents d ON d.reference = sm.document_reference
+       LEFT JOIN materials m ON m.id = sm.material_id
+       LEFT JOIN warehouses w ON w.id = sm.warehouse_id
+       ${where}
+       ORDER BY d.date DESC, d.reference DESC, sm.rowid ASC`,
+      params,
+    )[0]?.values ?? []
+
+    return rows.map(mapAdjustmentReportRow)
   }
 
   if (reportType === 'production') {
