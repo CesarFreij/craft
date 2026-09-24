@@ -58,8 +58,10 @@ const popupRadiusMap: Record<BorderRadiusOption, string> = {
 
 const fontSizeMap: Record<FontSizeOption, number> = {
   small: 13,
+  default: 14,
   medium: 15,
-  large: 17,
+  large: 16,
+  extraLarge: 17,
 }
 
 export function createCraftTheme(options: ThemeOptions) {
@@ -96,7 +98,8 @@ export function createCraftTheme(options: ThemeOptions) {
     },
 
     typography: {
-      fontFamily: "'Inter', 'Noto Kufi Arabic', 'Segoe UI', sans-serif",
+      fontFamily: "'Tajawal', Tahoma, Arial, sans-serif",
+      htmlFontSize: 14,
       fontSize: fontSizeMap[options.fontSize],
 
       button: {
@@ -198,6 +201,14 @@ export function createCraftTheme(options: ThemeOptions) {
             '&.Mui-focused': {
               color: '#67E8F9',
             },
+          },
+        },
+      },
+
+      MuiFormLabel: {
+        styleOverrides: {
+          asterisk: {
+            color: '#EF4444 !important',
           },
         },
       },

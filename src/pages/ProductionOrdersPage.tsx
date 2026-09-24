@@ -30,7 +30,7 @@ import {
 } from '../services/manufacturingService'
 import type { InvoicePrintData } from '../types/invoicePrint'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatDateDMY, toInternalDate, formatNumberBySettings } from '../utils/displayFormatting'
+import { formatDateDMY, getLocalDateYMD, toInternalDate, formatNumberBySettings } from '../utils/displayFormatting'
 import { useNavigate } from 'react-router-dom'
 import { useNotifications } from '../contexts/useNotifications'
 
@@ -451,7 +451,7 @@ const emptyFormState: OrderFormState = {
   plannedOutputQuantity: '',
   actualOutputQuantity: '',
   laborCost: '0',
-  date: new Date().toISOString().slice(0, 10),
+  date: getLocalDateYMD(),
   notes: '',
   defaultInputWarehouseId: '',
   items: [],
@@ -708,13 +708,13 @@ export function ProductionOrdersPage() {
     }
   }, [selectedOrder])
 
-  const handleExportPdf = useCallback(() => {
+  const handleExportPdf = useCallback(async () => {
     const exportData = buildProductionExportData()
     if (!exportData) {
       return
     }
 
-    const latestSettings = loadCompanyPrintSettings()
+    const latestSettings = await loadCompanyPrintSettings()
     navigate('/invoice-preview', {
       state: {
         invoiceData: exportData,
@@ -1287,7 +1287,7 @@ export function ProductionOrdersPage() {
                       : '',
                   }))
                 }}
-                slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
+                slotProps={{ htmlInput: { min: 0, step: 1 } }}
               />
               <TextField
                 label="الكمية الفعلية"
@@ -1318,7 +1318,7 @@ export function ProductionOrdersPage() {
                       : '',
                   }))
                 }}
-                slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
+                slotProps={{ htmlInput: { min: 0, step: 1 } }}
               />
               <TextField
                 label="تكلفة الأجور الفعلية"
@@ -1334,7 +1334,7 @@ export function ProductionOrdersPage() {
                 slotProps={{
                   htmlInput: {
                     min: 0,
-                    step: 0.01,
+                    step: 1,
                   },
                 }}
               />
@@ -1430,7 +1430,7 @@ export function ProductionOrdersPage() {
                                       : entry),
                                   }))
                                 }}
-                                slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
+                                slotProps={{ htmlInput: { min: 0, step: 1 } }}
                               />
                             </Box>
                             <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
@@ -1637,7 +1637,7 @@ export function ProductionOrdersPage() {
                           <Box component="tr" key={input.id}>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.materialName}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.warehouseName}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.unit || '__'}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.unit || ''}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(calculatedPlanned)}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(displayedActual)}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{differenceText}</Box>

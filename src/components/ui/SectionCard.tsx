@@ -15,12 +15,12 @@ export function SectionCard({ title, subtitle, actions, children }: SectionCardP
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: 'easeOut' }}
-      sx={{ p: 3, borderRadius: 4, backgroundColor: '#FFFFFF', boxShadow: 'none', border: '1px solid #E2E8F0' }}
+      sx={{ p: 3, borderRadius: '18px', backgroundColor: '#FFFFFF', boxShadow: 'none', border: '1px solid #E2E8F0' }}
     >
       <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, alignItems: 'center', mb: 2 }}>
         <Box>
-          <Typography sx={{ fontWeight: 700, fontSize: 16 }}>{title}</Typography>
-          {subtitle && <Typography sx={{ color: 'text.secondary', fontSize: 13, mt: 0.5 }}>{subtitle}</Typography>}
+          <Typography sx={{ fontWeight: 700, fontSize: '1.143rem' }}>{title}</Typography>
+          {subtitle && <Typography sx={{ color: 'text.secondary', fontSize: '0.929rem', mt: 0.5 }}>{subtitle}</Typography>}
         </Box>
         {actions && (
           <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-start' }}>

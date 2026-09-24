@@ -21,7 +21,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
-import { FiCalendar, FiEdit2, FiEye, FiPlus, FiTrash2 } from 'react-icons/fi'
+import { FiCalendar, FiEdit2, FiEye, FiFileText, FiPlus, FiPrinter, FiTrash2 } from 'react-icons/fi'
 import {
   adjustmentService,
   inventoryService,
@@ -34,8 +34,10 @@ import { materialsService, type MaterialRecord } from '../services/materialsServ
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatCurrencyValue, formatDateDMY, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, getLocalDateYMD, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
 import { useNotifications } from '../contexts/useNotifications'
+import { downloadExcelTable, printTableData, type TableCellValue } from '../utils/tableExport'
+import { loadSettings } from '../services/settingsService'
 
 
 const darkPopupPaperSx = {
@@ -515,6 +517,11 @@ const emptyLine = (): AdjustmentLineItem => ({
 const roundTo2 = (value: number): number =>
   Math.round((value + Number.EPSILON) * 100) / 100
 
+const roundToDecimals = (value: number, decimals: number): number => {
+  const factor = 10 ** decimals
+  return Math.round((value + Number.EPSILON) * factor) / factor
+}
+
 const formatNumber2 = (value: number | string | null | undefined): string => {
   return formatNumberBySettings(value, 'quantity')
 }
@@ -523,6 +530,12 @@ const normalizeNumberInput = (value: string): string => {
   if (value.trim() === '') return ''
   const number = Number(value)
   return Number.isFinite(number) ? formatNumber2(roundTo2(number)) : value
+}
+
+const normalizeAverageCostInput = (value: string): string => {
+  if (value.trim() === '') return ''
+  const number = Number(value)
+  return Number.isFinite(number) ? formatNumberBySettings(number, 'average') : value
 }
 
 const adjustmentEditableFieldSx = {
@@ -595,8 +608,8 @@ function sanitizeAdjustmentNote(rawNote: string | null | undefined): string {
 
 function getDifferenceLabel(value: number): string {
   const normalized = roundTo2(value)
-  if (normalized > 0) return 'زيادة جرد'
-  if (normalized < 0) return 'نقص جرد'
+  if (normalized > 0) return 'زيادة'
+  if (normalized < 0) return 'نقص'
   return 'بدون فرق'
 }
 
@@ -620,13 +633,15 @@ function getAdjustmentItemValues(item: AdjustmentDetailItem) {
 
 export default function StockAdjustmentsPage() {
   const notify = useNotifications()
+  const { averageDecimals } = loadSettings()
+  const averageCostStep = 10 ** -averageDecimals
   const [warehouses, setWarehouses] = useState<WarehouseRecord[]>([])
   const [materials, setMaterials] = useState<MaterialRecord[]>([])
   const [balances, setBalances] = useState<StockBalanceRecord[]>([])
   const [records, setRecords] = useState<AdjustmentRecord[]>([])
 
   const [selectedWarehouse, setSelectedWarehouse] = useState('')
-  const [documentDate, setDocumentDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [documentDate, setDocumentDate] = useState(() => getLocalDateYMD())
   const [documentNotes, setDocumentNotes] = useState('')
   const [items, setItems] = useState<AdjustmentLineItem[]>([emptyLine()])
 
@@ -766,7 +781,7 @@ export default function StockAdjustmentsPage() {
 
   const resetForm = () => {
     setSelectedWarehouse('')
-    setDocumentDate(new Date().toISOString().slice(0, 10))
+    setDocumentDate(getLocalDateYMD())
     setDocumentNotes('')
     setItems([emptyLine()])
     setEditingReference(null)
@@ -833,7 +848,10 @@ export default function StockAdjustmentsPage() {
       unit: material?.unit ?? balance?.unit ?? '',
       systemQuantity: Number(balance?.quantity ?? 0),
       countedQuantity: '',
-      unitCost: averageCost > 0 ? formatNumber2(averageCost) : '',
+      unitCost:
+        Number.isFinite(averageCost)
+          ? formatNumberBySettings(averageCost, 'average')
+          : '',
     })
   }
 
@@ -879,7 +897,7 @@ export default function StockAdjustmentsPage() {
         const unitCost = Number(item.unitCost)
 
         if (item.unitCost.trim() === '' || !Number.isFinite(unitCost) || unitCost < 0) {
-          return 'يجب إدخال تكلفة تسوية صحيحة عند وجود زيادة جرد دون تكلفة معروفة.'
+          return 'لا يوجد متوسط تكلفة صالح للمادة لإتمام تسوية الزيادة.'
         }
       }
     }
@@ -905,7 +923,10 @@ export default function StockAdjustmentsPage() {
         materialId: item.materialId,
         countedQuantity: roundTo2(Number(item.countedQuantity)),
         unit: item.unit,
-        unitCost: item.unitCost.trim() === '' ? undefined : roundTo2(Number(item.unitCost)),
+        unitCost:
+          item.unitCost.trim() === ''
+            ? undefined
+            : roundToDecimals(Number(item.unitCost), averageDecimals),
         notes: item.notes.trim(),
       })),
     }
@@ -955,7 +976,10 @@ export default function StockAdjustmentsPage() {
           systemQuantity: values.systemQuantity,
           countedQuantity: formatNumber2(values.countedQuantity),
           notes: sanitizeAdjustmentNote(item.notes),
-          unitCost: values.unitCost > 0 ? formatNumber2(values.unitCost) : '',
+          unitCost:
+            values.unitCost > 0
+              ? formatNumberBySettings(values.unitCost, 'average')
+              : '',
         }
       })
 
@@ -964,7 +988,7 @@ export default function StockAdjustmentsPage() {
       setDocumentDate(
         document.date
           ? toInternalDate(document.date)
-          : new Date().toISOString().slice(0, 10),
+          : getLocalDateYMD(),
       )
       setDocumentNotes(sanitizeAdjustmentNote(document.notes))
       setItems(preparedItems.length > 0 ? preparedItems : [emptyLine()])
@@ -1024,6 +1048,106 @@ export default function StockAdjustmentsPage() {
     }
   }
 
+  const adjustmentExportHeaders = [
+    'التاريخ',
+    'رقم التسوية',
+    'المخزن',
+    'المادة',
+    'الوحدة',
+    'الرصيد',
+    'الكمية الفعلية',
+    'الفارق',
+    'النوع',
+    'تكلفة الوحدة',
+    'ملاحظات',
+  ]
+
+  const buildAdjustmentExportRows = async (
+    formatted: boolean,
+  ): Promise<TableCellValue[][]> => {
+    const rows: TableCellValue[][] = []
+
+    for (const record of records) {
+      const document = await adjustmentService.getByReference(record.reference)
+
+      if (!document) {
+        continue
+      }
+
+      const detailItems = (document.items ?? []) as AdjustmentDetailItem[]
+      const documentNotes = sanitizeAdjustmentNote(document.notes)
+
+      if (detailItems.length === 0) {
+        rows.push([
+          formatDateDMY(document.date ?? record.date),
+          record.reference,
+          record.warehouseSummary || '—',
+          '—',
+          '—',
+          formatted ? formatNumberBySettings(0, 'quantity') : 0,
+          formatted ? formatNumberBySettings(0, 'quantity') : 0,
+          formatted ? formatNumberBySettings(0, 'quantity') : 0,
+          getDifferenceLabel(0),
+          formatted ? formatCurrencyValue(0, 'average') : 0,
+          documentNotes || '',
+        ])
+        continue
+      }
+
+      detailItems.forEach((item, itemIndex) => {
+        const values = getAdjustmentItemValues(item)
+        const lineNote = sanitizeAdjustmentNote(item.notes)
+        const notesValue = lineNote || (itemIndex === 0 ? documentNotes : '') || ''
+
+        rows.push([
+          formatDateDMY(document.date ?? record.date),
+          record.reference,
+          item.warehouseName || record.warehouseSummary || '—',
+          item.materialName || item.materialId || '—',
+          item.unit || '—',
+          formatted
+            ? formatNumberBySettings(values.systemQuantity, 'quantity')
+            : values.systemQuantity,
+          formatted
+            ? formatNumberBySettings(values.countedQuantity, 'quantity')
+            : values.countedQuantity,
+          formatted
+            ? formatNumberBySettings(values.difference, 'quantity')
+            : values.difference,
+          getDifferenceLabel(values.difference),
+          formatted ? formatCurrencyValue(values.unitCost, 'average') : values.unitCost,
+          notesValue,
+        ])
+      })
+    }
+
+    return rows
+  }
+
+  const exportAdjustmentsToExcel = async () => {
+    const exportRows = await buildAdjustmentExportRows(false)
+
+    downloadExcelTable({
+      title: 'تسويات الجرد',
+      sheetName: 'تسويات الجرد',
+      fileName: `craft-stock-adjustments-${getLocalDateYMD()}`,
+      headers: adjustmentExportHeaders,
+      rows: exportRows,
+    })
+  }
+
+  const printAdjustments = async () => {
+    const printRows = await buildAdjustmentExportRows(true)
+
+    printTableData({
+      title: 'تسويات الجرد',
+      subtitle: 'تفاصيل تسويات المخزون المسجلة',
+      fileName: 'stock-adjustments',
+      headers: adjustmentExportHeaders,
+      rows: printRows,
+    })
+  }
+
   const displayedRecords = records.slice(
     page * rowsPerPage,
     page * rowsPerPage + rowsPerPage,
@@ -1046,13 +1170,48 @@ export default function StockAdjustmentsPage() {
         title="سجل تسويات الجرد"
         subtitle="عرض وإدارة تسويات المخزون المسجلة"
         actions={
-          <Button
-            variant="contained"
-            startIcon={<FiPlus />}
-            onClick={openCreateForm}
-          >
-            تسوية جرد جديدة
-          </Button>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Button
+              variant="outlined"
+              startIcon={<FiPrinter />}
+              onClick={() => {
+                void printAdjustments()
+              }}
+              disabled={records.length === 0}
+              sx={{
+                color: '#BFDBFE',
+                borderColor: 'rgba(96, 165, 250, 0.58)',
+                background: 'rgba(96, 165, 250, 0.08)',
+                '&:hover': {
+                  color: '#DBEAFE',
+                  borderColor: '#60A5FA',
+                  background: 'rgba(96, 165, 250, 0.18)',
+                },
+              }}
+            >
+              طباعة
+            </Button>
+            
+            <Button
+              variant="outlined"
+              startIcon={<FiFileText />}
+              onClick={() => {
+                void exportAdjustmentsToExcel()
+              }}
+              disabled={records.length === 0}
+            >
+              Excel
+            </Button>
+
+
+            <Button
+              variant="contained"
+              startIcon={<FiPlus />}
+              onClick={openCreateForm}
+            >
+              تسوية جرد جديدة
+            </Button>
+          </Box>
         }
       >
         {loading ? (
@@ -1068,7 +1227,7 @@ export default function StockAdjustmentsPage() {
                     <TableCell sx={{ fontWeight: 700 }}>التاريخ</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>رقم التسوية</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>المخزن</TableCell>
-                    <TableCell sx={{ fontWeight: 700 }}>عدد البنود</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>عدد التسويات</TableCell>
                     <TableCell sx={{ fontWeight: 700 }}>الملاحظات</TableCell>
                     <TableCell sx={{ fontWeight: 700, width: 150 }}>الإجراءات</TableCell>
                   </TableRow>
@@ -1090,7 +1249,7 @@ export default function StockAdjustmentsPage() {
                         </TableCell>
                         <TableCell>{record.warehouseSummary || '—'}</TableCell>
                         <TableCell>{formatNumberBySettings(record.itemCount ?? 0, 'quantity')}</TableCell>
-                        <TableCell>{record.documentNotes?.trim() || '__'}</TableCell>
+                        <TableCell>{record.documentNotes?.trim() || ''}</TableCell>
                         <TableCell>
                           <Box
                             sx={{
@@ -1246,7 +1405,7 @@ export default function StockAdjustmentsPage() {
                 onClick={addLine}
                 disabled={!selectedWarehouse}
               >
-                إضافة بند
+                إضافة تسوية
               </Button>
             </Box>
 
@@ -1262,10 +1421,10 @@ export default function StockAdjustmentsPage() {
                   <TableRow>
                     <TableCell sx={{ fontWeight: 700, minWidth: 220 }}>المادة</TableCell>
                     <TableCell sx={{ fontWeight: 700, minWidth: 100 }}>الوحدة</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 120 }}>رصيد النظام</TableCell>
+                    <TableCell sx={{ fontWeight: 700, minWidth: 120 }}>الرصيد</TableCell>
                     <TableCell sx={{ fontWeight: 700, minWidth: 140 }}>الكمية الفعلية</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 110 }}>الفرق</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 120 }}>نوع الفرق</TableCell>
+                    <TableCell sx={{ fontWeight: 700, minWidth: 110 }}>الفارق</TableCell>
+                    <TableCell sx={{ fontWeight: 700, minWidth: 120 }}>النوع</TableCell>
                     <TableCell sx={{ fontWeight: 700, minWidth: 140 }}>تكلفة الوحدة</TableCell>
                     <TableCell sx={{ fontWeight: 700, minWidth: 190 }}>ملاحظات</TableCell>
                     <TableCell sx={{ fontWeight: 700, width: 70 }} />
@@ -1405,19 +1564,20 @@ export default function StockAdjustmentsPage() {
                             size="small"
                             type="number"
                             value={item.unitCost}
+                            fullWidth
                             onChange={(event) =>
                               updateItem(index, { unitCost: event.target.value })
                             }
                             onBlur={() =>
                               updateItem(index, {
-                                unitCost: normalizeNumberInput(item.unitCost),
+                                unitCost: normalizeAverageCostInput(item.unitCost),
                               })
                             }
-                            fullWidth
                             slotProps={{
                               htmlInput: {
                                 min: 0,
-                                step: 1,
+                                step: averageCostStep,
+                                inputMode: 'decimal',
                               },
                             }}
                             sx={adjustmentEditableFieldSx}
@@ -1437,7 +1597,7 @@ export default function StockAdjustmentsPage() {
                         </TableCell>
 
                         <TableCell align="center">
-                          <Tooltip title="إزالة البند">
+                          <Tooltip title="حذف">
                             <span>
                               <IconButton
                                 size="small"
@@ -1515,7 +1675,7 @@ export default function StockAdjustmentsPage() {
                   {detailDocument.items?.[0]?.warehouseName ?? '—'}
                 </Typography>
                 <Typography>
-                  <strong>الملاحظات:</strong> {detailDocument.notes?.trim() || '__'}
+                  <strong>الملاحظات:</strong> {detailDocument.notes?.trim() || ''}
                 </Typography>
               </Box>
 
@@ -1525,10 +1685,10 @@ export default function StockAdjustmentsPage() {
                     <TableRow>
                       <TableCell sx={{ fontWeight: 700 }}>المادة</TableCell>
                       <TableCell sx={{ fontWeight: 700 }}>الوحدة</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>رصيد النظام</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>الرصيد</TableCell>
                       <TableCell sx={{ fontWeight: 700 }}>الكمية الفعلية</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>الفرق</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>نوع الفرق</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>الفارق</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>النوع</TableCell>
                       <TableCell sx={{ fontWeight: 700 }}>تكلفة الوحدة</TableCell>
                       <TableCell sx={{ fontWeight: 700 }}>ملاحظات</TableCell>
                     </TableRow>
@@ -1549,8 +1709,8 @@ export default function StockAdjustmentsPage() {
                             <TableCell>{formatNumberBySettings(values.countedQuantity, 'quantity')}</TableCell>
                             <TableCell>{formatNumberBySettings(values.difference, 'quantity')}</TableCell>
                             <TableCell>{getDifferenceLabel(values.difference)}</TableCell>
-                            <TableCell>{formatCurrencyValue(values.unitCost)}</TableCell>
-                            <TableCell>{item.notes?.trim() || '__'}</TableCell>
+                            <TableCell>{formatCurrencyValue(values.unitCost, 'average')}</TableCell>
+                            <TableCell>{item.notes?.trim() || ''}</TableCell>
                           </TableRow>
                         )
                       },

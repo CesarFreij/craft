@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Box, TextField, MenuItem, Typography, TablePagination } from '@mui/material'
+import { Box, Button, TextField, MenuItem, Typography, TablePagination } from '@mui/material'
+import { FiFileText, FiPrinter } from 'react-icons/fi'
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
 import { SearchField } from '../components/ui/SearchField'
 import { inventoryService } from '../services/inventoryService'
 import type { StockBalanceRecord, WarehouseRecord } from '../services/inventoryService'
-import { formatCurrencyValue, formatNumberBySettings } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatNumberBySettings, getLocalDateYMD } from '../utils/displayFormatting'
+import { downloadExcelTable, printTableData } from '../utils/tableExport'
+
+function averageCostNum(value: number | undefined): string {
+  return formatNumberBySettings(Number(value ?? 0), 'average')
+}
+
+function valueMoney(value: number | undefined): string {
+  return formatCurrencyValue(Number(value ?? 0), 'price')
+}
 
 const darkPopupPaperSx = {
   mt: 0.75,
@@ -197,11 +207,85 @@ export function StockBalancesPage() {
     [filtered],
   )
 
+  const selectedWarehouseName = warehouseFilter
+    ? warehouses.find((warehouse) => warehouse.id === warehouseFilter)?.name ?? 'المخزن المحدد'
+    : 'كل المخازن'
+
+  const balanceExportHeaders = [
+    'المخزن',
+    'رقم المادة',
+    'اسم المادة',
+    'الوحدة',
+    'الرصيد',
+    'متوسط التكلفة',
+    'القيمة',
+  ]
+
+  const exportBalancesToExcel = () => {
+    downloadExcelTable({
+      title: 'أرصدة المخازن',
+      sheetName: 'أرصدة المخازن',
+      fileName: `craft-stock-balances-${getLocalDateYMD()}`,
+      headers: balanceExportHeaders,
+      rows: filtered.map((record) => [
+        record.warehouseName ?? '—',
+        record.materialNumber,
+        record.name,
+        record.unit ?? '',
+        Number(record.quantity ?? 0),
+        Number(record.averageCost ?? 0),
+        Number(record.stockValue ?? 0),
+      ]),
+    })
+  }
+
+  const printBalances = () => {
+    printTableData({
+      title: 'أرصدة المخازن',
+      subtitle: `المخزن: ${selectedWarehouseName}`,
+      summary: `إجمالي قيمة المخزون: ${formatCurrencyValue(totalStockValue, 'price')}`,
+      fileName: 'stock-balances',
+      headers: balanceExportHeaders,
+      rows: filtered.map((record) => [
+        record.warehouseName ?? '—',
+        record.materialNumber,
+        record.name,
+        record.unit ?? '',
+        formatNumberBySettings(record.quantity, 'quantity'),
+        averageCostNum(record.averageCost),
+        valueMoney(record.stockValue),
+      ]),
+    })
+  }
+
   return (
     <Box sx={craftPageGlassSx}>
       <PageHeader title="أرصدة المخازن" breadcrumb="عرض رصيد كل مادة في المخازن الحالية" />
 
-      <SectionCard title="تفاصيل الرصيد">
+      <SectionCard
+        title="تفاصيل الرصيد"
+        actions={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+
+            <Button
+              variant="outlined"
+              startIcon={<FiPrinter />}
+              onClick={printBalances}
+              disabled={filtered.length === 0}
+            >
+              طباعة
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<FiFileText />}
+              onClick={exportBalancesToExcel}
+              disabled={filtered.length === 0}
+            >
+              Excel
+            </Button>
+          </Box>
+        }
+      >
         <Box
           sx={{
             display: 'flex',
@@ -279,7 +363,7 @@ export function StockBalancesPage() {
                 <Box component="th" sx={{ p: 2 }}>الوحدة</Box>
                 <Box component="th" sx={{ p: 2 }}>الرصيد</Box>
                 <Box component="th" sx={{ p: 2 }}>متوسط التكلفة</Box>
-                <Box component="th" sx={{ p: 2 }}>قيمة الرصيد</Box>
+                <Box component="th" sx={{ p: 2 }}>القيمة</Box>
               </Box>
             </Box>
 
@@ -304,10 +388,10 @@ export function StockBalancesPage() {
                       {formatNumberBySettings(r.quantity, 'quantity')}
                     </Box>
                     <Box component="td" sx={{ textAlign: 'center', p: 2 }}>
-                      {formatCurrencyValue(r.averageCost, 'average')}
+                      {averageCostNum(r.averageCost)}
                     </Box>
                     <Box component="td" sx={{ textAlign: 'center', p: 2, fontWeight: 700 }}>
-                      {formatCurrencyValue(r.stockValue, 'price')}
+                      {valueMoney(r.stockValue)}
                     </Box>
                   </Box>
                 ))}

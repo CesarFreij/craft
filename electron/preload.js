@@ -14,6 +14,8 @@ ipcRenderer.on('app:splashFinished', () => {
 })
 
 contextBridge.exposeInMainWorld('craftAppAPI', {
+  isSplashFinished: () => Promise.resolve(splashFinished),
+
   onSplashFinished: (callback) => {
     if (typeof callback !== 'function') {
       return
@@ -30,6 +32,10 @@ contextBridge.exposeInMainWorld('craftAppAPI', {
   offSplashFinished: (callback) => {
     splashFinishedCallbacks.delete(callback)
   },
+})
+
+contextBridge.exposeInMainWorld('craftSettingsAPI', {
+  setNumberFormat: (settings) => ipcRenderer.invoke('settings:setNumberFormat', settings),
 })
 
 contextBridge.exposeInMainWorld('craftMaterialsAPI', {
@@ -86,6 +92,9 @@ contextBridge.exposeInMainWorld('craftSuppliersAPI', {
   create: (payload) => ipcRenderer.invoke('suppliers:create', payload),
   update: (id, payload) => ipcRenderer.invoke('suppliers:update', { id, payload }),
   delete: (id) => ipcRenderer.invoke('suppliers:delete', id),
+  listPayments: (supplierId) => ipcRenderer.invoke('suppliers:listPayments', supplierId),
+  createPayment: (payload) => ipcRenderer.invoke('suppliers:createPayment', payload),
+  deletePayment: (paymentId) => ipcRenderer.invoke('suppliers:deletePayment', paymentId),
 })
 
 contextBridge.exposeInMainWorld('craftPurchasesAPI', {
@@ -105,6 +114,9 @@ contextBridge.exposeInMainWorld('craftPurchasesAPI', {
   createReturn: (payload) => ipcRenderer.invoke('purchases:createReturn', payload),
   updateReturn: (returnId, payload) => ipcRenderer.invoke('purchases:updateReturn', { returnId, payload }),
   deleteReturn: (returnId) => ipcRenderer.invoke('purchases:deleteReturn', returnId),
+  listReturnPayments: (returnId) => ipcRenderer.invoke('purchases:listReturnPayments', returnId),
+  createReturnPayment: (returnId, payload) => ipcRenderer.invoke('purchases:createReturnPayment', { returnId, payload }),
+  deleteReturnPayment: (paymentId) => ipcRenderer.invoke('purchases:deleteReturnPayment', paymentId),
 })
 
 contextBridge.exposeInMainWorld('craftCustomersAPI', {
@@ -113,6 +125,20 @@ contextBridge.exposeInMainWorld('craftCustomersAPI', {
   create: (payload) => ipcRenderer.invoke('customers:create', payload),
   update: (id, payload) => ipcRenderer.invoke('customers:update', { id, payload }),
   delete: (id) => ipcRenderer.invoke('customers:delete', id),
+  listPayments: (customerId) => ipcRenderer.invoke('customers:listPayments', customerId),
+  createPayment: (payload) => ipcRenderer.invoke('customers:createPayment', payload),
+  deletePayment: (paymentId) => ipcRenderer.invoke('customers:deletePayment', paymentId),
+})
+
+contextBridge.exposeInMainWorld('craftDelegatesAPI', {
+  list: () => ipcRenderer.invoke('delegates:list'),
+  listActive: () => ipcRenderer.invoke('delegates:listActive'),
+  create: (payload) => ipcRenderer.invoke('delegates:create', payload),
+  update: (id, payload) => ipcRenderer.invoke('delegates:update', { id, payload }),
+  delete: (id) => ipcRenderer.invoke('delegates:delete', id),
+  getPayments: (delegateId) => ipcRenderer.invoke('delegates:getPayments', delegateId),
+  createPayment: (payload) => ipcRenderer.invoke('delegates:createPayment', payload),
+  deletePayment: (paymentId) => ipcRenderer.invoke('delegates:deletePayment', paymentId),
 })
 
 contextBridge.exposeInMainWorld('craftSalesAPI', {
@@ -132,6 +158,9 @@ contextBridge.exposeInMainWorld('craftSalesAPI', {
   createReturn: (payload) => ipcRenderer.invoke('sales:createReturn', payload),
   updateReturn: (returnId, payload) => ipcRenderer.invoke('sales:updateReturn', { returnId, payload }),
   deleteReturn: (returnId) => ipcRenderer.invoke('sales:deleteReturn', returnId),
+  listReturnPayments: (returnId) => ipcRenderer.invoke('sales:listReturnPayments', returnId),
+  createReturnPayment: (returnId, payload) => ipcRenderer.invoke('sales:createReturnPayment', { returnId, payload }),
+  deleteReturnPayment: (paymentId) => ipcRenderer.invoke('sales:deleteReturnPayment', paymentId),
 })
 
 contextBridge.exposeInMainWorld('craftReportsAPI', {
@@ -149,17 +178,47 @@ contextBridge.exposeInMainWorld('craftDataManagementAPI', {
   setAutoBackupSettings: (settings) => ipcRenderer.invoke('data:setAutoBackupSettings', settings),
 })
 
+contextBridge.exposeInMainWorld('craftCompanyPrintSettingsAPI', {
+  get: () => ipcRenderer.invoke('companyPrintSettings:get'),
+  save: (settings) => ipcRenderer.invoke('companyPrintSettings:save', settings),
+})
+
 contextBridge.exposeInMainWorld('craftExportAPI', {
   exportInvoicePdf: ({ invoiceData, settings, fileName }) => ipcRenderer.invoke('invoice:exportPdf', { invoiceData, settings, fileName }),
 })
 
+let pendingInvoicePreviewPayload = null
+const invoicePreviewListeners = new Set()
+
+ipcRenderer.on('invoice-preview:data', (_event, payload) => {
+  pendingInvoicePreviewPayload = payload
+  for (const callback of invoicePreviewListeners) {
+    callback(payload)
+  }
+})
+
 contextBridge.exposeInMainWorld('invoicePrintAPI', {
   onInvoiceData: (callback) => {
-    ipcRenderer.on('invoice-preview:data', (_event, payload) => callback(payload))
+    if (typeof callback !== 'function') {
+      return
+    }
+
+    invoicePreviewListeners.add(callback)
+
+    if (pendingInvoicePreviewPayload) {
+      const payload = pendingInvoicePreviewPayload
+      queueMicrotask(() => {
+        callback(payload)
+        if (pendingInvoicePreviewPayload === payload) {
+          pendingInvoicePreviewPayload = null
+        }
+      })
+    }
   },
 
   offInvoiceData: () => {
-    ipcRenderer.removeAllListeners('invoice-preview:data')
+    invoicePreviewListeners.clear()
+    pendingInvoicePreviewPayload = null
   },
 
   notifyReady: () => {

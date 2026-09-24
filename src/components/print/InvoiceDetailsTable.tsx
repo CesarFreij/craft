@@ -1,5 +1,5 @@
 import { Box, Typography } from '@mui/material'
-import { formatCurrencyValue, formatNumberBySettings } from '../../utils/displayFormatting'
+import { formatNumberBySettings } from '../../utils/displayFormatting'
 import type { InvoicePrintItem } from '../../types/invoicePrint'
 
 interface InvoiceDetailsTableProps {
@@ -9,6 +9,10 @@ interface InvoiceDetailsTableProps {
 
 function formatNumber(value: number | undefined): string {
   return formatNumberBySettings(Number(value ?? 0), 'quantity')
+}
+
+function priceNum(value: number | undefined): string {
+  return formatNumberBySettings(Number(value ?? 0), 'price')
 }
 
 const cellSx = {
@@ -137,7 +141,7 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
                     <Box component="td" sx={nameCellSx}>{item.name}</Box>
                     <Box component="td" sx={numericCellSx}>{formatNumber(item.plannedQuantity)}</Box>
                     <Box component="td" sx={numericCellSx}>{formatNumber(item.actualQuantity)}</Box>
-                    <Box component="td" sx={numericCellSx}>{formatCurrencyValue(item.cost ?? item.total ?? 0, 'price')}</Box>
+                    <Box component="td" sx={numericCellSx}>{priceNum(item.cost ?? item.total ?? 0)}</Box>
                   </>
                 ) : (
                   <>
@@ -146,8 +150,8 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
                     <Box component="td" sx={nameCellSx}>{item.name}</Box>
                     <Box component="td" sx={noWrapCellSx}>{item.unit || '—'}</Box>
                     <Box component="td" sx={numericCellSx}>{formatNumber(item.quantity)}</Box>
-                    <Box component="td" sx={numericCellSx}>{formatCurrencyValue(item.price ?? 0, 'price')}</Box>
-                    <Box component="td" sx={numericCellSx}>{formatCurrencyValue(item.total ?? 0, 'price')}</Box>
+                    <Box component="td" sx={numericCellSx}>{priceNum(item.price ?? 0)}</Box>
+                    <Box component="td" sx={numericCellSx}>{priceNum(item.total ?? 0)}</Box>
                   </>
                 )}
               </Box>

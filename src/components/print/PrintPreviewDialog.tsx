@@ -1,8 +1,13 @@
 import { useEffect } from 'react'
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle } from '@mui/material'
 import { InvoicePrintTemplate } from './InvoicePrintTemplate'
+import { formatDateDMY } from '../../utils/displayFormatting'
 import { formatCurrencyValue, formatNumberBySettings } from '../../utils/displayFormatting'
 import type { CompanyPrintSettings, InvoicePrintData } from '../../types/invoicePrint'
+
+function priceNum(value: number | undefined): string {
+  return formatNumberBySettings(Number(value ?? 0), 'price')
+}
 
 interface PrintPreviewDialogProps {
   open: boolean
@@ -19,7 +24,7 @@ function buildCsv(data: InvoicePrintData): string {
         item.name,
         formatNumberBySettings(item.plannedQuantity ?? 0, 'quantity'),
         formatNumberBySettings(item.actualQuantity ?? 0, 'quantity'),
-        formatCurrencyValue(item.cost ?? item.total ?? 0, 'price'),
+        priceNum(item.cost ?? item.total ?? 0),
       ].join(',')
     }
 
@@ -29,13 +34,13 @@ function buildCsv(data: InvoicePrintData): string {
       item.name,
       item.unit,
       formatNumberBySettings(item.quantity ?? 0, 'quantity'),
-      formatCurrencyValue(item.price ?? 0, 'price'),
-      formatCurrencyValue(item.total ?? 0, 'price'),
+      priceNum(item.price ?? 0),
+      priceNum(item.total ?? 0),
     ].join(',')
   })
 
-  const summary = `\n"المجموع","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"\n"الإجمالي النهائي","${formatCurrencyValue(data.total, 'price')}"`
-  return `"${data.title}","${data.documentNumber}"\n"التاريخ","${data.date}"\n"${data.partyLabel}","${data.partyName}"\n${headers.join(',')}\n${rows.join('\n')}${summary}`
+  const summary = `\n"الإجمالي","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"\n"الإجمالي","${formatCurrencyValue(data.total, 'price')}"`
+  return `"${data.title}","${data.documentNumber}"\n"التاريخ","${formatDateDMY(data.date)}"\n"${data.partyLabel}","${data.partyName}"\n${headers.join(',')}\n${rows.join('\n')}${summary}`
 }
 
 export function PrintPreviewDialog({ open, onClose, settings, data }: PrintPreviewDialogProps) {

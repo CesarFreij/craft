@@ -24,10 +24,12 @@ import type { ChangeEvent } from 'react'
 import {
   FiAlertTriangle,
   FiCreditCard,
+  FiEdit2,
   FiPlus,
   FiTrash2,
   FiUpload,
 } from 'react-icons/fi'
+import { useThemeSettings } from '../contexts/ThemeContext'
 import { useNotifications } from '../contexts/useNotifications'
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
@@ -82,6 +84,7 @@ declare global {
 type SettingsSection =
   | 'general'
   | 'company'
+  | 'display'
   | 'sales'
   | 'payments'
   | 'data'
@@ -142,12 +145,6 @@ const innerPanelSx = {
   borderRadius: 0,
   boxShadow: 'none !important',
   backgroundImage: 'none !important',
-}
-
-const sectionDividerSx = {
-  width: '100%',
-  height: '1px',
-  background: 'rgba(255,255,255,.09)',
 }
 
 const darkPopupPaperSx = {
@@ -255,6 +252,7 @@ const selectSx = {
 
 const primaryButtonSx = {
   minHeight: 42,
+  borderRadius: 24,
   px: 2.2,
   color: '#FFFFFF !important',
   fontWeight: 800,
@@ -288,13 +286,14 @@ const selectMenuProps = {
 const sectionTitles: Record<SettingsSection, string> = {
   general: 'عام',
   company: 'بيانات الشركة',
+  display: 'إعدادات العرض والخط',
   sales: 'المبيعات',
   payments: 'طرق الدفع',
   data: 'إدارة البيانات',
 }
 
 function normalizeSettingsSection(value: string | null): SettingsSection {
-  if (value === 'company' || value === 'sales' || value === 'payments' || value === 'data') {
+  if (value === 'company' || value === 'display' || value === 'sales' || value === 'payments' || value === 'data') {
     return value
   }
   return 'general'
@@ -313,19 +312,40 @@ export function SettingsPage() {
   const [searchParams] = useSearchParams()
   const activeSection = normalizeSettingsSection(searchParams.get('section'))
   const { success, error: notifyError, info } = useNotifications()
+  const { fontSize, setFontSize } = useThemeSettings()
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const [companySettings, setCompanySettings] =
-    useState<CompanyPrintSettings>(() => loadCompanyPrintSettings())
+    useState<CompanyPrintSettings>(() => ({
+      companyName: '',
+      address: '',
+      phone: '',
+      email: '',
+      taxNumber: '',
+      logoDataUrl: '',
+    }))
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
   const [newPaymentMethod, setNewPaymentMethod] = useState('')
+  const [draggedPaymentIndex, setDraggedPaymentIndex] = useState<number | null>(null)
+  const [editingPaymentIndex, setEditingPaymentIndex] = useState<number | null>(null)
+  const [editingPaymentValue, setEditingPaymentValue] = useState('')
   const [backupFilePath, setBackupFilePath] = useState('')
   const [backupCreateConfirmOpen, setBackupCreateConfirmOpen] = useState(false)
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false)
   const [resetWarningOpen, setResetWarningOpen] = useState(false)
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   const [resetConfirmationText, setResetConfirmationText] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void loadCompanyPrintSettings().then((loaded) => {
+      if (active) setCompanySettings(loaded)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     const api = window.craftDataManagementAPI
@@ -381,6 +401,12 @@ export function SettingsPage() {
       ...current,
       ...patch,
     }))
+  }
+
+  const handleFontSizeChange = (event: SelectChangeEvent) => {
+    const nextFontSize = event.target.value as AppSettings['fontSize']
+    setSettings((current) => ({ ...current, fontSize: nextFontSize }))
+    setFontSize(nextFontSize)
   }
 
   const saveGeneralSettings = () => {
@@ -462,8 +488,8 @@ export function SettingsPage() {
     event.target.value = ''
   }
 
-  const handleSaveCompanySettings = () => {
-    const saved = saveCompanyPrintSettings(companySettings)
+  const handleSaveCompanySettings = async () => {
+    const saved = await saveCompanyPrintSettings(companySettings)
     setCompanySettings(saved)
     success('تم حفظ بيانات الشركة بنجاح.')
   }
@@ -483,7 +509,46 @@ export function SettingsPage() {
     setNewPaymentMethod('')
   }
 
-  const removePaymentMethod = (method: string) => {
+  const startEditingPaymentMethod = (index: number) => {
+    setEditingPaymentIndex(index)
+    setEditingPaymentValue(settings.paymentMethods[index] ?? '')
+  }
+
+  const cancelEditingPaymentMethod = () => {
+    setEditingPaymentIndex(null)
+    setEditingPaymentValue('')
+  }
+
+  const saveEditedPaymentMethod = () => {
+    if (editingPaymentIndex === null) return
+
+    const value = editingPaymentValue.trim()
+    if (!value) {
+      notifyError('اسم طريقة الدفع مطلوب.')
+      return
+    }
+
+    const duplicate = settings.paymentMethods.some(
+      (method, index) =>
+        index !== editingPaymentIndex &&
+        method.trim().toLocaleLowerCase() === value.toLocaleLowerCase(),
+    )
+
+    if (duplicate) {
+      info('طريقة الدفع موجودة مسبقاً.')
+      return
+    }
+
+    updateSettingsDraft({
+      paymentMethods: settings.paymentMethods.map((method, index) =>
+        index === editingPaymentIndex ? value : method,
+      ),
+    })
+
+    cancelEditingPaymentMethod()
+  }
+
+  const removePaymentMethod = (index: number) => {
     if (settings.paymentMethods.length <= 1) {
       notifyError('يجب الإبقاء على طريقة دفع واحدة على الأقل.')
       return
@@ -491,9 +556,31 @@ export function SettingsPage() {
 
     updateSettingsDraft({
       paymentMethods: settings.paymentMethods.filter(
-        (item) => item !== method,
+        (_, methodIndex) => methodIndex !== index,
       ),
     })
+
+    if (editingPaymentIndex === index) {
+      cancelEditingPaymentMethod()
+    } else if (
+      editingPaymentIndex !== null &&
+      editingPaymentIndex > index
+    ) {
+      setEditingPaymentIndex(editingPaymentIndex - 1)
+    }
+  }
+
+  const movePaymentMethod = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return
+
+    const nextMethods = [...settings.paymentMethods]
+    const [movedMethod] = nextMethods.splice(fromIndex, 1)
+    nextMethods.splice(toIndex, 0, movedMethod)
+
+    updateSettingsDraft({
+      paymentMethods: nextMethods,
+    })
+    setDraggedPaymentIndex(toIndex)
   }
 
   const persistAutoBackupSettings = async ({
@@ -760,7 +847,7 @@ export function SettingsPage() {
               variant="outlined"
               startIcon={<FiUpload />}
               onClick={() => fileInputRef.current?.click()}
-              sx={[neutralButtonSx, {borderRadius: '24px',}]}
+              sx={[neutralButtonSx, { borderRadius: '24px' }]}
             >
               رفع شعار الشركة
             </Button>
@@ -773,8 +860,6 @@ export function SettingsPage() {
             />
           </Box>
         </Box>
-
-        <Box sx={sectionDividerSx} />
 
         <Box
           sx={{
@@ -799,6 +884,7 @@ export function SettingsPage() {
             label="العنوان"
             value={companySettings.address}
             onChange={handleCompanyFieldChange('address')}
+            multiline
           />
           <TextField
             sx={textFieldSx}
@@ -828,7 +914,7 @@ export function SettingsPage() {
         <Button
           variant="contained"
           onClick={handleSaveCompanySettings}
-          sx={[primaryButtonSx, {borderRadius: '24px',}]}
+          sx={primaryButtonSx}
         >
           حفظ بيانات الشركة
         </Button>
@@ -887,7 +973,12 @@ export function SettingsPage() {
           </Box>
         </Box>
 
-        <Box sx={sectionDividerSx} />
+        <Box
+          sx={{
+            height: '1px',
+            background: 'rgba(255,255,255,.09)',
+          }}
+        />
 
         <Box>
           <Typography
@@ -977,13 +1068,50 @@ export function SettingsPage() {
         <Button
           variant="contained"
           onClick={saveGeneralSettings}
-          sx={[primaryButtonSx, {borderRadius: '24px',}]}
+          sx={primaryButtonSx}
         >
           حفظ إعدادات العملة والأرقام 
         </Button>
       </Box>
     </SectionCard>
   )
+
+  const renderDisplaySection = () => {
+    const fontSizeOptions = [
+      { value: 'small', label: 'صغير', detail: '13px' },
+      { value: 'default', label: 'افتراضي / قياسي', detail: '14px' },
+      { value: 'medium', label: 'متوسط', detail: '15px' },
+      { value: 'large', label: 'كبير', detail: '16px' },
+      { value: 'extraLarge', label: 'كبير جداً', detail: '17px' },
+    ] as const
+
+    return (
+      <SectionCard
+        title="إعدادات العرض والخط"
+        subtitle="غيّر حجم نصوص واجهة البرنامج فوراً واحفظ الاختيار تلقائياً"
+      >
+        <Paper className="craft-inner-panel" elevation={0} sx={innerPanelSx}>
+          <FormControl fullWidth sx={selectSx}>
+            <InputLabel id="font-size-setting-label">حجم خط الواجهة</InputLabel>
+            <Select
+              labelId="font-size-setting-label"
+              value={fontSize}
+              label="حجم خط الواجهة"
+              onChange={handleFontSizeChange}
+              MenuProps={selectMenuProps}
+            >
+              {fontSizeOptions.map((option) => (
+                <MenuItem key={option.value} value={option.value}>
+                  {option.label} ({option.detail})
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+
+        </Paper>
+      </SectionCard>
+    )
+  }
 
   const renderSalesSection = () => (
     <SectionCard
@@ -1008,14 +1136,11 @@ export function SettingsPage() {
             }
             sx={selectSx}
           >
-            <MenuItem value="average">المتوسط</MenuItem>
             <MenuItem value="price1">{settings.salesPrice1Name}</MenuItem>
             <MenuItem value="price2">{settings.salesPrice2Name}</MenuItem>
             <MenuItem value="price3">{settings.salesPrice3Name}</MenuItem>
           </Select>
         </FormControl>
-
-        <Box sx={sectionDividerSx} />
 
         <Box>
           <Typography sx={{ fontWeight: 850, mb: 0.5, fontSize: 16 }}>
@@ -1076,7 +1201,7 @@ export function SettingsPage() {
         <Button
           variant="contained"
           onClick={saveSalesSettings}
-          sx={[primaryButtonSx, {borderRadius: '24px',}]}
+          sx={primaryButtonSx}
         >
           حفظ إعدادات المبيعات
         </Button>
@@ -1087,7 +1212,7 @@ export function SettingsPage() {
   const renderPaymentsSection = () => (
     <SectionCard
       title="طرق الدفع"
-      subtitle="إضافة وإزالة طرق الدفع التي تظهر للمستخدم"
+      subtitle="إضافة وتعديل طرق الدفع، واسحب السطر كاملاً لتغيير الأولوية"
     >
       <Paper className="craft-inner-panel" elevation={0} sx={innerPanelSx}>
         <Stack
@@ -1116,13 +1241,12 @@ export function SettingsPage() {
             sx={{
               ...primaryButtonSx,
               minWidth: 130,
+              borderRadius: '18px',
             }}
           >
             إضافة
           </Button>
         </Stack>
-
-        <Box sx={sectionDividerSx} />
 
         <Box
           sx={{
@@ -1130,57 +1254,185 @@ export function SettingsPage() {
             gap: 1,
           }}
         >
-          {settings.paymentMethods.map((method) => (
-            <Box
-              key={method}
-              sx={{
-                minHeight: 48,
-                px: 1.5,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 2,
-                borderRadius: '12px',
-                background: 'rgba(255,255,255,.035)',
-                border: '1px solid rgba(255,255,255,.08)',
-              }}
-            >
+          {settings.paymentMethods.map((method, index) => {
+            const isEditing = editingPaymentIndex === index
+
+            return (
               <Box
+                key={index}
+                draggable={!isEditing}
+                onDragStart={(event) => {
+                  if (isEditing) {
+                    event.preventDefault()
+                    return
+                  }
+
+                  setDraggedPaymentIndex(index)
+                  event.dataTransfer.effectAllowed = 'move'
+                  event.dataTransfer.setData('text/plain', String(index))
+                }}
+                onDragEnd={() => setDraggedPaymentIndex(null)}
+                onDragOver={(event) => {
+                  if (isEditing) return
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                }}
+                onDragEnter={(event) => {
+                  if (isEditing) return
+                  event.preventDefault()
+
+                  if (
+                    draggedPaymentIndex !== null &&
+                    draggedPaymentIndex !== index
+                  ) {
+                    movePaymentMethod(draggedPaymentIndex, index)
+                  }
+                }}
+                onDrop={(event) => {
+                  if (isEditing) return
+                  event.preventDefault()
+                  setDraggedPaymentIndex(null)
+                }}
+                title={
+                  isEditing
+                    ? undefined
+                    : 'اسحب السطر كاملاً لتغيير ترتيب الأولوية'
+                }
                 sx={{
+                  minHeight: 48,
+                  px: 1.5,
+                  py: isEditing ? 0.75 : 0,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 1,
-                  minWidth: 0,
-                }}
-              >
-                <FiCreditCard color="#67E8F9" />
-                <Typography
-                  sx={{
-                    fontWeight: 750,
-                    color: 'rgba(255,255,255,.88)',
-                  }}
-                >
-                  {method}
-                </Typography>
-              </Box>
-
-              <Button
-                size="small"
-                startIcon={<FiTrash2 />}
-                onClick={() => removePaymentMethod(method)}
-                disabled={settings.paymentMethods.length <= 1}
-                sx={{
-                  color: '#FCA5A5',
-                  minWidth: 0,
-                  '&.Mui-disabled': {
-                    color: 'rgba(255,255,255,.28)',
+                  justifyContent: 'space-between',
+                  gap: 2,
+                  borderRadius: '12px',
+                  background: 'rgba(255,255,255,.035)',
+                  border: '1px solid rgba(255,255,255,.08)',
+                  cursor: isEditing ? 'default' : 'grab',
+                  userSelect: isEditing ? 'auto' : 'none',
+                  opacity: draggedPaymentIndex === index ? 0.72 : 1,
+                  transition: 'opacity 140ms ease, background 140ms ease',
+                  '&:active': {
+                    cursor: isEditing ? 'default' : 'grabbing',
+                  },
+                  '&:hover': {
+                    background: 'rgba(255,255,255,.055)',
                   },
                 }}
               >
-                حذف
-              </Button>
-            </Box>
-          ))}
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    flex: 1,
+                    minWidth: 0,
+                  }}
+                >
+                  <FiCreditCard color="#67E8F9" style={{ flexShrink: 0 }} />
+
+                  {isEditing ? (
+                    <TextField
+                      autoFocus
+                      size="small"
+                      fullWidth
+                      value={editingPaymentValue}
+                      onChange={(event) =>
+                        setEditingPaymentValue(event.target.value)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          saveEditedPaymentMethod()
+                        }
+
+                        if (event.key === 'Escape') {
+                          event.preventDefault()
+                          cancelEditingPaymentMethod()
+                        }
+                      }}
+                      sx={textFieldSx}
+                    />
+                  ) : (
+                    <Typography
+                      sx={{
+                        fontWeight: 750,
+                        color: 'rgba(255,255,255,.88)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {method}
+                    </Typography>
+                  )}
+                </Box>
+
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.5,
+                    flexShrink: 0,
+                  }}
+                >
+                  {isEditing ? (
+                    <>
+                      <Button
+                        size="small"
+                        onClick={saveEditedPaymentMethod}
+                        sx={{
+                          color: '#67E8F9',
+                          minWidth: 0,
+                        }}
+                      >
+                        حفظ
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={cancelEditingPaymentMethod}
+                        sx={{
+                          color: 'rgba(255,255,255,.62)',
+                          minWidth: 0,
+                        }}
+                      >
+                        إلغاء
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="small"
+                      startIcon={<FiEdit2 />}
+                      onClick={() => startEditingPaymentMethod(index)}
+                      sx={{
+                        color: '#67E8F9',
+                        minWidth: 0,
+                      }}
+                    >
+                      تعديل
+                    </Button>
+                  )}
+
+                  <Button
+                    size="small"
+                    startIcon={<FiTrash2 />}
+                    onClick={() => removePaymentMethod(index)}
+                    disabled={settings.paymentMethods.length <= 1}
+                    sx={{
+                      color: '#FCA5A5',
+                      minWidth: 0,
+                      '&.Mui-disabled': {
+                        color: 'rgba(255,255,255,.28)',
+                      },
+                    }}
+                  >
+                    حذف
+                  </Button>
+                </Box>
+              </Box>
+            )
+          })}
         </Box>
 
       </Paper>
@@ -1188,7 +1440,7 @@ export function SettingsPage() {
         <Button
           variant="contained"
           onClick={savePaymentSettings}
-          sx={[primaryButtonSx, {borderRadius: '24px',}]}
+          sx={primaryButtonSx}
         >
           حفظ طرق الدفع
         </Button>
@@ -1244,7 +1496,6 @@ export function SettingsPage() {
               fullWidth
               label="مجلد النسخ الاحتياطي"
               value={settings.backupDirectory}
-              onClick={handleChooseBackupFolder}
               slotProps={{
                 input: {
                   readOnly: true,
@@ -1253,14 +1504,27 @@ export function SettingsPage() {
             />
             <Button
               variant="outlined"
+              onClick={handleChooseBackupFolder}
+              sx={neutralButtonSx}
+            >
+              تحديد المسار
+            </Button>
+
+            <Button
+              variant="outlined"
               onClick={() => setBackupCreateConfirmOpen(true)}
-              sx={primaryButtonSx}
+              sx={[primaryButtonSx, { borderRadius: '18px' }]}
             >
               إنشاء نسخة الآن
             </Button>
           </Stack>
 
-          <Box sx={sectionDividerSx} />
+          <Box
+            sx={{
+              height: '1px',
+              background: 'rgba(255,255,255,.09)',
+            }}
+          />
 
           <Box
             sx={{
@@ -1310,19 +1574,22 @@ export function SettingsPage() {
                 <MenuItem value="replace">استبدال آخر نسخة تلقائية</MenuItem>
               </Select>
             </FormControl>
-            <Typography
-              sx={{
-                fontSize: 12,
-                lineHeight: 1.8,
-                color: 'rgba(255,255,255,.54)',
-              }}
-            >
-              عند اختيار الاستبدال يتم تحديث ملف النسخ التلقائي فقط، ولا يتم
-              حذف أو استبدال أي نسخة احتياطية أنشأها المستخدم يدوياً.
-            </Typography>
           </Box>
 
-          <Box sx={sectionDividerSx} />
+          <Typography
+            sx={{
+              fontSize: 12,
+              lineHeight: 1.8,
+              color: 'rgba(255,255,255,.54)',
+            }}
+          >
+            عند اختيار الاستبدال يتم تحديث ملف النسخ التلقائي فقط، ولا يتم
+            حذف أو استبدال أي نسخة احتياطية أنشأها المستخدم يدوياً.
+          </Typography>
+
+        </Paper>
+
+        <Paper className="craft-inner-panel" elevation={0} sx={innerPanelSx}>
           <Typography
             sx={{
               fontWeight: 850,
@@ -1342,7 +1609,6 @@ export function SettingsPage() {
               fullWidth
               label="ملف النسخة الاحتياطية"
               value={backupFilePath}
-              onClick={handleChooseBackupFile}
               slotProps={{
                 input: {
                   readOnly: true,
@@ -1350,7 +1616,22 @@ export function SettingsPage() {
               }}
             />
 
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Box
+              sx={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 1.25,
+                flexWrap: 'wrap',
+              }}
+            >
+              <Button
+                variant="outlined"
+                onClick={handleChooseBackupFile}
+                sx={neutralButtonSx}
+              >
+                تحديد المسار
+              </Button>
+
               <Button
                 variant="outlined"
                 onClick={requestRestoreBackup}
@@ -1447,6 +1728,8 @@ export function SettingsPage() {
     switch (activeSection) {
       case 'company':
         return renderCompanySection()
+      case 'display':
+        return renderDisplaySection()
       case 'sales':
         return renderSalesSection()
       case 'payments':

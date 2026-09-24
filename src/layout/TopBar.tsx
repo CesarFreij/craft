@@ -144,7 +144,7 @@ export function TopBar({ sidebarOffset, collapsed }: { sidebarOffset?: number, c
               color: 'rgba(203,213,225,.72)',
               fontSize: 16,
               fontWeight: 650,
-              textAlign: 'start'
+              textAlign: 'center'
             }}
           >
             {formatTime(now)}
@@ -168,11 +168,10 @@ export function TopBar({ sidebarOffset, collapsed }: { sidebarOffset?: number, c
           <Typography
             sx={{
               fontWeight: 950,
-              fontSize: 22,
+              fontSize: 28,
               lineHeight: 1,
-              letterSpacing: 15,
               color: '#FFFFFF',
-              textAlign: 'right'
+              textAlign: 'center'
             }}
           >
             CRAFT
@@ -183,11 +182,11 @@ export function TopBar({ sidebarOffset, collapsed }: { sidebarOffset?: number, c
               display: { xs: 'none', sm: 'block' },
               mt: 0.45,
               color: 'rgba(203,213,225,.66)',
-              fontSize: 11.5,
+              fontSize: 15,
               direction: 'rtl',
             }}
           >
-            نظام إدارة المخازن والتصنيع
+            لإدارة المخازن والتصنيع
           </Typography>
         </Box>
         <Box
@@ -198,7 +197,6 @@ export function TopBar({ sidebarOffset, collapsed }: { sidebarOffset?: number, c
             width: 55,
             height: 55,
             objectFit: 'contain',
-            // borderRadius: '50%',
             background: 'transparent',
             filter: 'drop-shadow(0 5px 12px rgba(34,211,238,.12))',
           }}

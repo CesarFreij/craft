@@ -11,6 +11,7 @@ import {
   DialogTitle,
   IconButton,
   InputAdornment,
+  MenuItem,
   Table,
   TableBody,
   TableCell,
@@ -29,12 +30,15 @@ import {
   type SalesInvoiceDetails,
   type SalesInvoiceListItem,
   type SalesReturnRecord,
+  type ReturnPaymentInput,
 } from '../services/purchasesService'
-import { formatCurrencyValue, formatDateDMY, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, getLocalDateYMD, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
 import type { InvoicePrintData } from '../types/invoicePrint'
 import { useNotifications } from '../contexts/useNotifications'
+import { loadSettings } from '../services/settingsService'
+import { FiCheckCircle } from 'react-icons/fi'
 
 const darkPopupPaperSx = {
   mt: 0.75,
@@ -182,6 +186,14 @@ const craftPageGlassSx = {
   '& .MuiButton-outlined:hover': {
     borderColor: '#60A5FA',
     background: 'rgba(96, 165, 250, 0.10)',
+  },
+
+  '& .MuiButton-text': {
+    color: '#CBD5E1',
+  },
+
+  '& .MuiButton-text.MuiButton-colorError': {
+    color: '#FCA5A5',
   },
 
   '& .MuiCircularProgress-root': {
@@ -382,6 +394,10 @@ function currency(value: number): string {
   return formatCurrencyValue(value, 'price')
 }
 
+function priceNum(value: number | undefined): string {
+  return formatNumberBySettings(Number(value ?? 0), 'price')
+}
+
 function DateFilterField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   const [focused, setFocused] = useState(false)
   const nativeDateInputRef = useRef<HTMLInputElement>(null)
@@ -480,6 +496,17 @@ export function SalesReturnsPage() {
   const [editingReturnId, setEditingReturnId] = useState<string | null>(null)
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false)
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
+  const [returnPaymentDialogOpen, setReturnPaymentDialogOpen] = useState(false)
+  const [returnPaymentError, setReturnPaymentError] = useState('')
+  const [returnPaymentTargetId, setReturnPaymentTargetId] = useState<string | null>(null)
+  const [pendingReturnPayments, setPendingReturnPayments] = useState<ReturnPaymentInput[]>([])
+  const [returnPaymentDeleteConfirm, setReturnPaymentDeleteConfirm] = useState<{ id: string; date: string; amount: number } | null>(null)
+  const [returnPaymentForm, setReturnPaymentForm] = useState<ReturnPaymentInput>({
+    date: getLocalDateYMD(),
+    amount: 0,
+    paymentMethod: loadSettings().paymentMethods[0] ?? '',
+    notes: '',
+  })
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
 
@@ -543,14 +570,31 @@ export function SalesReturnsPage() {
     setReturnLines([])
     setReturnError('')
     setEditingReturnId(null)
+    setPendingReturnPayments([])
   }, [])
+
+  const calculateReturnTotal = () => {
+    const grossTotal = returnLines.reduce((sum, line) => sum + Number(line.quantity) * Number(line.unitPrice), 0)
+    if (!selectedInvoice) return grossTotal
+
+    if (selectedInvoice.discountType === 'percentage') {
+      return Math.max(grossTotal * (1 - Number(selectedInvoice.discountValue ?? 0) / 100), 0)
+    }
+
+    if (selectedInvoice.discountType === 'fixed' && Number(selectedInvoice.subtotal) > 0) {
+      return Math.max(grossTotal - (Number(selectedInvoice.discountValue ?? 0) * grossTotal) / Number(selectedInvoice.subtotal), 0)
+    }
+
+    return grossTotal
+  }
 
   const openCreateDialog = useCallback(async (invoiceId?: string) => {
     setReturnError('')
     setDialogOpen(true)
-    setReturnDate(new Date().toISOString().slice(0, 10))
+    setReturnDate(getLocalDateYMD())
     setReturnNotes('')
     setEditingReturnId(null)
+    setPendingReturnPayments([])
 
     if (!invoiceId) {
       setSelectedInvoiceId('')
@@ -592,13 +636,14 @@ export function SalesReturnsPage() {
       setSelectedInvoiceId(invoice.id)
       setSelectedInvoice(invoice)
       setReturnLines(lines)
+      setPendingReturnPayments([])
     } catch (error) {
       console.error('OPEN CREATE SALES RETURN FAILED', error)
       setReturnError(getUserFriendlyErrorMessage(error, 'تعذر فتح نموذج مرتجع البيع.'))
     }
   }, [])
 
-  const openEditReturn = useCallback(async (returnId: string) => {
+const openEditReturn = useCallback(async (returnId: string) => {
     try {
       const details = await salesService.getReturnById(returnId)
       const invoice = await salesService.getInvoiceById(details.salesInvoiceId)
@@ -627,9 +672,9 @@ export function SalesReturnsPage() {
           unit: item.unit,
           unitPrice: item.unitPrice,
           availableQuantity,
-          quantity: currentQty || availableQuantity,
+          quantity: currentQty, // 👈 تم الحل هنا
         }
-      }).filter((item) => item.quantity > 0 || (invoice.items.some((invoiceItem) => invoiceItem.materialId === item.materialId)))
+      }).filter((item) => item.availableQuantity > 0 || item.quantity > 0) // 👈 تم الحل هنا
 
       setEditingReturnId(returnId)
       setSelectedInvoiceId(details.salesInvoiceId)
@@ -654,6 +699,7 @@ export function SalesReturnsPage() {
       (sum, item) => sum + Number(item.lineTotal ?? 0),
       0,
     )
+    const paidAmount = selectedReturn.payments.reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0)
 
     return {
       documentType: 'sale_return' as InvoicePrintData['documentType'],
@@ -663,8 +709,10 @@ export function SalesReturnsPage() {
 
       partyLabel: 'العميل',
       partyName: selectedReturn.customerName,
+      partyNumber: selectedReturn.customerCode,
+      partyPhone: selectedReturn.customerPhone,
 
-      referenceLabel: 'الفاتورة الأصلية',
+      referenceLabel: 'فاتورة المبيعات',
       referenceValue: selectedReturn.salesInvoiceNumber,
 
       notes: selectedReturn.notes ?? '',
@@ -682,17 +730,22 @@ export function SalesReturnsPage() {
       subtotal,
       discount: 0,
       total: Number(selectedReturn.netTotal ?? subtotal),
+      paymentMethod: selectedReturn.payments
+        .map((payment) => `${payment.paymentMethod || '—'}\t${currency(payment.amount)}`)
+        .join('\n'),
+      paidAmount,
+      remainingAmount: Math.max(Number(selectedReturn.netTotal ?? subtotal) - paidAmount, 0),
     }
   }, [selectedReturn])
 
-  const handleExportPdf = useCallback(() => {
+  const handleExportPdf = useCallback(async () => {
     const exportData = buildSalesReturnExportData()
 
     if (!exportData) {
       return
     }
 
-    const latestSettings = loadCompanyPrintSettings()
+    const latestSettings = await loadCompanyPrintSettings()
 
     navigate('/invoice-preview', {
       state: {
@@ -774,25 +827,33 @@ export function SalesReturnsPage() {
     try {
       setSaving(true)
       setReturnError('')
-      if (editingReturnId) {
-        await salesService.updateReturn(editingReturnId, {
-          date: toInternalDate(returnDate || new Date().toISOString().slice(0, 10)),
+      const savedReturn = editingReturnId
+        ? await salesService.updateReturn(editingReturnId, {
+          date: toInternalDate(returnDate || getLocalDateYMD()),
           customerId: selectedInvoice?.customerId ?? '',
           warehouseId: selectedInvoice?.warehouseId ?? '',
           salesInvoiceId: selectedInvoiceId,
           notes: returnNotes,
           items: payloadItems,
         })
+        : await salesService.createReturn({
+          date: toInternalDate(returnDate || getLocalDateYMD()),
+          customerId: selectedInvoice?.customerId ?? '',
+          warehouseId: selectedInvoice?.warehouseId ?? '',
+          salesInvoiceId: selectedInvoiceId,
+          notes: returnNotes,
+          items: payloadItems,
+        })
+
+      if (pendingReturnPayments.length > 0) {
+        await Promise.all(pendingReturnPayments.map((payment) =>
+          salesService.createReturnPayment(savedReturn.id, payment),
+        ))
+      }
+
+      if (editingReturnId) {
         notify.info('تم تعديل مرتجع البيع بنجاح.')
       } else {
-        await salesService.createReturn({
-          date: toInternalDate(returnDate || new Date().toISOString().slice(0, 10)),
-          customerId: selectedInvoice?.customerId ?? '',
-          warehouseId: selectedInvoice?.warehouseId ?? '',
-          salesInvoiceId: selectedInvoiceId,
-          notes: returnNotes,
-          items: payloadItems,
-        })
         notify.success('تم إنشاء مرتجع البيع بنجاح.')
       }
       await loadData()
@@ -805,7 +866,69 @@ export function SalesReturnsPage() {
       setSaving(false)
       setSaveConfirmOpen(false)
     }
-  }, [editingReturnId, loadData, navigate, notify, resetDialog, returnDate, returnLines, returnNotes, selectedInvoice, selectedInvoiceId])
+  }, [editingReturnId, loadData, navigate, notify, pendingReturnPayments, resetDialog, returnDate, returnLines, returnNotes, selectedInvoice, selectedInvoiceId])
+
+  const openCreateReturnPaymentDialog = () => {
+    setReturnPaymentTargetId(null)
+    setReturnPaymentError('')
+    const returnTotal = calculateReturnTotal()
+    const pendingPaid = pendingReturnPayments.reduce((sum, payment) => sum + Number(payment.amount), 0)
+    setReturnPaymentForm({
+      date: getLocalDateYMD(),
+      amount: Math.max(returnTotal - pendingPaid, 0),
+      paymentMethod: loadSettings().paymentMethods[0] ?? '',
+      notes: '',
+    })
+    setReturnPaymentDialogOpen(true)
+  }
+
+  const openDetailsReturnPaymentDialog = () => {
+    if (!selectedReturn) return
+    setReturnPaymentTargetId(selectedReturn.id)
+    setReturnPaymentError('')
+    const paid = selectedReturn.payments.reduce((sum, payment) => sum + Number(payment.amount), 0)
+    setReturnPaymentForm({
+      date: getLocalDateYMD(),
+      amount: Math.max(Number(selectedReturn.netTotal) - paid, 0),
+      paymentMethod: loadSettings().paymentMethods[0] ?? '',
+      notes: '',
+    })
+    setReturnPaymentDialogOpen(true)
+  }
+
+  const deleteSelectedReturnPayment = async () => {
+    if (!selectedReturn || !returnPaymentDeleteConfirm) return
+    try {
+      await salesService.deleteReturnPayment(returnPaymentDeleteConfirm.id)
+      setSelectedReturn(await salesService.getReturnById(selectedReturn.id))
+      setReturnPaymentDeleteConfirm(null)
+      notify.success('تم حذف دفعة المرتجع بنجاح.')
+    } catch (error) {
+      setReturnError(getUserFriendlyErrorMessage(error, 'تعذر حذف دفعة المرتجع.'))
+    }
+  }
+
+  const submitReturnPayment = async () => {
+    if (!returnPaymentForm.date || !Number.isFinite(Number(returnPaymentForm.amount)) || Number(returnPaymentForm.amount) <= 0 || !returnPaymentForm.paymentMethod) {
+      setReturnPaymentError('أدخل تاريخاً ومبلغاً صحيحاً واختر طريقة الدفع.')
+      return
+    }
+
+    const payment = { ...returnPaymentForm, date: toInternalDate(returnPaymentForm.date), amount: Number(returnPaymentForm.amount) }
+    try {
+      setReturnPaymentError('')
+      if (returnPaymentTargetId) {
+        await salesService.createReturnPayment(returnPaymentTargetId, payment)
+        const refreshed = await salesService.getReturnById(returnPaymentTargetId)
+        setSelectedReturn(refreshed)
+      } else {
+        setPendingReturnPayments((previous) => [...previous, payment])
+      }
+      setReturnPaymentDialogOpen(false)
+    } catch (error) {
+      setReturnPaymentError(getUserFriendlyErrorMessage(error, 'تعذر حفظ سند الدفع.'))
+    }
+  }
 
   const selectedInvoiceOption = useMemo(
     () => invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null,
@@ -837,9 +960,9 @@ export function SalesReturnsPage() {
                   <TableCell>رقم المرتجع</TableCell>
                   <TableCell>التاريخ</TableCell>
                   <TableCell>العميل</TableCell>
-                  <TableCell>الفاتورة الأصلية</TableCell>
+                  <TableCell>فاتورة المشتريات</TableCell>
                   <TableCell>المخزن</TableCell>
-                  <TableCell>إجمالي المرتجع</TableCell>
+                  <TableCell>الإجمالي</TableCell>
                   <TableCell>الإجراءات</TableCell>
                 </TableRow>
               </TableHead>
@@ -860,7 +983,7 @@ export function SalesReturnsPage() {
                       <TableCell>{item.customerName}</TableCell>
                       <TableCell>{item.salesInvoiceNumber}</TableCell>
                       <TableCell>{item.warehouseName}</TableCell>
-                      <TableCell>{currency(item.netTotal)}</TableCell>
+                      <TableCell>{priceNum(item.netTotal)}</TableCell>
                       <TableCell>
                         <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
                           <IconButton size="small" color="secondary" onClick={() => void openReturnDetails(item.id)}>
@@ -922,7 +1045,7 @@ export function SalesReturnsPage() {
                 void openCreateDialog(value.id)
               }}
               slotProps={{ paper: { sx: darkPopupPaperSx } }}
-              renderInput={(params) => <TextField {...params} label="الفاتورة الأصلية" required />}
+              renderInput={(params) => <TextField {...params} label="فاتورة المشتريات" required />}
             />
             <DateFilterField
               label="التاريخ"
@@ -955,7 +1078,7 @@ export function SalesReturnsPage() {
                     <TableCell>{line.materialName}</TableCell>
                     <TableCell>{line.unit}</TableCell>
                     <TableCell>{line.availableQuantity}</TableCell>
-                    <TableCell>{currency(line.unitPrice)}</TableCell>
+                    <TableCell>{priceNum(line.unitPrice)}</TableCell>
                     <TableCell>
                       <TextField
                         size="small"
@@ -1001,6 +1124,19 @@ export function SalesReturnsPage() {
             multiline
             minRows={2}
           />
+
+          <SectionCard title="سند دفع">
+            <Box sx={{ display: 'grid', gap: 1.5 }}>
+              {pendingReturnPayments.map((payment, index) => (
+                <Typography key={`${payment.date}-${index}`}>
+                  {formatDateDMY(payment.date)} - {priceNum(payment.amount)} - {payment.paymentMethod}
+                </Typography>
+              ))}
+              <Button variant="outlined" onClick={openCreateReturnPaymentDialog} sx={{ width: 'fit-content' }}>
+                تسديد دفعة
+              </Button>
+            </Box>
+          </SectionCard>
         </DialogContent>
         <DialogActions>
           <Button
@@ -1059,7 +1195,7 @@ export function SalesReturnsPage() {
                 <Box>رقم المرتجع: <strong>{selectedReturn.returnNumber}</strong></Box>
                 <Box>التاريخ: <strong>{formatDateDMY(selectedReturn.date)}</strong></Box>
                 <Box>العميل: <strong>{selectedReturn.customerName}</strong></Box>
-                <Box>رقم الفاتورة الأصلية: <strong>{selectedReturn.salesInvoiceNumber}</strong></Box>
+                <Box>رقم فاتورة المشتريات: <strong>{selectedReturn.salesInvoiceNumber}</strong></Box>
                 <Box>المخزن: <strong>{selectedReturn.warehouseName}</strong></Box>
               </Box>
 
@@ -1080,27 +1216,117 @@ export function SalesReturnsPage() {
                       <TableCell>{item.materialNumber} - {item.materialName}</TableCell>
                       <TableCell>{item.unit}</TableCell>
                       <TableCell>{item.quantity}</TableCell>
-                      <TableCell>{currency(item.unitPrice)}</TableCell>
-                      <TableCell>{currency(item.lineTotal)}</TableCell>
-                      <TableCell>{item.notes?.trim() ? item.notes : '__'}</TableCell>
+                      <TableCell>{priceNum(item.unitPrice)}</TableCell>
+                      <TableCell>{priceNum(item.lineTotal)}</TableCell>
+                      <TableCell>{item.notes?.trim() ? item.notes : ''}</TableCell>
                     </TableRow>
                   ))}
                   <TableRow>
                     <TableCell sx={{ fontWeight: 700, textAlign: 'center' }}>ملاحظات المرتجع</TableCell>
-                    <TableCell colSpan={5} sx={{ textAlign: 'center' }}>{selectedReturn.notes?.trim() ? selectedReturn.notes : '__'}</TableCell>
+                    <TableCell colSpan={5} sx={{ textAlign: 'center' }}>{selectedReturn.notes?.trim() ? selectedReturn.notes : ''}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, flexWrap: 'wrap', mt: 1 }}>
-                <Typography sx={{ fontWeight: 700 }}>إجمالي المرتجع: {currency(selectedReturn.netTotal)}</Typography>
+                <Table sx={{ minWidth: 420, '& td, & th': { textAlign: 'center' } }}>
+                  <TableHead><TableRow><TableCell>الاجمالي</TableCell><TableCell>المدفوع</TableCell><TableCell>المتبقي</TableCell></TableRow></TableHead>
+                  <TableBody><TableRow>
+                    <TableCell>{currency(selectedReturn.netTotal)}</TableCell>
+                    <TableCell>{currency(selectedReturn.payments.reduce((sum, payment) => sum + Number(payment.amount), 0))}</TableCell>
+                    <TableCell>{currency(Math.max(Number(selectedReturn.netTotal) - selectedReturn.payments.reduce((sum, payment) => sum + Number(payment.amount), 0), 0))}</TableCell>
+                  </TableRow></TableBody>
+                </Table>
               </Box>
+              <SectionCard title="سجل الدفعات">
+                {selectedReturn.payments.length === 0 ? (
+                  <Typography>لا توجد دفعات مرتبطة بهذا المرتجع.</Typography>
+                ) : (
+                  <Table>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>التاريخ</TableCell>
+                        <TableCell>المبلغ</TableCell>
+                        <TableCell>طريقة الدفع</TableCell>
+                        <TableCell>الملاحظات</TableCell>
+                        <TableCell>الإجراءات</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {selectedReturn.payments.map((payment) => (
+                        <TableRow key={payment.id}>
+                          <TableCell>{formatDateDMY(payment.date)}</TableCell>
+                          <TableCell>{priceNum(payment.amount)}</TableCell>
+                          <TableCell>{payment.paymentMethod || ''}</TableCell>
+                          <TableCell>{payment.notes || ''}</TableCell>
+                          <TableCell>
+                            <IconButton size="small" color="error" onClick={() => setReturnPaymentDeleteConfirm({ id: payment.id, date: payment.date, amount: payment.amount })}>
+                              <FiTrash2 />
+                            </IconButton>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </SectionCard>
             </Box>
           )}
         </DialogContent>
-        <DialogActions sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-          <Button onClick={() => setDetailsOpen(false)}>إغلاق</Button>
+        <DialogActions sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="contained" startIcon={<FiCheckCircle />} sx={{ background: '#66bb6a', '&:hover': { background: '#66bb6a' }}} onClick={openDetailsReturnPaymentDialog}>تسديد دفعة</Button>
           <Button variant="contained" onClick={() => { void handleExportPdf() }}>تصدير PDF</Button>
+          <Button onClick={() => setDetailsOpen(false)}>إغلاق</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={returnPaymentDialogOpen} onClose={() => setReturnPaymentDialogOpen(false)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
+        <DialogTitle>سند دفع</DialogTitle>
+        <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
+          {returnPaymentError ? <Alert severity="error" sx={craftErrorAlertSx}>{returnPaymentError}</Alert> : null}
+          <DateFilterField
+            label="تاريخ الدفعة"
+            value={returnPaymentForm.date}
+            onChange={(value) => setReturnPaymentForm((previous) => ({ ...previous, date: value }))}
+          />
+          <TextField
+            label="المبلغ"
+            type="number"
+            value={returnPaymentForm.amount}
+            onChange={(event) => setReturnPaymentForm((previous) => ({ ...previous, amount: Number(event.target.value) }))}
+            slotProps={{ htmlInput: { min: 0, step: 1 } }}
+          />
+          <TextField
+            select
+            label="طريقة الدفع"
+            value={returnPaymentForm.paymentMethod}
+            onChange={(event) => setReturnPaymentForm((previous) => ({ ...previous, paymentMethod: event.target.value }))}
+            slotProps={{ select: { MenuProps: { slotProps: { paper: { sx: darkPopupPaperSx } } } } }}
+          >
+            {loadSettings().paymentMethods.map((method) => <MenuItem key={method} value={method}>{method}</MenuItem>)}
+          </TextField>
+          <TextField
+            label="ملاحظات"
+            value={returnPaymentForm.notes ?? ''}
+            onChange={(event) => setReturnPaymentForm((previous) => ({ ...previous, notes: event.target.value }))}
+            multiline
+            minRows={2}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReturnPaymentDialogOpen(false)}>إلغاء</Button>
+          <Button variant="contained" startIcon={<FiCheckCircle />} onClick={() => void submitReturnPayment()}>حفظ سند الدفع</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(returnPaymentDeleteConfirm)} onClose={() => setReturnPaymentDeleteConfirm(null)} maxWidth="xs" fullWidth slotProps={craftDialogSlotProps}>
+        <DialogTitle>تأكيد حذف الدفعة</DialogTitle>
+        <DialogContent>
+          <Typography>هل أنت متأكد من حذف الدفعة بقيمة {returnPaymentDeleteConfirm ? priceNum(returnPaymentDeleteConfirm.amount) : ''}؟</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReturnPaymentDeleteConfirm(null)}>إلغاء</Button>
+          <Button color="error" variant="contained" onClick={() => void deleteSelectedReturnPayment()}>حذف</Button>
         </DialogActions>
       </Dialog>
     </Box>

@@ -74,20 +74,17 @@ const darkPopupPaperSx = {
   boxShadow: '0 20px 50px rgba(2, 6, 23, 0.38)',
   color: 'rgba(255, 255, 255, 0.92)',
   backgroundImage: 'none',
-  '& .MuiMenuItem-root': {
+  '& .MuiMenuItem-root, & .MuiAutocomplete-option': {
     color: 'rgba(255, 255, 255, 0.88)',
-    borderRadius: '8px',
+    borderRadius: '4px', // تعديل الحواف لتكون خفيفة وليست مستديرة بشكل مبالغ فيه
     mx: 0.5,
     my: 0.25,
     '&:hover': {
       background: 'rgba(56, 189, 248, 0.10)',
     },
-    '&.Mui-selected': {
+    '&.Mui-selected, &[aria-selected="true"]': {
       color: '#67E8F9',
       background: 'rgba(34, 211, 238, 0.13)',
-    },
-    '&.Mui-selected:hover': {
-      background: 'rgba(34, 211, 238, 0.18)',
     },
   },
 }
@@ -103,8 +100,9 @@ const craftDialogSlotProps = {
   paper: {
     sx: {
       borderRadius: '18px',
-      background: 'rgba(8, 22, 48, 0.97) !important',
-      backgroundColor: 'rgba(8, 22, 48, 0.97) !important',
+      // تعديل الخلفية لتتطابق مع باقي نوافذ البرنامج وليست غامقة بشكل زائد
+      background: 'linear-gradient(145deg, rgba(10, 27, 61, 0.97) 0%, rgba(8, 45, 78, 0.95) 100%) !important',
+      backgroundColor: 'transparent !important',
       backgroundImage: 'none !important',
       backdropFilter: 'blur(28px) saturate(125%)',
       WebkitBackdropFilter: 'blur(28px) saturate(125%)',
@@ -909,13 +907,13 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
               <Typography
                 sx={{
                   fontWeight: isSelected ? 700 : 600,
-                  fontSize: 13,
+                  fontSize: '1.071rem',
                   lineHeight: 1.3,
                 }}
               >
                 {node.name}
               </Typography>
-              <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>
+              <Typography sx={{ fontSize: '1.071rem', color: 'text.secondary' }}>
                 {node.materialNumber}
               </Typography>
             </Box>
@@ -1046,12 +1044,13 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
             m: 2,
             boxSizing: 'border-box',
             flexShrink: 0,
+            fontSize: '1.071rem'
           }}
         >
           <Typography
             sx={{
               fontWeight: 700,
-              fontSize: 14,
+              fontSize: '1rem',
               mb: 2,
               color: 'rgba(255, 255, 255, 0.94)',
               flexShrink: 0,
@@ -1152,28 +1151,36 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                 اختر مادة من القائمة
               </Box>
             ) : (
-              <Box sx={{ display: 'grid', gap: 2 }}>
-                <Typography sx={{ fontWeight: 700, fontSize: 16 }}>
-                  {selectedNode.name}
+              <Box sx={{ display: 'grid', gap: '25px' }}>
+                <Typography sx={{ fontWeight: 700, fontSize: '1.143rem' }}>
+                  تفاصيل المادة
                 </Typography>
-
                 {(selectedNode.type === 'main' || selectedNode.type === 'sub') && (
                   <>
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         عائدية المادة
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
                         {selectedNodeReturnability}
                       </Typography>
                     </Box>
 
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         رقم المادة
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
                         {selectedNode.materialNumber}
+                      </Typography>
+                    </Box>
+
+                    <Box>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
+                        اسم المادة
+                      </Typography>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
+                        {selectedNode.name}
                       </Typography>
                     </Box>
                   </>
@@ -1182,64 +1189,64 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                 {selectedNode.type === 'sub' && (
                   <>
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         الوحدة
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
                         {selectedNode.unit}
                       </Typography>
                     </Box>
 
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         سعر التكلفة
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
                         {formatCurrencyValue(selectedNode.costPrice ?? 0, 'price')}
                       </Typography>
                     </Box>
 
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         متوسط التكلفة
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
                         {formatCurrencyValue(subMaterialAverageCost ?? 0, 'average')}
                       </Typography>
                     </Box>
 
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         {salesPrice1Label}
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
-                        {formatCurrencyValue(selectedNode.price1 ?? 0, 'price')}
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
+                        {formatCurrencyValue(selectedNode.price1?.trim() ?? 0, 'price')}
                       </Typography>
                     </Box>
 
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         {salesPrice2Label}
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
-                        {formatCurrencyValue(selectedNode.price2 ?? 0, 'price')}
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
+                        {formatCurrencyValue(selectedNode.price2?.trim() ?? 0, 'price')}
                       </Typography>
                     </Box>
 
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         {salesPrice3Label}
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
-                        {selectedNode.price3}
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
+                        {formatCurrencyValue(selectedNode.price3?.trim() ?? 0, 'price')}
                       </Typography>
                     </Box>
 
                     <Box>
-                      <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                         مادة لا مخزنية
                       </Typography>
-                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)' }}>
+                      <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem' }}>
                         {selectedNode.isNonStock ? 'نعم' : 'لا'}
                       </Typography>
                     </Box>
@@ -1247,11 +1254,11 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                 )}
 
                 <Box>
-                  <Typography sx={{ fontWeight: 600, fontSize: 12 }}>
+                  <Typography sx={{ fontWeight: 600, fontSize: '1.071rem', color: '#0cdbeb' }}>
                     ملاحظات
                   </Typography>
-                  <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', whiteSpace: 'pre-wrap' }}>
-                    {selectedNode.notes || 'لا توجد ملاحظات'}
+                  <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem', whiteSpace: 'pre-wrap' }}>
+                    {selectedNode.notes || '__'}
                   </Typography>
                 </Box>
               </Box>
@@ -1271,16 +1278,12 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
             >
               <Button
                 size="small"
+                variant="contained"
                 startIcon={<FiEdit2 size={16} />}
                 onClick={openEditDialog}
                 sx={{
                   textTransform: 'none',
                   fontWeight: 600,
-                  color: '#60A5FA',
-                  '&:hover': {
-                    color: '#93C5FD',
-                    background: 'rgba(96, 165, 250, 0.12)',
-                  },
                 }}
               >
                 تعديل
@@ -1288,6 +1291,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
 
               <Button
                 size="small"
+                variant="contained"
                 startIcon={<FiTrash2 size={16} />}
                 onClick={openDeleteDialog}
                 color="error"
@@ -1309,7 +1313,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
         onClose={() => setDialog({ open: false, mode: null })}
         maxWidth="sm"
         fullWidth
-        slotProps={craftDialogSlotProps}      >
+        slotProps={craftDialogSlotProps}>
         <DialogTitle>إضافة مادة رئيسية</DialogTitle>
         <DialogContent sx={{ pt: '16px !important', display: 'grid', gap: 2 }}>
           {formErrors.name && (
@@ -1743,12 +1747,12 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
             <strong>{selectedNode?.name || selectedNode?.materialNumber || ''}</strong>؟
           </Typography>
 
-          <Typography sx={{ mt: 1, color: '#FCA5A5', fontSize: 13 }}>
+          <Typography sx={{ mt: 1, color: '#FCA5A5', fontSize: '0.929rem' }}>
             سيتم حذف هذه المادة وجميع المواد التابعة لها، ولا يمكن التراجع عن هذا الإجراء.
           </Typography>
 
           {deleteCounts ? (
-            <Typography sx={{ mt: 1, color: '#FCA5A5', fontSize: 13, fontWeight: 700 }}>
+            <Typography sx={{ mt: 1, color: '#FCA5A5', fontSize: '0.929rem', fontWeight: 700 }}>
               المجموع: {deleteCounts.total} مادة
             </Typography>
           ) : null}

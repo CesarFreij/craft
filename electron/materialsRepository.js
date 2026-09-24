@@ -13,6 +13,44 @@ let SQL = null
 let dbInstance = null
 let dbDir = null
 let dbFile = null
+let numberFormatSettings = {
+  quantityDecimals: 2,
+  priceDecimals: 2,
+  averageDecimals: 4,
+}
+
+function getLocalDateYMD(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function getLocalDateTimeString(date = new Date()) {
+  return `${getLocalDateYMD(date)}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}`
+}
+
+function normalizeDecimalPlaces(value, fallback) {
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue)
+    ? Math.max(0, Math.min(6, Math.round(numericValue)))
+    : fallback
+}
+
+export function setNumberFormatSettings(settings = {}) {
+  const previousSettings = numberFormatSettings
+  numberFormatSettings = {
+    quantityDecimals: normalizeDecimalPlaces(settings.quantityDecimals, numberFormatSettings.quantityDecimals),
+    priceDecimals: normalizeDecimalPlaces(settings.priceDecimals, numberFormatSettings.priceDecimals),
+    averageDecimals: normalizeDecimalPlaces(settings.averageDecimals, numberFormatSettings.averageDecimals),
+  }
+
+  const precisionChanged = previousSettings.averageDecimals !== numberFormatSettings.averageDecimals
+    || previousSettings.quantityDecimals !== numberFormatSettings.quantityDecimals
+  if (precisionChanged && dbInstance) {
+    recalculateAllStockLevels(dbInstance)
+    persistDatabase(dbInstance)
+  }
+
+  return { ...numberFormatSettings }
+}
 
 function ensureInvoiceFeeColumns(db) {
   const ensureColumns = (tableName, columns) => {
@@ -31,6 +69,9 @@ function ensureInvoiceFeeColumns(db) {
   ])
   ensureColumns('sales_invoices', [
     { name: 'customer_additional_fees', definition: 'REAL NOT NULL DEFAULT 0' },
+  ])
+  ensureColumns('delegate_payments', [
+    { name: 'payment_method', definition: 'TEXT DEFAULT ""' },
   ])
 }
 
@@ -161,6 +202,53 @@ export function resetDatabaseConnection() {
 
 export function getDatabaseFilePath() {
   return dbFile
+}
+
+export function getCompanyPrintSettings() {
+  const db = getDatabase()
+  const row = db.exec(
+    `SELECT company_name, address, phone, email, tax_number, logo_data_url
+     FROM company_print_settings WHERE id = 1`,
+  )[0]?.values?.[0]
+
+  return {
+    companyName: row?.[0] ?? '',
+    address: row?.[1] ?? '',
+    phone: row?.[2] ?? '',
+    email: row?.[3] ?? '',
+    taxNumber: row?.[4] ?? '',
+    logoDataUrl: row?.[5] ?? '',
+  }
+}
+
+export function saveCompanyPrintSettings(settings = {}) {
+  const db = getDatabase()
+  const values = [
+    String(settings.companyName ?? ''),
+    String(settings.address ?? ''),
+    String(settings.phone ?? ''),
+    String(settings.email ?? ''),
+    String(settings.taxNumber ?? ''),
+    String(settings.logoDataUrl ?? ''),
+    new Date().toISOString(),
+  ]
+
+  db.run(
+    `INSERT INTO company_print_settings
+      (id, company_name, address, phone, email, tax_number, logo_data_url, updated_at)
+     VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       company_name = excluded.company_name,
+       address = excluded.address,
+       phone = excluded.phone,
+       email = excluded.email,
+       tax_number = excluded.tax_number,
+       logo_data_url = excluded.logo_data_url,
+       updated_at = excluded.updated_at`,
+    values,
+  )
+  persistDatabase(db)
+  return getCompanyPrintSettings()
 }
 
 export async function createDatabaseBackup(targetDirectory) {
@@ -559,6 +647,36 @@ function initializeSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
     CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active);
 
+    CREATE TABLE IF NOT EXISTS company_print_settings (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      company_name TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      email TEXT NOT NULL DEFAULT '',
+      tax_number TEXT NOT NULL DEFAULT '',
+      logo_data_url TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS account_payments (
+      id TEXT PRIMARY KEY,
+      entity_type TEXT NOT NULL CHECK(entity_type IN ('customer', 'supplier')),
+      entity_id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      amount REAL NOT NULL,
+      notes TEXT,
+      payment_method TEXT DEFAULT '',
+      reference_type TEXT,
+      reference_id TEXT,
+      reference_number TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_account_payments_entity
+      ON account_payments(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_account_payments_date
+      ON account_payments(date);
+
     CREATE TABLE IF NOT EXISTS sales_invoices (
       id TEXT PRIMARY KEY,
       invoice_number TEXT NOT NULL UNIQUE,
@@ -602,6 +720,52 @@ function initializeSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_sales_invoice_items_invoice ON sales_invoice_items(invoice_id);
     CREATE INDEX IF NOT EXISTS idx_sales_invoice_items_material ON sales_invoice_items(material_id);
+
+    CREATE TABLE IF NOT EXISTS delegates (
+      id TEXT PRIMARY KEY,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      phone TEXT,
+      address TEXT,
+      notes TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_delegates_code ON delegates(code);
+    CREATE INDEX IF NOT EXISTS idx_delegates_name ON delegates(name);
+
+    CREATE TABLE IF NOT EXISTS delegate_payments (
+      id TEXT PRIMARY KEY,
+      delegate_id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      amount REAL NOT NULL,
+      notes TEXT,
+      payment_method TEXT DEFAULT '',
+      FOREIGN KEY(delegate_id) REFERENCES delegates(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_delegate_payments_delegate
+      ON delegate_payments(delegate_id);
+    CREATE INDEX IF NOT EXISTS idx_delegate_payments_date
+      ON delegate_payments(date);
+
+    CREATE TABLE IF NOT EXISTS sales_invoice_delegates (
+      id TEXT PRIMARY KEY,
+      invoice_id TEXT NOT NULL,
+      delegate_id TEXT NOT NULL,
+      delegate_name TEXT NOT NULL,
+      commission_percentage REAL NOT NULL DEFAULT 0,
+      notes TEXT DEFAULT '',
+      FOREIGN KEY(invoice_id) REFERENCES sales_invoices(id) ON DELETE CASCADE,
+      FOREIGN KEY(delegate_id) REFERENCES delegates(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sales_invoice_delegates_invoice
+      ON sales_invoice_delegates(invoice_id);
+    CREATE INDEX IF NOT EXISTS idx_sales_invoice_delegates_delegate
+      ON sales_invoice_delegates(delegate_id);
 
     CREATE TABLE IF NOT EXISTS sales_payments (
       id TEXT PRIMARY KEY,
@@ -682,6 +846,15 @@ function initializeSchema(db) {
       FOREIGN KEY(material_id) REFERENCES materials(id)
     );
   `)
+  try {
+  const cols = db.exec(`PRAGMA table_info(sales_invoice_delegates)`)[0]?.values ?? [];
+  const colNames = cols.map(c => c[1]);
+  if (!colNames.includes('notes')) {
+    db.run(`ALTER TABLE sales_invoice_delegates ADD COLUMN notes TEXT DEFAULT ''`);
+  }
+} catch (e) {
+  console.warn('Migration for sales_invoice_delegates notes failed', e);
+}
 
   // Idempotent migrations for older databases where stock and purchase tables were created with fewer columns.
   try {
@@ -767,6 +940,12 @@ function initializeSchema(db) {
 
     ensureColumns('sales_returns', [
       { name: 'original_invoice_number', definition: 'original_invoice_number TEXT' },
+    ])
+
+    ensureColumns('account_payments', [
+      { name: 'reference_type', definition: 'reference_type TEXT' },
+      { name: 'reference_id', definition: 'reference_id TEXT' },
+      { name: 'reference_number', definition: 'reference_number TEXT' },
     ])
 
     const purchaseReturnsToBackfill = db.exec(`SELECT id, purchase_invoice_id FROM purchase_returns WHERE original_invoice_number IS NULL OR original_invoice_number = ''`)[0]?.values ?? []
@@ -1079,46 +1258,48 @@ function buildPurchaseNetItemCosts(items, discountType, discountValue, subtotal,
   if (safeSubtotal <= 0 && feeTotal <= 0) {
     return items.map((item) => ({
       ...item,
-      netLineTotal: normalizeMoney(Number(item.lineTotal ?? 0)),
-      netUnitPrice: item.quantity > 0 ? normalizeMoney(Number(item.lineTotal ?? 0) / Number(item.quantity)) : 0,
+      netLineTotal: normalizeInventoryCost(Number(item.lineTotal ?? 0)),
+      netUnitPrice: item.quantity > 0 ? normalizeInventoryCost(Number(item.lineTotal ?? 0) / Number(item.quantity)) : 0,
     }))
   }
 
   const totalGross = items.reduce((sum, item) => sum + Number(item.lineTotal ?? 0), 0)
+  const totalQuantity = items.reduce((sum, item) => sum + Number(item.quantity ?? 0), 0)
   const discountAmount = type === 'percentage' ? (safeSubtotal * value) / 100 : type === 'fixed' ? Math.min(Number(value), safeSubtotal) : 0
-  const totalNet = normalizeMoney(Math.max(safeSubtotal - discountAmount + feeTotal, 0))
+  const totalNet = normalizeInventoryCost(Math.max(safeSubtotal - discountAmount + feeTotal, 0))
 
   let adjustedItems = items.map((item, index) => {
     const grossLineTotal = Number(item.lineTotal ?? 0)
     const share = totalGross > 0 ? grossLineTotal / totalGross : 0
     const lineDiscount = type === 'none' || Number(value) <= 0 ? 0 : discountAmount * share
-    const lineExpense = totalGross > 0 ? feeTotal * share : feeTotal / Math.max(items.length, 1)
+    const quantity = Number(item.quantity ?? 0)
+    const lineExpense = totalQuantity > 0 ? feeTotal * (quantity / totalQuantity) : feeTotal / Math.max(items.length, 1)
     const rawNetLineTotal = grossLineTotal - lineDiscount + lineExpense
     return {
       ...item,
-      netLineTotal: normalizeMoney(rawNetLineTotal),
-      netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeMoney(rawNetLineTotal / Number(item.quantity)) : 0,
+      netLineTotal: normalizeInventoryCost(rawNetLineTotal),
+      netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeInventoryCost(rawNetLineTotal / Number(item.quantity)) : 0,
       __index: index,
     }
   })
 
   const netSum = adjustedItems.reduce((sum, item) => sum + Number(item.netLineTotal ?? 0), 0)
-  const diff = normalizeMoney(totalNet - netSum)
+  const diff = normalizeInventoryCost(totalNet - netSum)
   if (Math.abs(diff) > 0 && adjustedItems.length > 0) {
     const lastIndex = adjustedItems.length - 1
     const lastItem = adjustedItems[lastIndex]
-    const lastItemNet = normalizeMoney(Number(lastItem.netLineTotal ?? 0) + diff)
+    const lastItemNet = normalizeInventoryCost(Number(lastItem.netLineTotal ?? 0) + diff)
     adjustedItems[lastIndex] = {
       ...lastItem,
       netLineTotal: lastItemNet,
-      netUnitPrice: Number(lastItem.quantity ?? 0) > 0 ? normalizeMoney(lastItemNet / Number(lastItem.quantity)) : 0,
+      netUnitPrice: Number(lastItem.quantity ?? 0) > 0 ? normalizeInventoryCost(lastItemNet / Number(lastItem.quantity)) : 0,
     }
   }
 
   return adjustedItems.map((item) => ({
     ...item,
-    netLineTotal: normalizeMoney(Number(item.netLineTotal ?? 0)),
-    netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeMoney(Number(item.netLineTotal ?? 0) / Number(item.quantity)) : 0,
+    netLineTotal: normalizeInventoryCost(Number(item.netLineTotal ?? 0)),
+    netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeInventoryCost(Number(item.netLineTotal ?? 0) / Number(item.quantity)) : 0,
     __index: undefined,
   }))
 }
@@ -1140,7 +1321,7 @@ function toInvoiceItemPayload(items) {
     }
     seenMaterialIds.add(materialId)
 
-    const quantity = Number(item.quantity)
+    const quantity = normalizeQuantity(Number(item.quantity))
     if (Number.isNaN(quantity) || quantity <= 0) {
       throw new Error('يجب أن تكون كمية المادة أكبر من صفر.')
     }
@@ -1288,6 +1469,13 @@ function buildPurchaseInvoiceDetails(db, invoiceId) {
      ORDER BY date DESC, created_at DESC`,
     [invoiceId]
   )[0]?.values ?? []
+  const delegatesRows = db.exec(
+    `SELECT delegate_id, delegate_name, commission_percentage
+     FROM sales_invoice_delegates
+     WHERE invoice_id = ?
+     ORDER BY rowid`,
+    [invoiceId]
+  )[0]?.values ?? []
 
   return {
     id: header[0],
@@ -1333,11 +1521,34 @@ function buildPurchaseInvoiceDetails(db, invoiceId) {
       paymentMethod: row[5] ?? '',
       createdAt: row[6],
     })),
+    delegates: delegatesRows.map((row) => ({
+      delegateId: row[0],
+      delegateName: row[1] ?? '',
+      commissionPercentage: Number(row[2] ?? 0),
+    })),
   }
 }
 
 function normalizeMoney(value) {
-  return Number(Math.round((Number(value ?? 0) + Number.EPSILON) * 100) / 100)
+  return roundByDecimals(value, numberFormatSettings.priceDecimals)
+}
+
+function normalizeInventoryCost(value) {
+  return roundByDecimals(value, numberFormatSettings.averageDecimals)
+}
+
+function normalizeQuantity(value) {
+  return roundByDecimals(value, numberFormatSettings.quantityDecimals)
+}
+
+function roundByDecimals(value, decimals) {
+  const numericValue = Number(value ?? 0)
+  if (!Number.isFinite(numericValue)) {
+    return 0
+  }
+
+  const factor = 10 ** decimals
+  return Number(Math.round((numericValue + Number.EPSILON) * factor) / factor)
 }
 
 function normalizeDocumentNote(value) {
@@ -1613,6 +1824,19 @@ function getCustomerById(db, customerId) {
   return row ? normalizeCustomerRow(row) : null
 }
 
+function normalizeCustomerCode(value) {
+  return String(value ?? '').trim()
+}
+
+function findCustomerCodeMatches(db, code, excludedId = null) {
+  const normalizedCode = normalizeCustomerCode(code)
+  const query = excludedId == null
+    ? `SELECT id, code FROM customers WHERE TRIM(CAST(code AS TEXT)) = ?`
+    : `SELECT id, code FROM customers WHERE TRIM(CAST(code AS TEXT)) = ? AND id <> ?`
+  const params = excludedId == null ? [normalizedCode] : [normalizedCode, excludedId]
+  return db.exec(query, params)[0]?.values ?? []
+}
+
 function getValidSellableMaterial(db, materialId) {
   const row = db.exec(
     `SELECT id, material_number, name, unit, type, is_non_stock, status
@@ -1641,6 +1865,71 @@ function getValidSellableMaterial(db, materialId) {
 
 function getNextSalesInvoiceNumber(db) {
   return getNextDocumentNumberFromMax(db, 'sales_invoices', 'invoice_number', 'SAL')
+}
+
+function normalizeDelegateRow(row) {
+  const isActive = row[6] === 1 || row[6] === '1' || row[6] === true || row[6] === 'active'
+  return {
+    id: row[0],
+    code: row[1],
+    name: row[2],
+    phone: row[3] ?? '',
+    address: row[4] ?? '',
+    notes: row[5] ?? '',
+    status: isActive ? 'active' : 'inactive',
+    isActive,
+    createdAt: row[7],
+    updatedAt: row[8],
+  }
+}
+
+function getDelegateById(db, delegateId) {
+  const row = db.exec(
+    `SELECT id, code, name, phone, address, notes, is_active, created_at, updated_at FROM delegates WHERE id = ?`,
+    [delegateId]
+  )[0]?.values?.[0]
+  return row ? normalizeDelegateRow(row) : null
+}
+
+function validateSalesInvoiceDelegates(db, rawDelegates) {
+  if (!Array.isArray(rawDelegates)) return []
+
+  const seen = new Set()
+  return rawDelegates.map((item) => {
+    const delegateId = String(item?.delegateId ?? '').trim()
+    const commissionPercentage = Number(item?.commissionPercentage ?? 0)
+    const notes = typeof item?.notes === 'string' ? item.notes.trim() : ''
+    if (!delegateId || seen.has(delegateId)) {
+      throw new Error('المندوب مضاف مسبقاً إلى الفاتورة.')
+    }
+    if (!Number.isFinite(commissionPercentage) || commissionPercentage < 0 || commissionPercentage > 100) {
+      throw new Error('نسبة المندوب يجب أن تكون بين 0 و100.')
+    }
+
+    const delegate = getDelegateById(db, delegateId)
+    if (!delegate || delegate.status !== 'active') {
+      throw new Error('المندوب غير موجود أو غير فعال.')
+    }
+
+    seen.add(delegateId)
+    return {
+      delegateId,
+      delegateName: delegate.name,
+      commissionPercentage,
+      notes,
+    }
+  })
+}
+
+function saveSalesInvoiceDelegates(db, invoiceId, delegates) {
+  db.run(`DELETE FROM sales_invoice_delegates WHERE invoice_id = ?`, [invoiceId])
+  for (const delegate of delegates) {
+    db.run(
+      `INSERT INTO sales_invoice_delegates (id, invoice_id, delegate_id, delegate_name, commission_percentage, notes)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [`sid-${crypto.randomUUID()}`, invoiceId, delegate.delegateId, delegate.delegateName, delegate.commissionPercentage, String(delegate.notes ?? '').trim()]
+    )
+  }
 }
 
 function validateSalesInvoiceCore(db, payload) {
@@ -1710,7 +1999,8 @@ function validateSalesInvoiceCore(db, payload) {
   })
 
   const discount = normalizeDiscount(payload.discountType, payload.discountValue, subtotal)
-  const customerAdditionalFees = normalizeAdditionalFeeValue(payload.customerAdditionalFees, 'رسوم العميل الإضافية')
+  const customerAdditionalFees = 0
+  const delegates = validateSalesInvoiceDelegates(db, payload.delegates)
   return {
     customer,
     warehouse,
@@ -1719,6 +2009,7 @@ function validateSalesInvoiceCore(db, payload) {
     subtotal,
     ...discount,
     customerAdditionalFees,
+    delegates,
     netTotal: normalizeMoney(subtotal - discount.discountAmount + customerAdditionalFees),
     notes: String(payload.notes ?? '').trim(),
   }
@@ -1832,6 +2123,13 @@ function buildSalesInvoiceDetails(db, invoiceId) {
      ORDER BY date DESC, created_at DESC`,
     [invoiceId]
   )[0]?.values ?? []
+  const delegatesRows = db.exec(
+    `SELECT delegate_id, delegate_name, commission_percentage, notes
+     FROM sales_invoice_delegates
+     WHERE invoice_id = ?
+     ORDER BY rowid`,
+    [invoiceId]
+  )[0]?.values ?? []
 
   return {
     id: header[0],
@@ -1884,6 +2182,12 @@ function buildSalesInvoiceDetails(db, invoiceId) {
       notes: row[4] ?? '',
       paymentMethod: row[5] ?? '',
       createdAt: row[6],
+    })),
+    delegates: delegatesRows.map((row) => ({
+      delegateId: row[0],
+      delegateName: row[1] ?? '',
+      commissionPercentage: Number(row[2] ?? 0),
+      notes: row[3] ?? '',
     })),
   }
 }
@@ -1985,16 +2289,384 @@ export function listCustomers() {
   return rows.map((row) => normalizeCustomerRow(row))
 }
 
-export function createCustomer(payload) {
+export function listDelegates() {
+  const db = getDatabase()
+  const rows = db.exec(
+    `SELECT id, code, name, phone, address, notes, is_active, created_at, updated_at FROM delegates ORDER BY created_at DESC`
+  )[0]?.values ?? []
+  return rows.map((row) => normalizeDelegateRow(row))
+}
+
+export function listActiveDelegates() {
+  return listDelegates().filter((delegate) => delegate.status === 'active')
+}
+
+export function createDelegate(payload) {
   const db = getDatabase()
   const code = String(payload.code ?? '').trim()
+  const name = String(payload.name ?? '').trim()
+  if (!code || !name) throw new Error('رقم المندوب واسم المندوب مطلوبان.')
+
+  const existing = db.exec(`SELECT id FROM delegates WHERE code = ?`, [code])[0]?.values?.[0]?.[0]
+  if (existing) throw new Error('رقم المندوب مستخدم مسبقاً.')
+
+  const id = payload.id ?? `del-${crypto.randomUUID()}`
+  const now = new Date().toISOString()
+  const isActive = payload.status === 'inactive' ? 0 : 1
+  db.run(
+    `INSERT INTO delegates (id, code, name, phone, address, notes, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, code, name, String(payload.phone ?? '').trim(), String(payload.address ?? '').trim(), String(payload.notes ?? '').trim(), isActive, now, now]
+  )
+  persistDatabase(db)
+  return listDelegates()
+}
+
+export function updateDelegate(id, payload) {
+  const db = getDatabase()
+  if (!getDelegateById(db, id)) throw new Error('المندوب غير موجود.')
+  const code = String(payload.code ?? '').trim()
+  const name = String(payload.name ?? '').trim()
+  const status = payload.status === 'inactive' ? 'inactive' : 'active'
+
+  if (status === 'inactive') {
+    const usage = db.exec(`SELECT COUNT(1) FROM sales_invoice_delegates WHERE delegate_id = ?`, [id])[0]?.values?.[0]?.[0] ?? 0
+    if (Number(usage) > 0) {
+      throw new Error('لا يمكن تحويل هذا المندوب إلى غير فعال لأنه مستخدم في فواتير مبيعات مسجلة.')
+    }
+  }
+
+  if (!code || !name) throw new Error('رقم المندوب واسم المندوب مطلوبان.')
+
+  const existing = db.exec(`SELECT id FROM delegates WHERE code = ? AND id <> ?`, [code, id])[0]?.values?.[0]?.[0]
+  if (existing) throw new Error('رقم المندوب مستخدم مسبقاً.')
+
+  const now = new Date().toISOString()
+  const isActive = status === 'inactive' ? 0 : 1
+  db.run(
+    `UPDATE delegates SET code = ?, name = ?, phone = ?, address = ?, notes = ?, is_active = ?, updated_at = ? WHERE id = ?`,
+    [code, name, String(payload.phone ?? '').trim(), String(payload.address ?? '').trim(), String(payload.notes ?? '').trim(), isActive, now, id]
+  )
+  persistDatabase(db)
+  return listDelegates()
+}
+
+export function deleteDelegate(id) {
+  const db = getDatabase()
+  if (!getDelegateById(db, id)) throw new Error('المندوب غير موجود.')
+  const usage = db.exec(`SELECT COUNT(1) FROM sales_invoice_delegates WHERE delegate_id = ?`, [id])[0]?.values?.[0]?.[0] ?? 0
+  if (Number(usage) > 0) throw new Error('لا يمكن حذف المندوب لأنه مرتبط بفواتير مبيعات.')
+  db.run(`DELETE FROM delegates WHERE id = ?`, [id])
+  persistDatabase(db)
+  return listDelegates()
+}
+
+export function getDelegatePayments(delegateId) {
+  const db = getDatabase()
+  if (!getDelegateById(db, delegateId)) throw new Error('المندوب غير موجود.')
+
+  const rows = db.exec(
+    `SELECT id, delegate_id, date, amount, notes, payment_method
+     FROM delegate_payments
+     WHERE delegate_id = ?
+     ORDER BY date DESC, rowid DESC`,
+    [delegateId]
+  )[0]?.values ?? []
+
+  return rows.map((row) => ({
+    id: row[0],
+    delegateId: row[1],
+    date: row[2],
+    amount: normalizeMoney(Number(row[3] ?? 0)),
+    notes: row[4] ?? '',
+    paymentMethod: row[5] ?? '',
+  }))
+}
+
+export function createDelegatePayment(payload = {}) {
+  const db = getDatabase()
+  const delegateId = String(payload.delegateId ?? '').trim()
+  const date = String(payload.date ?? '').trim()
+  const amount = Number(payload.amount)
+  const notes = String(payload.notes ?? '').trim()
+  const paymentMethod = String(payload.paymentMethod ?? '').trim()
+
+  if (!delegateId || !getDelegateById(db, delegateId)) throw new Error('المندوب غير موجود.')
+  if (!date) throw new Error('تاريخ الدفعة مطلوب.')
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('مبلغ الدفعة يجب أن يكون أكبر من صفر.')
+  if (!paymentMethod) throw new Error('طريقة الدفع مطلوبة.')
+
+  const paymentId = `dp-${crypto.randomUUID()}`
+  db.run(
+    `INSERT INTO delegate_payments (id, delegate_id, date, amount, notes, payment_method)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [paymentId, delegateId, date, normalizeMoney(amount), notes || null, paymentMethod]
+  )
+  persistDatabase(db)
+
+  const payment = db.exec(
+    `SELECT id, delegate_id, date, amount, notes, payment_method FROM delegate_payments WHERE id = ?`,
+    [paymentId]
+  )[0]?.values?.[0]
+
+  if (!payment) throw new Error('تعذر حفظ دفعة المندوب.')
+
+  return {
+    id: payment[0],
+    delegateId: payment[1],
+    date: payment[2],
+    amount: normalizeMoney(Number(payment[3] ?? 0)),
+    notes: payment[4] ?? '',
+    paymentMethod: payment[5] ?? '',
+  }
+}
+
+export function deleteDelegatePayment(paymentId) {
+  const db = getDatabase()
+  const payment = db.exec(
+    `SELECT id, delegate_id, date, amount, notes, payment_method FROM delegate_payments WHERE id = ?`,
+    [paymentId]
+  )[0]?.values?.[0]
+
+  if (!payment) throw new Error('دفعة المندوب غير موجودة.')
+
+  db.run(`DELETE FROM delegate_payments WHERE id = ?`, [paymentId])
+  persistDatabase(db)
+
+  return {
+    id: payment[0],
+    delegateId: payment[1],
+    date: payment[2],
+    amount: normalizeMoney(Number(payment[3] ?? 0)),
+    notes: payment[4] ?? '',
+    paymentMethod: payment[5] ?? '',
+  }
+}
+
+function getAccountEntity(db, entityType, entityId) {
+  const table = entityType === 'customer' ? 'customers' : 'suppliers'
+  return db.exec(`SELECT id FROM ${table} WHERE id = ?`, [entityId])[0]?.values?.[0]
+}
+
+export function listAccountPayments(entityType, entityId) {
+  const db = getDatabase()
+  if (!getAccountEntity(db, entityType, entityId)) throw new Error('الحساب غير موجود.')
+
+  const rows = db.exec(
+    `SELECT id, entity_id, date, amount, notes, payment_method, reference_type, reference_id, reference_number
+     FROM account_payments
+     WHERE entity_type = ? AND entity_id = ?
+     ORDER BY date DESC, rowid DESC`,
+    [entityType, entityId],
+  )[0]?.values ?? []
+
+  return rows.map((row) => ({
+    id: row[0],
+    entityId: row[1],
+    date: row[2],
+    amount: normalizeMoney(Number(row[3] ?? 0)),
+    notes: row[4] ?? '',
+    paymentMethod: row[5] ?? '',
+    referenceType: row[6] ?? '',
+    referenceId: row[7] ?? '',
+    referenceNumber: row[8] ?? '',
+  }))
+}
+
+export function createAccountPayment(entityType, payload = {}) {
+  const db = getDatabase()
+  const entityId = String(payload.entityId ?? '').trim()
+  const date = String(payload.date ?? '').trim()
+  const amount = Number(payload.amount)
+  const notes = String(payload.notes ?? '').trim()
+  const paymentMethod = String(payload.paymentMethod ?? '').trim()
+
+  if (!['customer', 'supplier'].includes(entityType) || !entityId || !getAccountEntity(db, entityType, entityId)) {
+    throw new Error('الحساب غير موجود.')
+  }
+  if (!date) throw new Error('تاريخ الدفعة مطلوب.')
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('مبلغ الدفعة يجب أن يكون أكبر من صفر.')
+  if (!paymentMethod) throw new Error('طريقة الدفع مطلوبة.')
+
+  const paymentId = `ap-${crypto.randomUUID()}`
+  const createdAt = new Date().toISOString()
+  db.run(
+    `INSERT INTO account_payments (id, entity_type, entity_id, date, amount, notes, payment_method, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [paymentId, entityType, entityId, date, normalizeMoney(amount), notes || null, paymentMethod, createdAt],
+  )
+  persistDatabase(db)
+
+  return {
+    id: paymentId,
+    entityId,
+    date,
+    amount: normalizeMoney(amount),
+    notes,
+    paymentMethod,
+  }
+}
+
+export function deleteAccountPayment(entityType, paymentId) {
+  const db = getDatabase()
+  const row = db.exec(
+    `SELECT id, entity_id, date, amount, notes, payment_method
+     FROM account_payments
+     WHERE entity_type = ? AND id = ?`,
+    [entityType, paymentId],
+  )[0]?.values?.[0]
+
+  if (!row) throw new Error('دفعة الحساب غير موجودة.')
+  db.run(`DELETE FROM account_payments WHERE entity_type = ? AND id = ?`, [entityType, paymentId])
+  persistDatabase(db)
+
+  return {
+    id: row[0],
+    entityId: row[1],
+    date: row[2],
+    amount: normalizeMoney(Number(row[3] ?? 0)),
+    notes: row[4] ?? '',
+    paymentMethod: row[5] ?? '',
+  }
+}
+
+function getReturnPaymentContext(db, returnType, returnId) {
+  const isPurchaseReturn = returnType === 'purchase-return'
+  const table = isPurchaseReturn ? 'purchase_returns' : 'sales_returns'
+  const entityColumn = isPurchaseReturn ? 'supplier_id' : 'customer_id'
+  const numberColumn = 'return_number'
+  const row = db.exec(
+    `SELECT ${entityColumn}, ${numberColumn}, net_total FROM ${table} WHERE id = ?`,
+    [returnId],
+  )[0]?.values?.[0]
+
+  if (!row) throw new Error('المرتجع غير موجود.')
+
+  return {
+    entityType: isPurchaseReturn ? 'supplier' : 'customer',
+    entityId: row[0],
+    returnNumber: row[1],
+    returnTotal: normalizeMoney(Number(row[2] ?? 0)),
+    referenceType: returnType,
+  }
+}
+
+function mapReturnPayment(row) {
+  return {
+    id: row[0],
+    entityId: row[1],
+    date: row[2],
+    amount: normalizeMoney(Number(row[3] ?? 0)),
+    notes: row[4] ?? '',
+    paymentMethod: row[5] ?? '',
+    referenceType: row[6] ?? '',
+    referenceId: row[7] ?? '',
+    referenceNumber: row[8] ?? '',
+    createdAt: row[9] ?? '',
+  }
+}
+
+export function listReturnPayments(returnType, returnId) {
+  const db = getDatabase()
+  getReturnPaymentContext(db, returnType, returnId)
+  const rows = db.exec(
+    `SELECT id, entity_id, date, amount, notes, payment_method, reference_type, reference_id, reference_number, created_at
+     FROM account_payments
+     WHERE reference_type = ? AND reference_id = ?
+     ORDER BY date ASC, rowid ASC`,
+    [returnType, returnId],
+  )[0]?.values ?? []
+
+  return rows.map(mapReturnPayment)
+}
+
+export function createReturnPayment(returnType, returnId, payload = {}) {
+  const db = getDatabase()
+  const context = getReturnPaymentContext(db, returnType, returnId)
+  const date = String(payload.date ?? '').trim()
+  const amount = Number(payload.amount)
+  const notes = String(payload.notes ?? '').trim()
+  const paymentMethod = String(payload.paymentMethod ?? '').trim()
+
+  if (!date) throw new Error('تاريخ الدفعة مطلوب.')
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('مبلغ الدفعة يجب أن يكون أكبر من صفر.')
+  if (!paymentMethod) throw new Error('طريقة الدفع مطلوبة.')
+
+  const paidAmount = Number(db.exec(
+    `SELECT COALESCE(SUM(amount), 0)
+     FROM account_payments
+     WHERE reference_type = ? AND reference_id = ?`,
+    [returnType, returnId],
+  )[0]?.values?.[0]?.[0] ?? 0)
+  const remainingAmount = Math.max(context.returnTotal - paidAmount, 0)
+  if (amount > remainingAmount + 0.000001) {
+    throw new Error(`مبلغ الدفعة يتجاوز المتبقي من المرتجع (${remainingAmount}).`)
+  }
+
+  const paymentId = `rp-${crypto.randomUUID()}`
+  const createdAt = new Date().toISOString()
+  db.run(
+    `INSERT INTO account_payments (
+      id, entity_type, entity_id, date, amount, notes, payment_method,
+      reference_type, reference_id, reference_number, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      paymentId,
+      context.entityType,
+      context.entityId,
+      date,
+      normalizeMoney(amount),
+      notes || null,
+      paymentMethod,
+      context.referenceType,
+      returnId,
+      context.returnNumber,
+      createdAt,
+    ],
+  )
+  persistDatabase(db)
+
+  return mapReturnPayment([
+    paymentId,
+    context.entityId,
+    date,
+    normalizeMoney(amount),
+    notes,
+    paymentMethod,
+    context.referenceType,
+    returnId,
+    context.returnNumber,
+    createdAt,
+  ])
+}
+
+export function deleteReturnPayment(returnType, paymentId) {
+  const db = getDatabase()
+  const row = db.exec(
+    `SELECT id, entity_id, date, amount, notes, payment_method, reference_type, reference_id, reference_number, created_at
+     FROM account_payments
+     WHERE reference_type = ? AND id = ?`,
+    [returnType, paymentId],
+  )[0]?.values?.[0]
+
+  if (!row) throw new Error('دفعة المرتجع غير موجودة.')
+  db.run(`DELETE FROM account_payments WHERE reference_type = ? AND id = ?`, [returnType, paymentId])
+  persistDatabase(db)
+  return mapReturnPayment(row)
+}
+
+export function createCustomer(payload) {
+  const db = getDatabase()
+  const code = normalizeCustomerCode(payload.code)
   const name = String(payload.name ?? '').trim()
   if (!code || !name) {
     throw new Error('رقم العميل واسم العميل مطلوبان.')
   }
 
-  const existing = db.exec(`SELECT id FROM customers WHERE code = ?`, [code])[0]?.values?.[0]?.[0]
-  if (existing) {
+  const matchingRows = findCustomerCodeMatches(db, code)
+  console.log('[customers:create] code:', JSON.stringify(code), 'matching rows:', matchingRows)
+  console.log('[customers:create] duplicate count:', matchingRows.length)
+  if (matchingRows.length > 0) {
     throw new Error('رقم العميل مستخدم مسبقاً.')
   }
 
@@ -2002,11 +2674,19 @@ export function createCustomer(payload) {
   const now = new Date().toISOString()
   const isActive = payload.status === 'inactive' ? 0 : 1
 
-  db.run(
-    `INSERT INTO customers (id, code, name, phone, address, notes, is_active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, code, name, String(payload.phone ?? '').trim(), String(payload.address ?? '').trim(), String(payload.notes ?? '').trim(), isActive, now, now]
-  )
+  try {
+    db.run(
+      `INSERT INTO customers (id, code, name, phone, address, notes, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, code, name, String(payload.phone ?? '').trim(), String(payload.address ?? '').trim(), String(payload.notes ?? '').trim(), isActive, now, now]
+    )
+  } catch (error) {
+    if (/UNIQUE constraint failed:\s*customers\.code/i.test(String(error?.message ?? ''))) {
+      console.error('[customers:create] database rejected duplicate code:', JSON.stringify(code), error)
+      throw new Error('رقم العميل مستخدم مسبقاً.')
+    }
+    throw error
+  }
   persistDatabase(db)
   return listCustomers()
 }
@@ -2018,26 +2698,36 @@ export function updateCustomer(id, payload) {
     throw new Error('العميل غير موجود.')
   }
 
-  const code = String(payload.code ?? '').trim()
+  const code = normalizeCustomerCode(payload.code)
   const name = String(payload.name ?? '').trim()
   if (!code || !name) {
     throw new Error('رقم العميل واسم العميل مطلوبان.')
   }
 
-  const existing = db.exec(`SELECT id FROM customers WHERE code = ? AND id <> ?`, [code, id])[0]?.values?.[0]?.[0]
-  if (existing) {
+  const matchingRows = findCustomerCodeMatches(db, code, id)
+  console.log('[customers:update] code:', JSON.stringify(code), 'excluded id:', id, 'matching rows:', matchingRows)
+  console.log('[customers:update] duplicate count:', matchingRows.length)
+  if (matchingRows.length > 0) {
     throw new Error('رقم العميل مستخدم مسبقاً.')
   }
 
   const now = new Date().toISOString()
   const isActive = payload.status === 'inactive' ? 0 : 1
 
-  db.run(
-    `UPDATE customers
-     SET code = ?, name = ?, phone = ?, address = ?, notes = ?, is_active = ?, updated_at = ?
-     WHERE id = ?`,
-    [code, name, String(payload.phone ?? '').trim(), String(payload.address ?? '').trim(), String(payload.notes ?? '').trim(), isActive, now, id]
-  )
+  try {
+    db.run(
+      `UPDATE customers
+       SET code = ?, name = ?, phone = ?, address = ?, notes = ?, is_active = ?, updated_at = ?
+       WHERE id = ?`,
+      [code, name, String(payload.phone ?? '').trim(), String(payload.address ?? '').trim(), String(payload.notes ?? '').trim(), isActive, now, id]
+    )
+  } catch (error) {
+    if (/UNIQUE constraint failed:\s*customers\.code/i.test(String(error?.message ?? ''))) {
+      console.error('[customers:update] database rejected duplicate code:', JSON.stringify(code), error)
+      throw new Error('رقم العميل مستخدم مسبقاً.')
+    }
+    throw error
+  }
   persistDatabase(db)
   return listCustomers()
 }
@@ -2067,7 +2757,7 @@ export function getNextSalesInvoiceDraftData() {
   const db = getDatabase()
   return {
     invoiceNumber: getNextSalesInvoiceNumber(db),
-    date: new Date().toISOString().slice(0, 10),
+    date: getLocalDateYMD(),
   }
 }
 
@@ -2140,6 +2830,8 @@ export function createSalesInvoiceDraft(payload) {
       )
     }
 
+    saveSalesInvoiceDelegates(db, invoiceId, validated.delegates)
+
     db.run('COMMIT')
     committed = true
     persistDatabase(db)
@@ -2207,6 +2899,8 @@ export function updateSalesInvoiceDraft(invoiceId, payload) {
         [item.id, invoiceId, item.materialId, item.quantity, item.unit, item.unitPrice, item.lineTotal, item.notes || null]
       )
     }
+
+    saveSalesInvoiceDelegates(db, invoiceId, validated.delegates)
 
     db.run('COMMIT')
     persistDatabase(db)
@@ -2325,6 +3019,8 @@ export function updateApprovedSalesInvoice(invoiceId, payload) {
       )
     }
 
+    saveSalesInvoiceDelegates(db, invoiceId, validated.delegates)
+
     db.run(
       `INSERT INTO stock_movement_documents (id, reference, type, date, from_warehouse_id, to_warehouse_id, notes, created_by, created_at, status)
        VALUES (?, ?, 'sale', ?, ?, NULL, ?, ?, ?, 'completed')`,
@@ -2378,6 +3074,7 @@ export function deleteSalesInvoiceDraft(invoiceId) {
     if (existing[1] !== 'draft') throw new Error('لا يمكن حذف فاتورة ليست في حالة مسودة.')
 
     db.run(`DELETE FROM sales_invoice_items WHERE invoice_id = ?`, [invoiceId])
+    db.run(`DELETE FROM sales_invoice_delegates WHERE invoice_id = ?`, [invoiceId])
     db.run(`DELETE FROM sales_invoices WHERE id = ?`, [invoiceId])
     db.run('COMMIT')
     persistDatabase(db)
@@ -2405,9 +3102,6 @@ export function deleteSalesInvoice(invoiceId) {
     if (!header) {
       throw new Error('فاتورة المبيعات غير موجودة.')
     }
-    if (header[3] !== 'completed') {
-      throw new Error('لا يمكن حذف فاتورة غير معتمدة.')
-    }
 
     const invoiceNumber = String(header[1])
     const warehouseId = String(header[2])
@@ -2425,6 +3119,7 @@ export function deleteSalesInvoice(invoiceId) {
     db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [invoiceNumber])
     db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [invoiceNumber])
     db.run(`DELETE FROM sales_invoice_items WHERE invoice_id = ?`, [invoiceId])
+    db.run(`DELETE FROM sales_invoice_delegates WHERE invoice_id = ?`, [invoiceId])
     db.run(`DELETE FROM sales_invoices WHERE id = ?`, [invoiceId])
 
     for (const row of items) {
@@ -2470,7 +3165,7 @@ export function completeSalesInvoice(invoiceId) {
       date: header[2],
       discountType: header[6],
       discountValue: header[7],
-      customerAdditionalFees: Number(header[8] ?? 0),
+      customerAdditionalFees: 0,
       notes: header[9] ?? null,
       items: db.exec(
         `SELECT material_id, quantity, unit_price, unit, notes
@@ -2693,7 +3388,7 @@ export function getNextPurchaseInvoiceDraftData() {
   const db = getDatabase()
   return {
     invoiceNumber: getNextPurchaseInvoiceNumber(db),
-    date: new Date().toISOString().slice(0, 10),
+    date: getLocalDateYMD(),
   }
 }
 
@@ -3424,19 +4119,21 @@ function recalculateStockLevel(db, warehouseId, materialId) {
   let averageCost = 0
 
   for (const row of rows) {
-    const quantityIn = Number(row[0] ?? 0)
-    const quantityOut = Number(row[1] ?? 0)
+    const quantityIn = normalizeQuantity(Number(row[0] ?? 0))
+    const quantityOut = normalizeQuantity(Number(row[1] ?? 0))
     const cost = row[2] === null || row[2] === undefined ? null : Number(row[2])
 
     if (quantityIn > 0) {
       const incomingCost = cost !== null && !Number.isNaN(cost) ? cost : averageCost
-      const newQuantity = quantity + quantityIn
-      averageCost = newQuantity > 0 ? (quantity * averageCost + quantityIn * incomingCost) / newQuantity : 0
+      const newQuantity = normalizeQuantity(quantity + quantityIn)
+      averageCost = newQuantity > 0
+        ? normalizeInventoryCost((quantity * averageCost + quantityIn * incomingCost) / newQuantity)
+        : 0
       quantity = newQuantity
     }
 
     if (quantityOut > 0) {
-      quantity -= quantityOut
+      quantity = normalizeQuantity(quantity - quantityOut)
     }
   }
 
@@ -3444,10 +4141,27 @@ function recalculateStockLevel(db, warehouseId, materialId) {
     `INSERT INTO stock_levels (warehouse_id, material_id, quantity, average_cost, reserved, last_updated_at)
      VALUES (?, ?, ?, ?, 0, ?)
      ON CONFLICT(warehouse_id, material_id) DO UPDATE SET quantity = excluded.quantity, average_cost = excluded.average_cost, last_updated_at = excluded.last_updated_at`,
-    [warehouseId, materialId, quantity, averageCost, now]
+    [warehouseId, materialId, normalizeQuantity(quantity), averageCost, now]
   )
 
   return { quantity, averageCost }
+}
+
+function recalculateAllStockLevels(db) {
+  const pairs = db.exec(
+    `SELECT warehouse_id, material_id FROM stock_levels
+     UNION
+     SELECT sm.warehouse_id, sm.material_id
+     FROM stock_movements sm
+     JOIN stock_movement_documents smd ON smd.reference = sm.document_reference
+     WHERE smd.status = 'completed'`,
+  )[0]?.values ?? []
+
+  for (const [warehouseId, materialId] of pairs) {
+    if (warehouseId && materialId) {
+      recalculateStockLevel(db, warehouseId, materialId)
+    }
+  }
 }
 
 function getAverageCost(db, warehouseId, materialId) {
@@ -3697,7 +4411,7 @@ export function listPurchaseReturns(filter = {}) {
 export function getPurchaseReturnById(returnId) {
   const db = getDatabase()
   const header = db.exec(
-    `SELECT pr.id, pr.return_number, pr.date, pr.supplier_id, supplier.name, supplier.code, pr.warehouse_id, warehouse.name, pr.purchase_invoice_id, pi.invoice_number, pr.original_invoice_number, pr.notes, pr.subtotal, pr.discount_amount, pr.net_total, pr.status, pr.created_at, pr.updated_at
+    `SELECT pr.id, pr.return_number, pr.date, pr.supplier_id, supplier.name, supplier.code, pr.warehouse_id, warehouse.name, pr.purchase_invoice_id, pi.invoice_number, pr.original_invoice_number, pr.notes, pr.subtotal, pr.discount_amount, pr.net_total, pr.status, pr.created_at, pr.updated_at, supplier.phone
      FROM purchase_returns pr
      LEFT JOIN suppliers supplier ON supplier.id = pr.supplier_id
      LEFT JOIN warehouses warehouse ON warehouse.id = pr.warehouse_id
@@ -3715,6 +4429,8 @@ export function getPurchaseReturnById(returnId) {
     [returnId]
   )[0]?.values ?? []
 
+  const payments = listReturnPayments('purchase-return', returnId)
+
   return {
     id: header[0],
     returnNumber: header[1],
@@ -3722,6 +4438,7 @@ export function getPurchaseReturnById(returnId) {
     supplierId: header[3],
     supplierName: header[4] ?? '',
     supplierCode: header[5] ?? '',
+    supplierPhone: header[18] ?? '',
     warehouseId: header[6],
     warehouseName: header[7] ?? '',
     purchaseInvoiceId: header[8],
@@ -3733,6 +4450,7 @@ export function getPurchaseReturnById(returnId) {
     status: header[15],
     createdAt: header[16],
     updatedAt: header[17],
+    payments,
     items: items.map((row) => ({
       id: row[0],
       materialId: row[1],
@@ -4026,6 +4744,7 @@ export function deletePurchaseReturn(returnId) {
 
     db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [row[1]])
     db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [row[1]])
+    db.run(`DELETE FROM account_payments WHERE reference_type = 'purchase-return' AND reference_id = ?`, [returnId])
     db.run(`DELETE FROM purchase_return_items WHERE return_id = ?`, [returnId])
     db.run(`DELETE FROM purchase_returns WHERE id = ?`, [returnId])
 
@@ -4089,7 +4808,7 @@ export function listSalesReturns(filter = {}) {
 export function getSalesReturnById(returnId) {
   const db = getDatabase()
   const header = db.exec(
-    `SELECT sr.id, sr.return_number, sr.date, sr.customer_id, customer.name, customer.code, sr.warehouse_id, warehouse.name, sr.sales_invoice_id, si.invoice_number, sr.original_invoice_number, sr.notes, sr.subtotal, sr.discount_amount, sr.net_total, sr.status, sr.created_at, sr.updated_at
+    `SELECT sr.id, sr.return_number, sr.date, sr.customer_id, customer.name, customer.code, sr.warehouse_id, warehouse.name, sr.sales_invoice_id, si.invoice_number, sr.original_invoice_number, sr.notes, sr.subtotal, sr.discount_amount, sr.net_total, sr.status, sr.created_at, sr.updated_at, customer.phone
      FROM sales_returns sr
      LEFT JOIN customers customer ON customer.id = sr.customer_id
      LEFT JOIN warehouses warehouse ON warehouse.id = sr.warehouse_id
@@ -4107,6 +4826,8 @@ export function getSalesReturnById(returnId) {
     [returnId]
   )[0]?.values ?? []
 
+  const payments = listReturnPayments('sales-return', returnId)
+
   const returns = db.exec(
     `SELECT id, return_number, date, net_total FROM sales_returns WHERE sales_invoice_id = ? ORDER BY date DESC, created_at DESC`,
     [header[8]]
@@ -4119,6 +4840,7 @@ export function getSalesReturnById(returnId) {
     customerId: header[3],
     customerName: header[4] ?? '',
     customerCode: header[5] ?? '',
+    customerPhone: header[18] ?? '',
     warehouseId: header[6],
     warehouseName: header[7] ?? '',
     salesInvoiceId: header[8],
@@ -4130,6 +4852,7 @@ export function getSalesReturnById(returnId) {
     status: header[15],
     createdAt: header[16],
     updatedAt: header[17],
+    payments,
     returns: returns.map((row) => ({
       id: row[0],
       returnNumber: row[1],
@@ -4271,7 +4994,7 @@ export function createSalesReturn(payload = {}) {
         originalInvoiceNumber || null,
         returnNotes,
         normalizeMoney(subtotal),
-        normalizeMoney(discount),
+        0, // تم حل المشكلة هنا بتمرير صفر بدلاً من متغير discount غير المعرف
         normalizeMoney(netTotal),
         now,
         now
@@ -4491,6 +5214,7 @@ export function deleteSalesReturn(returnId) {
 
     db.run(`DELETE FROM stock_movements WHERE document_reference = ?`, [row[1]])
     db.run(`DELETE FROM stock_movement_documents WHERE reference = ?`, [row[1]])
+    db.run(`DELETE FROM account_payments WHERE reference_type = 'sales-return' AND reference_id = ?`, [returnId])
     db.run(`DELETE FROM sales_return_items WHERE return_id = ?`, [returnId])
     db.run(`DELETE FROM sales_returns WHERE id = ?`, [returnId])
 
@@ -4675,7 +5399,7 @@ export function updateAdjustmentDocument(reference, payload = {}) {
 
     // 3) Recreate the document with the same reference and apply only the new adjustment effect.
     const noteText = typeof safePayload.notes === 'string' ? safePayload.notes.trim() : (docRow[5] ?? '')
-    const documentDate = String(safePayload.date ?? docRow[2] ?? '').trim() || new Date().toISOString().slice(0, 10)
+    const documentDate = String(safePayload.date ?? docRow[2] ?? '').trim() || getLocalDateYMD()
     const documentId = `doc-${crypto.randomUUID()}`
     db.run(
       `INSERT INTO stock_movement_documents (id, reference, type, date, from_warehouse_id, to_warehouse_id, notes, created_by, created_at, status)

@@ -43,11 +43,13 @@ import { materialsService, type MaterialRecord } from '../services/materialsServ
 import {
   formatCurrencyValue,
   formatDateDMY,
+  getLocalDateYMD,
   formatNumberBySettings,
   toInternalDate,
 } from '../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { useNotifications } from '../contexts/useNotifications'
+import { downloadExcelTable } from '../utils/tableExport'
+import { reportsMenuItems } from '../constants/navigation'
 
 type ReportConfig = {
   label: string
@@ -391,6 +393,8 @@ const reportConfigs: Record<ReportType, ReportConfig> = {
       { key: 'customerAdditionalFees', label: 'رسوم إضافية على العميل', render: money },
       { key: 'paidAmount', label: 'المستلم', render: money },
       { key: 'remainingAmount', label: 'المتبقي', render: money },
+      { key: 'delegateNames', label: 'المندوبون' },
+      { key: 'delegateCommissionTotal', label: 'عمولة المندوبين', render: money },
     ],
   },
   movements: {
@@ -1619,267 +1623,13 @@ function flattenMaterials(records: MaterialRecord[]) {
   return result
 }
 
-function escapeXml(value: unknown) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
-
-function excelColumnName(index: number) {
-  let value = index + 1
-  let name = ''
-
-  while (value > 0) {
-    const remainder = (value - 1) % 26
-    name = String.fromCharCode(65 + remainder) + name
-    value = Math.floor((value - 1) / 26)
-  }
-
-  return name
-}
-
-function crc32(bytes: Uint8Array) {
-  let crc = 0xffffffff
-
-  for (let index = 0; index < bytes.length; index += 1) {
-    crc ^= bytes[index]
-
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1))
-    }
-  }
-
-  return (crc ^ 0xffffffff) >>> 0
-}
-
-function writeUint16(target: Uint8Array, offset: number, value: number) {
-  target[offset] = value & 0xff
-  target[offset + 1] = (value >>> 8) & 0xff
-}
-
-function writeUint32(target: Uint8Array, offset: number, value: number) {
-  target[offset] = value & 0xff
-  target[offset + 1] = (value >>> 8) & 0xff
-  target[offset + 2] = (value >>> 16) & 0xff
-  target[offset + 3] = (value >>> 24) & 0xff
-}
-
-function concatBytes(chunks: Uint8Array[]) {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-  const result = new Uint8Array(totalLength)
-  let offset = 0
-
-  for (const chunk of chunks) {
-    result.set(chunk, offset)
-    offset += chunk.length
-  }
-
-  return result
-}
-
-function createStoredZip(files: Array<{ name: string; content: string }>) {
-  const encoder = new TextEncoder()
-  const localChunks: Uint8Array[] = []
-  const centralChunks: Uint8Array[] = []
-  let localOffset = 0
-
-  for (const file of files) {
-    const nameBytes = encoder.encode(file.name)
-    const dataBytes = encoder.encode(file.content)
-    const checksum = crc32(dataBytes)
-
-    const localHeader = new Uint8Array(30 + nameBytes.length)
-    writeUint32(localHeader, 0, 0x04034b50)
-    writeUint16(localHeader, 4, 20)
-    writeUint16(localHeader, 6, 0)
-    writeUint16(localHeader, 8, 0)
-    writeUint16(localHeader, 10, 0)
-    writeUint16(localHeader, 12, 0)
-    writeUint32(localHeader, 14, checksum)
-    writeUint32(localHeader, 18, dataBytes.length)
-    writeUint32(localHeader, 22, dataBytes.length)
-    writeUint16(localHeader, 26, nameBytes.length)
-    writeUint16(localHeader, 28, 0)
-    localHeader.set(nameBytes, 30)
-
-    localChunks.push(localHeader, dataBytes)
-
-    const centralHeader = new Uint8Array(46 + nameBytes.length)
-    writeUint32(centralHeader, 0, 0x02014b50)
-    writeUint16(centralHeader, 4, 20)
-    writeUint16(centralHeader, 6, 20)
-    writeUint16(centralHeader, 8, 0)
-    writeUint16(centralHeader, 10, 0)
-    writeUint16(centralHeader, 12, 0)
-    writeUint16(centralHeader, 14, 0)
-    writeUint32(centralHeader, 16, checksum)
-    writeUint32(centralHeader, 20, dataBytes.length)
-    writeUint32(centralHeader, 24, dataBytes.length)
-    writeUint16(centralHeader, 28, nameBytes.length)
-    writeUint16(centralHeader, 30, 0)
-    writeUint16(centralHeader, 32, 0)
-    writeUint16(centralHeader, 34, 0)
-    writeUint16(centralHeader, 36, 0)
-    writeUint32(centralHeader, 38, 0)
-    writeUint32(centralHeader, 42, localOffset)
-    centralHeader.set(nameBytes, 46)
-
-    centralChunks.push(centralHeader)
-    localOffset += localHeader.length + dataBytes.length
-  }
-
-  const centralDirectory = concatBytes(centralChunks)
-  const endRecord = new Uint8Array(22)
-  writeUint32(endRecord, 0, 0x06054b50)
-  writeUint16(endRecord, 4, 0)
-  writeUint16(endRecord, 6, 0)
-  writeUint16(endRecord, 8, files.length)
-  writeUint16(endRecord, 10, files.length)
-  writeUint32(endRecord, 12, centralDirectory.length)
-  writeUint32(endRecord, 16, localOffset)
-  writeUint16(endRecord, 20, 0)
-
-  return concatBytes([...localChunks, centralDirectory, endRecord])
-}
-
-function buildExcelWorkbook(
-  columns: ReportTableColumn[],
-  rows: Record<string, unknown>[],
-  sheetName: string,
-) {
-  const safeSheetName = (sheetName || 'التقرير')
-    .replace(/[\\/*?:[\]]/g, ' ')
-    .trim()
-    .slice(0, 31) || 'التقرير'
-
-  const allRows: unknown[][] = [
-    columns.map((column) => column.label),
-    ...rows.map((row) => columns.map((column) => row[column.key])),
-  ]
-
-  const columnWidths = columns.map((column, columnIndex) => {
-    const maxLength = allRows.reduce((max, row) => {
-      const text = String(row[columnIndex] ?? '')
-      return Math.max(max, text.length)
-    }, column.label.length)
-
-    return Math.min(34, Math.max(12, maxLength + 3))
-  })
-
-  const rowXml = allRows.map((row, rowIndex) => {
-    const cells = row.map((value, columnIndex) => {
-      const reference = `${excelColumnName(columnIndex)}${rowIndex + 1}`
-
-      if (rowIndex > 0 && typeof value === 'number' && Number.isFinite(value)) {
-        return `<c r="${reference}" s="2"><v>${value}</v></c>`
-      }
-
-      return `<c r="${reference}" t="inlineStr" s="${rowIndex === 0 ? 1 : 0}"><is><t xml:space="preserve">${escapeXml(value)}</t></is></c>`
-    }).join('')
-
-    return `<row r="${rowIndex + 1}">${cells}</row>`
-  }).join('')
-
-  const lastColumn = excelColumnName(Math.max(0, columns.length - 1))
-  const lastRow = Math.max(1, allRows.length)
-
-  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <dimension ref="A1:${lastColumn}${lastRow}"/>
-  <sheetViews>
-    <sheetView workbookViewId="0" rightToLeft="1">
-      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
-    </sheetView>
-  </sheetViews>
-  <sheetFormatPr defaultRowHeight="20"/>
-  <cols>
-    ${columnWidths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('')}
-  </cols>
-  <sheetData>${rowXml}</sheetData>
-  <autoFilter ref="A1:${lastColumn}${lastRow}"/>
-</worksheet>`
-
-  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <bookViews><workbookView/></bookViews>
-  <sheets><sheet name="${escapeXml(safeSheetName)}" sheetId="1" r:id="rId1"/></sheets>
-</workbook>`
-
-  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <fonts count="2">
-    <font><sz val="11"/><name val="Arial"/></font>
-    <font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Arial"/></font>
-  </fonts>
-  <fills count="3">
-    <fill><patternFill patternType="none"/></fill>
-    <fill><patternFill patternType="gray125"/></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FF0B2948"/><bgColor indexed="64"/></patternFill></fill>
-  </fills>
-  <borders count="2">
-    <border/>
-    <border>
-      <left style="thin"><color rgb="FFD7E3F0"/></left>
-      <right style="thin"><color rgb="FFD7E3F0"/></right>
-      <top style="thin"><color rgb="FFD7E3F0"/></top>
-      <bottom style="thin"><color rgb="FFD7E3F0"/></bottom>
-    </border>
-  </borders>
-  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="3">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0"><alignment horizontal="center" vertical="center"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
-    <xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1"><alignment horizontal="center" vertical="center"/></xf>
-  </cellXfs>
-  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-</styleSheet>`
-
-  const files = [
-    {
-      name: '[Content_Types].xml',
-      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-</Types>`,
-    },
-    {
-      name: '_rels/.rels',
-      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
-</Relationships>`,
-    },
-    { name: 'xl/workbook.xml', content: workbookXml },
-    {
-      name: 'xl/_rels/workbook.xml.rels',
-      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-</Relationships>`,
-    },
-    { name: 'xl/styles.xml', content: stylesXml },
-    { name: 'xl/worksheets/sheet1.xml', content: sheetXml },
-  ]
-
-  const bytes = createStoredZip(files)
-
-  return new Blob([bytes], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  })
-}
-
-
 export function ReportsPage() {
-  const notify = useNotifications()
   const location = useLocation()
+  const currentPath = `${location.pathname}${location.search}`
+
+  const activeReport = reportsMenuItems.find((item) => item.path === currentPath) 
+    || reportsMenuItems[0] 
+
   const reportType = useMemo(
     () => getReportTypeFromSearch(location.search),
     [location.search],
@@ -2046,19 +1796,16 @@ export function ReportsPage() {
         return
       }
 
-      const excelBlob = buildExcelWorkbook(
-        config.columns,
-        exportRows as Record<string, unknown>[],
-        config.label,
-      )
+      downloadExcelTable({
+        title: config.label,
+        sheetName: config.label,
+        fileName: `craft-${reportType}-${getLocalDateYMD()}`,
+        headers: config.columns.map((column) => column.label),
+        rows: exportRows.map((row) =>
+          config.columns.map((column) => row[column.key]),
+        ),
+      })
 
-      const url = URL.createObjectURL(excelBlob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = `craft-${reportType}-${new Date().toISOString().slice(0, 10)}.xlsx`
-      anchor.click()
-      URL.revokeObjectURL(url)
-      notify.success('تم تصدير ملف Excel بنجاح.')
     } catch (error) {
       setErrorMessage(
         getUserFriendlyErrorMessage(error, 'تعذر تصدير التقرير إلى Excel.'),
@@ -2117,7 +1864,7 @@ export function ReportsPage() {
     <Box sx={craftPageGlassSx}>
       <PageHeader
         title="التقارير"
-        breadcrumb="التقارير / لوحة التحليل"
+        breadcrumb={activeReport.label}
       />
 
       {errorMessage ? (

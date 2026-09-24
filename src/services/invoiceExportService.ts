@@ -1,6 +1,10 @@
 import { formatCurrencyValue, formatNumberBySettings } from '../utils/displayFormatting'
 import type { CompanyPrintSettings, InvoicePrintData } from '../types/invoicePrint'
 
+function priceNum(value: number | undefined): string {
+  return formatNumberBySettings(Number(value ?? 0), 'price')
+}
+
 declare global {
   interface Window {
     craftExportAPI?: {
@@ -33,7 +37,7 @@ function escapeHtml(value: string): string {
 function renderItems(data: InvoicePrintData): string {
   const headers = data.productionMode
     ? ['المادة', 'الكمية المخططة', 'الكمية المصروفة', 'التكلفة']
-    : ['#', 'رقم المادة', 'اسم المادة', 'الوحدة', 'الكمية', 'السعر', 'الإجمالي']
+    : ['#', 'رقم المادة', 'اسم المادة', 'الوحدة', 'الكمية', 'السعر', 'الاجمالي']
 
   const rows = data.items.length === 0
     ? `<tr><td colspan="${data.productionMode ? 4 : 7}" style="padding:16px;text-align:center;color:#64748b;">لا توجد عناصر.</td></tr>`
@@ -44,7 +48,7 @@ function renderItems(data: InvoicePrintData): string {
               <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.name)}</td>
               <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatNumberBySettings(item.plannedQuantity ?? 0, 'quantity')}</td>
               <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatNumberBySettings(item.actualQuantity ?? 0, 'quantity')}</td>
-              <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatCurrencyValue(item.cost ?? item.total ?? 0, 'price')}</td>
+              <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${priceNum(item.cost ?? item.total ?? 0)}</td>
             </tr>
           `
         }
@@ -56,8 +60,8 @@ function renderItems(data: InvoicePrintData): string {
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:right;">${escapeHtml(item.name)}</td>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.unit || '—')}</td>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatNumberBySettings(item.quantity ?? 0, 'quantity')}</td>
-            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatCurrencyValue(item.price ?? 0, 'price')}</td>
-            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatCurrencyValue(item.total ?? 0, 'price')}</td>
+            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${priceNum(item.price ?? 0)}</td>
+            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${priceNum(item.total ?? 0)}</td>
           </tr>
         `
       }).join('')
@@ -78,6 +82,9 @@ function renderItems(data: InvoicePrintData): string {
 
 export function buildInvoiceExportHtml(data: InvoicePrintData, settings: CompanyPrintSettings): string {
   const hasLogo = Boolean(settings.logoDataUrl && settings.logoDataUrl.trim())
+  const partyDisplay = [data.partyName?.trim(), data.partyNumber?.trim()]
+    .filter(Boolean)
+    .join(' / ') || '—'
   const notesBlock = data.notes && data.notes.trim()
     ? `<div style="border:1px solid rgba(15,23,42,0.12);border-radius:10px;background:rgba(15,23,42,0.02);padding:16px;">
         <div style="font-weight:700;color:#0f172a;margin-bottom:6px;">ملاحظات</div>
@@ -290,7 +297,7 @@ export function buildInvoiceExportHtml(data: InvoicePrintData, settings: Company
               <div class="doc-meta">
                 <div><strong>رقم المستند:</strong> ${escapeHtml(data.documentNumber || '—')}</div>
                 <div><strong>التاريخ:</strong> ${escapeHtml(data.date || '—')}</div>
-                <div><strong>${escapeHtml(data.partyLabel)}:</strong> ${escapeHtml(data.partyName || '—')}</div>
+                <div><strong>${escapeHtml(data.partyLabel)}:</strong> ${escapeHtml(partyDisplay)}</div>
                 ${referenceBlock}
               </div>
             </div>
@@ -306,9 +313,9 @@ export function buildInvoiceExportHtml(data: InvoicePrintData, settings: Company
               </div>
 
               <div class="totals">
-                <div class="totals-row"><span>المجموع:</span><span>${formatCurrencyValue(data.subtotal, 'price')}</span></div>
+                <div class="totals-row"><span>الاجمالي:</span><span>${formatCurrencyValue(data.subtotal, 'price')}</span></div>
                 <div class="totals-row"><span>الخصم:</span><span>${formatCurrencyValue(data.discount, 'price')}</span></div>
-                <div class="totals-row total"><span>الإجمالي النهائي:</span><span>${formatCurrencyValue(data.total, 'price')}</span></div>
+                <div class="totals-row total"><span>الاجمالي:</span><span>${formatCurrencyValue(data.total, 'price')}</span></div>
               </div>
             </div>
           </div>
@@ -319,16 +326,16 @@ export function buildInvoiceExportHtml(data: InvoicePrintData, settings: Company
 }
 
 export function buildInvoiceCsv(data: InvoicePrintData): string {
-  const headers = data.productionMode ? ['المادة', 'الكمية المخططة', 'الكمية المصروفة', 'التكلفة'] : ['الرقم', 'رقم المادة', 'اسم المادة', 'الوحدة', 'الكمية', 'السعر', 'الإجمالي']
+  const headers = data.productionMode ? ['المادة', 'الكمية المخططة', 'الكمية المصروفة', 'التكلفة'] : ['الرقم', 'رقم المادة', 'اسم المادة', 'الوحدة', 'الكمية', 'السعر', 'الاجمالي']
   const rows = data.items.map((item, index) => {
     if (data.productionMode) {
-      return [item.name, formatNumberBySettings(item.plannedQuantity ?? 0, 'quantity'), formatNumberBySettings(item.actualQuantity ?? 0, 'quantity'), formatCurrencyValue(item.cost ?? item.total ?? 0, 'price')].join(',')
+      return [item.name, formatNumberBySettings(item.plannedQuantity ?? 0, 'quantity'), formatNumberBySettings(item.actualQuantity ?? 0, 'quantity'), priceNum(item.cost ?? item.total ?? 0)].join(',')
     }
 
-    return [index + 1, item.code ?? '', item.name, item.unit, formatNumberBySettings(item.quantity ?? 0, 'quantity'), formatCurrencyValue(item.price ?? 0, 'price'), formatCurrencyValue(item.total ?? 0, 'price')].join(',')
+    return [index + 1, item.code ?? '', item.name, item.unit, formatNumberBySettings(item.quantity ?? 0, 'quantity'), priceNum(item.price ?? 0), priceNum(item.total ?? 0)].join(',')
   })
 
-  const summary = `\n"المجموع","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"\n"الإجمالي النهائي","${formatCurrencyValue(data.total, 'price')}"`
+  const summary = `\n"الاجمالي","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"\n"الاجمالي","${formatCurrencyValue(data.total, 'price')}"`
   return `"${data.title}","${data.documentNumber}"\n"التاريخ","${data.date}"\n"${data.partyLabel}","${data.partyName}"\n${headers.join(',')}\n${rows.join('\n')}${summary}`
 }
 

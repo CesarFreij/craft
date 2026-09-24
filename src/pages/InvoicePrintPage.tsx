@@ -2,15 +2,21 @@ import { Box, Button, CircularProgress, Stack } from '@mui/material'
 import { useEffect, useMemo, useState, type WheelEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { InvoicePrintTemplate } from '../components/print/InvoicePrintTemplate'
+import { DelegateStatementPrintTemplate, type DelegateStatementPrintData } from '../components/print/DelegateStatementPrintTemplate'
+import { CustomerStatementPrintTemplate } from '../components/print/CustomerStatementPrintTemplate'
+import { SupplierStatementPrintTemplate } from '../components/print/SupplierStatementPrintTemplate'
+import type { AccountStatementPrintData } from '../types/accountStatement'
 import type { CompanyPrintSettings, InvoicePrintData, InvoicePrintItem } from '../types/invoicePrint'
 import { useNotifications } from '../contexts/useNotifications'
+
+type PrintableData = InvoicePrintData | DelegateStatementPrintData | AccountStatementPrintData
 
 declare global {
   interface Window {
     invoicePrintAPI?: {
       onInvoiceData: (
         callback: (payload: {
-          invoiceData: InvoicePrintData
+          invoiceData: PrintableData
           settings: CompanyPrintSettings
         }) => void,
       ) => void
@@ -19,7 +25,7 @@ declare global {
     }
     craftExportAPI?: {
       exportInvoicePdf: (payload: {
-        invoiceData: InvoicePrintData
+        invoiceData: PrintableData
         settings: CompanyPrintSettings
         fileName?: string
       }) => Promise<string>
@@ -36,10 +42,6 @@ const MAX_PREVIEW_SCALE = 1.6
 const PREVIEW_SCALE_STEP = 0.08
 const PAGE_GAP_PX = 18
 
-// Conservative capacities so each visual sheet remains inside a real A4 page.
-// The first page reserves space for the logo/company/document information.
-// Continuation pages contain only the table header + rows.
-// The final continuation page also reserves space for totals/payment/notes.
 const FIRST_PAGE_ROWS = 11
 const CONTINUATION_PAGE_ROWS = 21
 const LAST_PAGE_ROWS = 17
@@ -93,7 +95,6 @@ function buildPageChunks(data: InvoicePrintDataWithDiscount): InvoicePageChunk[]
     (_, index) => baseSize + (index < extra ? 1 : 0),
   )
 
-  // Keep the last page small enough for totals/payment/notes.
   const lastIndex = pageSizes.length - 1
   let overflowFromLast = Math.max(0, pageSizes[lastIndex] - finalPageCapacity)
 
@@ -137,11 +138,11 @@ export default function InvoicePrintPage() {
   const navigate = useNavigate()
 
   const [payload, setPayload] = useState<{
-    invoiceData: InvoicePrintData
+    invoiceData: PrintableData
     settings: CompanyPrintSettings
   } | null>(
     (location.state as {
-      invoiceData: InvoicePrintData
+      invoiceData: PrintableData
       settings: CompanyPrintSettings
     } | null) ?? null,
   )
@@ -153,7 +154,11 @@ export default function InvoicePrintPage() {
   const isPdfMode = new URLSearchParams(location.search).get('mode') === 'pdf'
 
   const pageChunks = useMemo(
-    () => (payload ? buildPageChunks(payload.invoiceData) : []),
+    () => (payload && payload.invoiceData.printKind !== 'delegate-statement' && payload.invoiceData.printKind !== 'supplier-statement' && payload.invoiceData.printKind !== 'customer-statement'
+      ? buildPageChunks(payload.invoiceData as InvoicePrintDataWithDiscount)
+      : payload
+        ? [{ items: [], isFirst: true, isLast: true }]
+        : []),
     [payload],
   )
 
@@ -163,7 +168,7 @@ export default function InvoicePrintPage() {
   useEffect(() => {
     if (!payload && window.invoicePrintAPI) {
       const handleData = (nextPayload: {
-        invoiceData: InvoicePrintData
+        invoiceData: PrintableData
         settings: CompanyPrintSettings
       }) => {
         setPayload(nextPayload)
@@ -186,6 +191,11 @@ export default function InvoicePrintPage() {
 
     const ready = async () => {
       await document.fonts.ready
+      await Promise.all(
+        [400, 500, 700, 800, 900].map((weight) =>
+          document.fonts.load(`${weight} 16px Tajawal`),
+        ),
+      )
 
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
@@ -203,8 +213,6 @@ export default function InvoicePrintPage() {
     }
 
     const updateFitScale = () => {
-      // One A4 page should fit exactly inside the viewport with no initial scroll.
-      // Multi-page invoices keep a tiny vertical breathing room because scrolling is expected.
       const horizontalSpace = 24
       const verticalSpace = isMultiPage ? 24 : 0
 
@@ -258,9 +266,15 @@ export default function InvoicePrintPage() {
       return
     }
 
-    const fileName = `${(
-      payload.invoiceData.documentNumber || 'invoice'
-    ).replace(/[^a-zA-Z0-9\-_]+/g, '_')}.pdf`
+    let fileBaseName = payload.invoiceData.documentNumber || 'invoice'
+    
+    if (payload.invoiceData.printKind === 'delegate-statement') {
+      fileBaseName = `delegate-statement-${payload.invoiceData.documentNumber || 'report'}`
+    } else if (payload.invoiceData.printKind === 'supplier-statement' || payload.invoiceData.printKind === 'customer-statement') {
+      fileBaseName = `account-statement-${payload.invoiceData.documentNumber || 'report'}`
+    }
+    
+    const fileName = `${fileBaseName.replace(/[^a-zA-Z0-9\-_]+/g, '_')}.pdf`
 
     try {
       await window.craftExportAPI?.exportInvoicePdf({
@@ -270,7 +284,6 @@ export default function InvoicePrintPage() {
       })
       notify.success('تم حفظ ملف PDF بنجاح.')
     } catch (error) {
-      // User cancelled save dialog or error occurred
       if (!(error instanceof Error && error.message.includes('Cancelled'))) {
         console.error('PDF EXPORT FAILED', error)
       }
@@ -300,7 +313,7 @@ export default function InvoicePrintPage() {
   ) => {
     const pageNumber = pageIndex + 1
 
-    const pageData: InvoicePrintDataWithDiscount = {
+    const pageData: PrintableData = {
       ...payload.invoiceData,
       items: chunk.items,
     }
@@ -337,9 +350,6 @@ export default function InvoicePrintPage() {
             transform: pdfMode ? 'none' : `scale(${scale})`,
             transformOrigin: 'top left',
 
-            // Do not touch the actual invoice design.
-            // We only suppress the top blocks on continuation pages,
-            // and suppress totals until the final page.
             ...(hideTopSections
               ? {
                   '& .craft-print-visible > :nth-of-type(1)': {
@@ -377,10 +387,27 @@ export default function InvoicePrintPage() {
             },
           }}
         >
-          <InvoicePrintTemplate
-            data={pageData}
-            settings={payload.settings}
-          />
+          {pageData.printKind === 'delegate-statement' ? (
+            <DelegateStatementPrintTemplate
+              data={pageData as DelegateStatementPrintData}
+              settings={payload.settings}
+            />
+          ) : pageData.printKind === 'supplier-statement' ? (
+            <SupplierStatementPrintTemplate 
+              data={pageData as AccountStatementPrintData} 
+              settings={payload.settings} 
+            />
+          ) : pageData.printKind === 'customer-statement' ? (
+            <CustomerStatementPrintTemplate 
+              data={pageData as AccountStatementPrintData} 
+              settings={payload.settings} 
+            />
+          ) : (
+            <InvoicePrintTemplate
+              data={pageData as InvoicePrintData}
+              settings={payload.settings}
+            />
+          )}
 
           <Box
             aria-hidden="true"

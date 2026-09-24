@@ -877,7 +877,7 @@ export function ManufacturingRecipesPage() {
                     : '',
                 }))
               }}
-              slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
+              slotProps={{ htmlInput: { min: 0, step: 1 } }}
               required
               fullWidth
             />
@@ -961,7 +961,7 @@ export function ManufacturingRecipesPage() {
                             variant="outlined"
                             size="small"
                             fullWidth
-                            slotProps={{ htmlInput: { min: 0, step: 0.01 } }}
+                            slotProps={{ htmlInput: { min: 0, step: 1 } }}
                             sx={{ '& input': { textAlign: 'center' } }}
                           />
                         </Box>

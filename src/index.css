@@ -1,5 +1,45 @@
+@font-face {
+  font-family: 'Tajawal';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/Tajawal-Regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Tajawal';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./assets/fonts/Tajawal-Medium.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Tajawal';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./assets/fonts/Tajawal-Bold.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Tajawal';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('./assets/fonts/Tajawal-ExtraBold.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Tajawal';
+  font-style: normal;
+  font-weight: 900;
+  font-display: swap;
+  src: url('./assets/fonts/Tajawal-Black.ttf') format('truetype');
+}
+
 :root {
-  font-family: 'Inter', 'Noto Kufi Arabic', 'Segoe UI', sans-serif;
+  font-family: 'Tajawal', Tahoma, Arial, sans-serif;
   font-size: 14px;
   line-height: 1.6;
   direction: rtl;
@@ -11,6 +51,7 @@
 
 * {
   box-sizing: border-box;
+  font-family: 'Tajawal', Tahoma, Arial, sans-serif;
 }
 
 html,
@@ -18,12 +59,14 @@ body,
 #root {
   min-height: 100%;
   height: 100%;
+  font-family: 'Tajawal', Tahoma, Arial, sans-serif;
 }
 
 body {
   margin: 0;
   background: #F4F7FA;
   overflow: hidden;
+  font-family: 'Tajawal', Tahoma, Arial, sans-serif;
 }
 
 button,
@@ -31,6 +74,7 @@ input,
 textarea,
 select {
   font: inherit;
+  font-family: 'Tajawal', Tahoma, Arial, sans-serif;
 }
 
 a {

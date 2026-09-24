@@ -512,6 +512,8 @@ export function getReportData(db, reportType, filters = {}) {
               si.net_total, COALESCE(si.customer_additional_fees, 0) AS customer_additional_fees,
               COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0) AS return_total,
               COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) AS paid_amount,
+              COALESCE((SELECT GROUP_CONCAT(sid.delegate_name, '، ') FROM sales_invoice_delegates sid WHERE sid.invoice_id = si.id), '') AS delegate_names,
+              COALESCE((SELECT SUM(si.net_total * sid.commission_percentage / 100) FROM sales_invoice_delegates sid WHERE sid.invoice_id = si.id), 0) AS delegate_commission_total,
               si.status
        FROM sales_invoices si
        LEFT JOIN customers c ON c.id = si.customer_id
@@ -573,7 +575,9 @@ export function getReportData(db, reportType, filters = {}) {
           customerAdditionalFees: normalizeNumber(row[6]),
           paidAmount,
           remainingAmount: Math.max(netTotal - paidAmount, 0),
-          status: row[9] ?? '',
+          delegateNames: row[9] ?? '',
+          delegateCommissionTotal: normalizeNumber(row[10]),
+          status: row[11] ?? '',
         }
       }),
       chartSeries,
@@ -1031,6 +1035,8 @@ export function getReportExportRows(db, reportType, filters = {}) {
               si.net_total, COALESCE(si.customer_additional_fees, 0) AS customer_additional_fees,
               COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0) AS return_total,
               COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) AS paid_amount,
+              COALESCE((SELECT GROUP_CONCAT(sid.delegate_name, '، ') FROM sales_invoice_delegates sid WHERE sid.invoice_id = si.id), '') AS delegate_names,
+              COALESCE((SELECT SUM(si.net_total * sid.commission_percentage / 100) FROM sales_invoice_delegates sid WHERE sid.invoice_id = si.id), 0) AS delegate_commission_total,
               si.status
        FROM sales_invoices si
        LEFT JOIN customers c ON c.id = si.customer_id
@@ -1055,7 +1061,9 @@ export function getReportExportRows(db, reportType, filters = {}) {
         customerAdditionalFees,
         paidAmount,
         remainingAmount: Math.max(netTotal - paidAmount, 0),
-        status: row[9] ?? '',
+        delegateNames: row[9] ?? '',
+        delegateCommissionTotal: normalizeNumber(row[10]),
+        status: row[11] ?? '',
       }
     })
   }

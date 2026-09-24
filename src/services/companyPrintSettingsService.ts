@@ -1,7 +1,5 @@
 import type { CompanyPrintSettings } from '../types/invoicePrint'
 
-const STORAGE_KEY = 'craft-company-print-settings-v1'
-
 export const defaultCompanyPrintSettings: CompanyPrintSettings = {
   companyName: '',
   address: '',
@@ -11,42 +9,41 @@ export const defaultCompanyPrintSettings: CompanyPrintSettings = {
   logoDataUrl: '',
 }
 
-export function loadCompanyPrintSettings(): CompanyPrintSettings {
-  try {
-    const rawValue = window.localStorage.getItem(STORAGE_KEY)
-    if (!rawValue) {
-      return { ...defaultCompanyPrintSettings }
+declare global {
+  interface Window {
+    craftCompanyPrintSettingsAPI?: {
+      get: () => Promise<Partial<CompanyPrintSettings>>
+      save: (settings: CompanyPrintSettings) => Promise<Partial<CompanyPrintSettings>>
     }
+  }
+}
 
-    const parsed = JSON.parse(rawValue) as Partial<CompanyPrintSettings>
-    return {
-      companyName: parsed.companyName ?? '',
-      address: parsed.address ?? '',
-      phone: parsed.phone ?? '',
-      email: parsed.email ?? '',
-      taxNumber: parsed.taxNumber ?? '',
-      logoDataUrl: parsed.logoDataUrl ?? '',
-    }
+function normalizeCompanyPrintSettings(settings: Partial<CompanyPrintSettings> | null | undefined): CompanyPrintSettings {
+  return {
+    companyName: settings?.companyName ?? '',
+    address: settings?.address ?? '',
+    phone: settings?.phone ?? '',
+    email: settings?.email ?? '',
+    taxNumber: settings?.taxNumber ?? '',
+    logoDataUrl: settings?.logoDataUrl ?? '',
+  }
+}
+
+export async function loadCompanyPrintSettings(): Promise<CompanyPrintSettings> {
+  try {
+    if (!window.craftCompanyPrintSettingsAPI) return { ...defaultCompanyPrintSettings }
+    return normalizeCompanyPrintSettings(await window.craftCompanyPrintSettingsAPI.get())
   } catch {
     return { ...defaultCompanyPrintSettings }
   }
 }
 
-export function saveCompanyPrintSettings(settings: CompanyPrintSettings): CompanyPrintSettings {
-  const normalized = {
-    companyName: settings.companyName ?? '',
-    address: settings.address ?? '',
-    phone: settings.phone ?? '',
-    email: settings.email ?? '',
-    taxNumber: settings.taxNumber ?? '',
-    logoDataUrl: settings.logoDataUrl ?? '',
-  }
-
+export async function saveCompanyPrintSettings(settings: CompanyPrintSettings): Promise<CompanyPrintSettings> {
+  const normalized = normalizeCompanyPrintSettings(settings)
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized))
+    if (!window.craftCompanyPrintSettingsAPI) return normalized
+    return normalizeCompanyPrintSettings(await window.craftCompanyPrintSettingsAPI.save(normalized))
   } catch {
-    // Ignore storage failures and keep in-memory state.
+    return normalized
   }
-
-  return normalized
 }

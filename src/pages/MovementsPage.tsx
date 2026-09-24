@@ -7,7 +7,11 @@ import { SearchField } from '../components/ui/SearchField'
 import { SectionCard } from '../components/ui/SectionCard'
 import { PageHeader } from '../components/ui/PageHeader'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatCurrencyValue, formatDateDMY, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { formatDateDMY, formatNumberBySettings, getLocalDateTimeString, toInternalDate } from '../utils/displayFormatting'
+
+function priceNum(value: number | undefined): string {
+  return formatNumberBySettings(Number(value ?? 0), 'price')
+}
 import { useNotifications } from '../contexts/useNotifications'
 
 
@@ -451,7 +455,46 @@ function getMovementTypeLabel(type: string, reference?: string): string {
 }
 
 function getMovementWarehouseLabel(name: string | null | undefined): string {
-  return name?.trim() ? name : '__'
+  return name?.trim() ? name : ''
+}
+
+function sanitizeMovementNote(rawNote: string | null | undefined): string {
+  if (!rawNote || typeof rawNote !== 'string') {
+    return ''
+  }
+
+  const trimmed = rawNote.trim()
+
+  if (!trimmed) {
+    return ''
+  }
+
+  if (trimmed.toLowerCase() === 'opening balance') {
+    return ''
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed)
+
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      'snapshot' in parsed &&
+      'lineNotes' in parsed
+    ) {
+      const lineNotes =
+        typeof parsed.lineNotes === 'string'
+          ? parsed.lineNotes.trim()
+          : ''
+
+      return lineNotes
+    }
+  } catch {
+    return trimmed
+  }
+
+  return trimmed
 }
 
 function DateFilterField({
@@ -729,7 +772,7 @@ export default function MovementsPage() {
     if (row.customerName) {
       return row.customerName
     }
-    return '__'
+    return ''
   }
 
   return (
@@ -797,9 +840,9 @@ export default function MovementsPage() {
                       </Box>
                     </TableCell>
                     <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{row.itemCount ?? 0}</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{row.warehouseSummary || '__'}</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{row.warehouseSummary || ''}</TableCell>
                     <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{getMovementParty({ ...row, partyName: row.partyName ?? undefined } as MovementRow)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{row.documentNotes?.trim() ? row.documentNotes : '__'}</TableCell>
+                    <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{sanitizeMovementNote(row.documentNotes) || ''}</TableCell>
                     <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>
                       <Button size="small" variant="outlined" onClick={() => openMovementDetails(row.reference)}>عرض التفاصيل</Button>
                     </TableCell>
@@ -947,7 +990,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
     const doc: StockMovementDocument = {
       reference: transferReference,
       type: 'transfer',
-      date: new Date().toISOString(),
+      date: getLocalDateTimeString(),
       fromWarehouseId: fromWarehouse,
       toWarehouseId: toWarehouse,
       notes: notes.trim(),
@@ -1127,12 +1170,12 @@ function MovementDetailsDialog({ open, onClose, details }: { open: boolean; onCl
           <CircularProgress />
         ) : (
           <>
-            <Box>رقم المستند: {details.reference || '__'}</Box>
+            <Box>رقم المستند: {details.reference || ''}</Box>
             <Box>نوع الحركة: {getMovementTypeLabel(details.type, details.reference)}</Box>
-            <Box>التاريخ: {formatDateDMY(details.date) || '__'}</Box>
+            <Box>التاريخ: {formatDateDMY(details.date) || ''}</Box>
             <Box>من مخزن: {getMovementWarehouseLabel(details.fromWarehouseName)}</Box>
             <Box>إلى مخزن: {getMovementWarehouseLabel(details.toWarehouseName)}</Box>
-            <Box>الجهة: {details.partyName || '__'}</Box>
+            <Box>الجهة: {details.partyName || ''}</Box>
             <Box>
               <Table sx={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <TableHead>
@@ -1149,13 +1192,15 @@ function MovementDetailsDialog({ open, onClose, details }: { open: boolean; onCl
                 <TableBody>
                   {details.items?.map((item: MovementDetailItem, index: number) => (
                     <TableRow key={index}>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.materialNumber ? `${item.materialNumber} - ${item.materialName ?? ''}` : item.materialName ?? '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.warehouseName || '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityIn ?? 0) > 0 ? formatNumberBySettings(item.quantityIn ?? 0, 'quantity') : '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityOut ?? 0) > 0 ? formatNumberBySettings(item.quantityOut ?? 0, 'quantity') : '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.unit || '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.cost !== null && item.cost !== undefined ? formatCurrencyValue(item.cost, 'price') : '__'}</TableCell>
-                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.notes?.trim() ? item.notes : '__'}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.materialNumber ? `${item.materialNumber} - ${item.materialName ?? ''}` : item.materialName ?? ''}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.warehouseName || ''}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityIn ?? 0) > 0 ? formatNumberBySettings(item.quantityIn ?? 0, 'quantity') : ''}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{Number(item.quantityOut ?? 0) > 0 ? formatNumberBySettings(item.quantityOut ?? 0, 'quantity') : ''}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{item.unit || ''}</TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                          {item.cost !== null && item.cost !== undefined ? priceNum(item.cost) : ''}
+                        </TableCell>
+                      <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{sanitizeMovementNote(item.notes) || ''}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

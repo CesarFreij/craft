@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -35,11 +36,19 @@ import {
   getStockBalancesByWarehouse,
   getStockBalancesByMaterial,
   getDatabase,
+  getCompanyPrintSettings,
+  saveCompanyPrintSettings,
   listSuppliers,
   listActiveSuppliers,
   createSupplier,
   updateSupplier,
   deleteSupplier,
+  listAccountPayments,
+  createAccountPayment,
+  deleteAccountPayment,
+  listReturnPayments,
+  createReturnPayment,
+  deleteReturnPayment,
   getNextPurchaseInvoiceDraftData,
   listPurchaseInvoices,
   getPurchaseInvoiceById,
@@ -61,6 +70,14 @@ import {
   createCustomer,
   updateCustomer,
   deleteCustomer,
+  listDelegates,
+  listActiveDelegates,
+  createDelegate,
+  updateDelegate,
+  deleteDelegate,
+  getDelegatePayments,
+  createDelegatePayment,
+  deleteDelegatePayment,
   getNextSalesInvoiceDraftData,
   listSalesInvoices,
   getSalesInvoiceById,
@@ -81,14 +98,13 @@ import {
   restoreDatabaseFromBackup,
   resetDatabase,
   getDatabaseFilePath,
+  setNumberFormatSettings,
 } from './materialsRepository.js'
 import { fileURLToPath } from 'node:url'
 import { getReportData, getReportExportRows } from './reports.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// Keep Chromium cache/session files separate between development and the installed app.
-// This prevents npm run dev from fighting with a packaged Craft process over the same cache.
 app.setPath(
   'sessionData',
   path.join(
@@ -237,7 +253,6 @@ async function exportInvoicePdfFromHtml({ invoiceData, settings, fileName }) {
 
   try {
     console.log('Loading PDF-only invoice route:', renderUrl)
-    await exportWindow.loadURL(renderUrl)
 
     const ready = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -272,7 +287,9 @@ async function exportInvoicePdfFromHtml({ invoiceData, settings, fileName }) {
       })
     })
 
-    // Send data only after the PDF-only route has fully loaded and the ready listener is installed.
+    await exportWindow.loadURL(renderUrl)
+
+    // The preload buffers this payload until InvoicePrintPage registers its listener.
     exportWindow.webContents.send('invoice-preview:data', { invoiceData, settings })
     await ready
 
@@ -778,6 +795,10 @@ ipcMain.handle('invoice:exportPdf', async (_, { invoiceData, settings, fileName 
   return exportInvoicePdfFromHtml({ invoiceData, settings, fileName })
 })
 
+ipcMain.handle('settings:setNumberFormat', async (_, settings) => {
+  return setNumberFormatSettings(settings || {})
+})
+
 // Stock movements IPC
 ipcMain.handle('movements:list', async (_, filter) => {
   return listStockMovements(filter || {})
@@ -830,6 +851,18 @@ ipcMain.handle('suppliers:update', async (_, { id, payload }) => {
 
 ipcMain.handle('suppliers:delete', async (_, id) => {
   return deleteSupplier(id)
+})
+
+ipcMain.handle('suppliers:listPayments', async (_, supplierId) => {
+  return listAccountPayments('supplier', supplierId)
+})
+
+ipcMain.handle('suppliers:createPayment', async (_, payload) => {
+  return createAccountPayment('supplier', { ...payload, entityId: payload?.supplierId })
+})
+
+ipcMain.handle('suppliers:deletePayment', async (_, paymentId) => {
+  return deleteAccountPayment('supplier', paymentId)
 })
 
 // Purchase invoices IPC
@@ -897,6 +930,18 @@ ipcMain.handle('purchases:deleteReturn', async (_, returnId) => {
   return deletePurchaseReturn(returnId)
 })
 
+ipcMain.handle('purchases:listReturnPayments', async (_, returnId) => {
+  return listReturnPayments('purchase-return', returnId)
+})
+
+ipcMain.handle('purchases:createReturnPayment', async (_, { returnId, payload }) => {
+  return createReturnPayment('purchase-return', returnId, payload)
+})
+
+ipcMain.handle('purchases:deleteReturnPayment', async (_, paymentId) => {
+  return deleteReturnPayment('purchase-return', paymentId)
+})
+
 // Customers IPC
 ipcMain.handle('customers:list', async () => {
   return listCustomers()
@@ -916,6 +961,51 @@ ipcMain.handle('customers:update', async (_, { id, payload }) => {
 
 ipcMain.handle('customers:delete', async (_, id) => {
   return deleteCustomer(id)
+})
+
+ipcMain.handle('customers:listPayments', async (_, customerId) => {
+  return listAccountPayments('customer', customerId)
+})
+
+ipcMain.handle('customers:createPayment', async (_, payload) => {
+  return createAccountPayment('customer', { ...payload, entityId: payload?.customerId })
+})
+
+ipcMain.handle('customers:deletePayment', async (_, paymentId) => {
+  return deleteAccountPayment('customer', paymentId)
+})
+
+// Delegates IPC
+ipcMain.handle('delegates:list', async () => {
+  return listDelegates()
+})
+
+ipcMain.handle('delegates:listActive', async () => {
+  return listActiveDelegates()
+})
+
+ipcMain.handle('delegates:create', async (_, payload) => {
+  return createDelegate(payload)
+})
+
+ipcMain.handle('delegates:update', async (_, { id, payload }) => {
+  return updateDelegate(id, payload)
+})
+
+ipcMain.handle('delegates:delete', async (_, id) => {
+  return deleteDelegate(id)
+})
+
+ipcMain.handle('delegates:getPayments', async (_, delegateId) => {
+  return getDelegatePayments(delegateId)
+})
+
+ipcMain.handle('delegates:createPayment', async (_, payload) => {
+  return createDelegatePayment(payload)
+})
+
+ipcMain.handle('delegates:deletePayment', async (_, paymentId) => {
+  return deleteDelegatePayment(paymentId)
 })
 
 // Sales invoices IPC
@@ -981,6 +1071,18 @@ ipcMain.handle('sales:updateReturn', async (_, { returnId, payload }) => {
 
 ipcMain.handle('sales:deleteReturn', async (_, returnId) => {
   return deleteSalesReturn(returnId)
+})
+
+ipcMain.handle('sales:listReturnPayments', async (_, returnId) => {
+  return listReturnPayments('sales-return', returnId)
+})
+
+ipcMain.handle('sales:createReturnPayment', async (_, { returnId, payload }) => {
+  return createReturnPayment('sales-return', returnId, payload)
+})
+
+ipcMain.handle('sales:deleteReturnPayment', async (_, paymentId) => {
+  return deleteReturnPayment('sales-return', paymentId)
 })
 
 ipcMain.handle('data:getAutoBackupSettings', async () => {
@@ -1058,6 +1160,14 @@ ipcMain.handle('data:restoreBackup', async (_, backupFilePath) => {
 
 ipcMain.handle('data:resetDatabase', async (_, confirmationText) => {
   return resetDatabase({ confirmationText })
+})
+
+ipcMain.handle('companyPrintSettings:get', async () => {
+  return getCompanyPrintSettings()
+})
+
+ipcMain.handle('companyPrintSettings:save', async (_, settings) => {
+  return saveCompanyPrintSettings(settings)
 })
 
 app.on('before-quit', (event) => {

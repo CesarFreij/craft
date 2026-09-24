@@ -25,7 +25,7 @@ export function PageHeader({ title, breadcrumb, actions }: PageHeaderProps) {
     >
       <Typography
         sx={{
-          fontSize: 22,
+          fontSize: '1.571rem',
           fontWeight: 700,
           lineHeight: 1.25,
           mb: 0.25,
@@ -38,7 +38,7 @@ export function PageHeader({ title, breadcrumb, actions }: PageHeaderProps) {
       <Typography
         sx={{
           color: 'rgba(255, 255, 255, 0.82)',
-          fontSize: 12,
+          fontSize: '0.857rem',
           lineHeight: 1.5,
           mb: actions ? 1.2 : 0,
         }}

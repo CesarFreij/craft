@@ -1,4 +1,9 @@
-export type InvoiceDocumentType = 'sales' | 'purchase' | 'sales-return' | 'purchase-return' | 'production'
+export type InvoiceDocumentType =
+  | 'sales'
+  | 'purchase'
+  | 'sales-return'
+  | 'purchase-return'
+  | 'production'
 
 export interface CompanyPrintSettings {
   companyName: string
@@ -24,12 +29,17 @@ export interface InvoicePrintItem {
 }
 
 export interface InvoicePrintData {
+  printKind?: 'invoice' | 'delegate-statement' | 'supplier-statement' | 'customer-statement'
   documentType: InvoiceDocumentType
   title: string
   documentNumber: string
   date: string
+  dueDate?: string
   partyLabel: string
   partyName: string
+  partyNumber?: string
+  partyPhone?: string
+  delegateNames?: string[]
   referenceLabel?: string
   referenceValue?: string
   warehouseName?: string
@@ -42,5 +52,8 @@ export interface InvoicePrintData {
   additionalFees?: number
   total: number
   paymentMethod?: string
+  paymentStatus?: string
+  paidAmount?: number
+  remainingAmount?: number
   productionMode?: boolean
 }

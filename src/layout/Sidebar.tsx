@@ -1,64 +1,15 @@
 import { Box, Collapse, Divider, IconButton, Typography } from '@mui/material'
 import { motion } from 'framer-motion'
-import { FiHome, FiDatabase, FiBox, FiShoppingBag, FiPackage, FiFileText, FiBarChart2, FiSettings, FiChevronLeft } from 'react-icons/fi'
+import { FiChevronLeft } from 'react-icons/fi'
 import { Link, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
+import { 
+  navItems
+} from '../constants/navigation'
 
 export const SIDEBAR_EXPANDED_WIDTH = 282
 export const SIDEBAR_COLLAPSED_WIDTH = 96
 
-const inventoryMenuItems = [
-  { label: 'إضافة مخازن', path: '/inventory/warehouses' },
-  { label: 'أرصدة المخازن', path: '/inventory/balances' },
-  { label: 'تسوية جرد', path: '/inventory/adjustments' },
-  { label: 'حركات المخازن', path: '/inventory/movements' },
-]
-
-const purchasesMenuItems = [
-  { label: 'إضافة مورد', path: '/suppliers' },
-  { label: 'فاتورة شراء جديدة', path: '/purchases' },
-  { label: 'مرتجع شراء', path: '/purchase-returns' },
-]
-
-const salesMenuItems = [
-  { label: 'إضافة عميل', path: '/customers' },
-  { label: 'فاتورة بيع جديدة', path: '/sales' },
-  { label: 'مرتجع بيع', path: '/sales-returns' },
-]
-
-const manufacturingMenuItems = [
-  { label: 'نماذج التصنيع', path: '/manufacturing-recipes' },
-  { label: 'أوامر الإنتاج', path: '/manufacturing-orders' },
-]
-
-const reportsMenuItems = [
-  { label: 'أرصدة المخزون', path: '/reports?type=stock_balances' },
-  { label: 'المشتريات', path: '/reports?type=purchases' },
-  { label: 'المبيعات', path: '/reports?type=sales' },
-  { label: 'حركات المخزون', path: '/reports?type=movements' },
-  { label: 'تسويات الجرد', path: '/reports?type=inventory_adjustments' },
-  { label: 'الإنتاج', path: '/reports?type=production' },
-  { label: 'تكلفة الإنتاج', path: '/reports?type=production_cost' },
-]
-
-const settingsMenuItems = [
-  { label: 'بيانات الشركة', path: '/settings?section=company' },
-  { label: 'العملة والأرقام', path: '/settings?section=numbers' },
-  { label: 'المبيعات', path: '/settings?section=sales' },
-  { label: 'طرق الدفع', path: '/settings?section=payments' },
-  { label: 'إدارة البيانات', path: '/settings?section=data' },
-]
-
-const navItems = [
-  { key: 'home', label: 'الرئيسية', path: '/', icon: FiHome },
-  { key: 'materials', label: 'دليل المواد', path: '/materials', icon: FiDatabase },
-  { key: 'inventory', label: 'إضافة مخازن', path: '/inventory/warehouses', icon: FiBox, submenu: inventoryMenuItems },
-  { key: 'purchases', label: 'المشتريات والموردين', path: '/purchases', icon: FiShoppingBag, submenu: purchasesMenuItems },
-  { key: 'sales', label: 'المبيعات والعملاء', path: '/sales', icon: FiFileText, submenu: salesMenuItems },
-  { key: 'manufacturing', label: 'الإنتاج والتصنيع', path: '/manufacturing', icon: FiPackage, submenu: manufacturingMenuItems },
-  { key: 'reports', label: 'التقارير', path: '/reports', icon: FiBarChart2, submenu: reportsMenuItems },
-  { key: 'settings', label: 'الإعدادات', path: '/settings', icon: FiSettings, submenu: settingsMenuItems },
-]
 
 export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const location = useLocation()
@@ -79,7 +30,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
         return
       }
 
-      if (location.pathname === '/customers' || location.pathname.startsWith('/sales') || location.pathname === '/sales-returns') {
+      if (location.pathname === '/customers' || location.pathname === '/delegates' || location.pathname.startsWith('/sales') || location.pathname === '/sales-returns') {
         setExpandedSection('sales')
         setActiveParentSection('sales')
         return

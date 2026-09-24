@@ -12,6 +12,7 @@ import { PurchaseReturnsPage } from '../pages/PurchaseReturnsPage'
 import { ManufacturingPage } from '../pages/ManufacturingPage'
 import { ProductionOrdersPage } from '../pages/ProductionOrdersPage'
 import { SalesPage } from '../pages/SalesPage'
+import { DelegatesPage } from '../pages/DelegatesPage'
 import { SalesReturnsPage } from '../pages/SalesReturnsPage'
 import { ReportsPage } from '../pages/ReportsPage'
 import { SettingsPage } from '../pages/SettingsPage'
@@ -37,6 +38,7 @@ export default function AppRoutes() {
         <Route path="/manufacturing-orders" element={<ProductionOrdersPage />} />
         <Route path="/sales" element={<SalesPage />} />
         <Route path="/customers" element={<SalesPage />} />
+        <Route path="/delegates" element={<DelegatesPage />} />
         <Route path="/sales-returns" element={<SalesReturnsPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

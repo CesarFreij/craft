@@ -2,7 +2,7 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 export type PrimaryColorOption = 'blue' | 'cyan'
 export type BorderRadiusOption = 'small' | 'medium' | 'large'
 export type SidebarStyleOption = 'glass' | 'solid'
-export type FontSizeOption = 'small' | 'medium' | 'large'
+export type FontSizeOption = 'small' | 'default' | 'medium' | 'large' | 'extraLarge'
 export type AutoBackupMode = 'new' | 'replace'
 
 export type DefaultSalesPriceType =
@@ -35,20 +35,21 @@ export interface AppSettings {
 }
 
 const STORAGE_KEY = 'craft-app-settings-v1'
+const DEFAULTS_MIGRATION_KEY = 'craft-app-settings-defaults-v3'
 
 export const defaultSettings: AppSettings = {
   mode: 'system',
   primaryColor: 'blue',
   sidebarStyle: 'glass',
   borderRadius: 'medium',
-  fontSize: 'medium',
+  fontSize: 'default',
   quantityDecimals: 2,
   priceDecimals: 2,
-  averageDecimals: 2,
-  currencyName: 'ريال',
-  currencySymbol: 'ر.س',
-  paymentMethods: ['نقدا', 'انستباي'],
-  defaultSalesPriceType: 'average',
+  averageDecimals: 4,
+  currencyName: 'ليرة سورية جديدة',
+  currencySymbol: 'ل.س',
+  paymentMethods: ['دفعة نقدية'],
+  defaultSalesPriceType: 'price1',
   salesPrice1Name: 'سعر البيع الأول',
   salesPrice2Name: 'سعر البيع الثاني',
   salesPrice3Name: 'سعر البيع الثالث',
@@ -61,14 +62,63 @@ export const defaultSettings: AppSettings = {
 
 const legacyKeys = ['craft-theme-settings-v1', 'craft-theme-settings']
 
+declare global {
+  interface Window {
+    craftSettingsAPI?: {
+      setNumberFormat: (settings: Pick<AppSettings, 'quantityDecimals' | 'priceDecimals' | 'averageDecimals'>) => Promise<unknown>
+    }
+  }
+}
+
+function syncNumberFormatSettings(settings: AppSettings): void {
+  if (typeof window === 'undefined' || !window.craftSettingsAPI?.setNumberFormat) {
+    return
+  }
+
+  void window.craftSettingsAPI.setNumberFormat({
+    quantityDecimals: settings.quantityDecimals,
+    priceDecimals: settings.priceDecimals,
+    averageDecimals: settings.averageDecimals,
+  }).catch(() => undefined)
+}
+
+function normalizePaymentMethodName(value: string): string {
+  const normalized = value.trim()
+
+  if (
+    normalized === 'نقدا' ||
+    normalized === 'نقداً' ||
+    normalized === 'نقدًا'
+  ) {
+    return 'دفعة نقدية'
+  }
+
+  return normalized
+}
+
+function isLegacyInstaPayMethod(value: string): boolean {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+
+  return (
+    normalized === 'instapay' ||
+    normalized === 'انستباي' ||
+    normalized === 'إنستاباي' ||
+    normalized === 'انستاpay'
+  )
+}
+
 function normalizeArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [...defaultSettings.paymentMethods]
   }
 
   const normalized = value
-    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    .map((item) => item.trim())
+    .filter((item): item is string => typeof item === 'string')
+    .map(normalizePaymentMethodName)
+    .filter((item) => item.length > 0)
     .filter((item, index, values) => values.indexOf(item) === index)
 
   return normalized.length > 0 ? normalized : [...defaultSettings.paymentMethods]
@@ -97,7 +147,7 @@ export function normalizeSettings(partial: Partial<AppSettings> | null | undefin
     ? source.borderRadius
     : defaultSettings.borderRadius
 
-  const fontSize: FontSizeOption = source.fontSize === 'small' || source.fontSize === 'medium' || source.fontSize === 'large'
+  const fontSize: FontSizeOption = source.fontSize === 'small' || source.fontSize === 'default' || source.fontSize === 'medium' || source.fontSize === 'large' || source.fontSize === 'extraLarge'
     ? source.fontSize
     : defaultSettings.fontSize
 
@@ -106,7 +156,6 @@ export function normalizeSettings(partial: Partial<AppSettings> | null | undefin
   const averageDecimals = Number.isFinite(source.averageDecimals) ? Number(source.averageDecimals) : defaultSettings.averageDecimals
 
   const normalizedDefaultSalesPriceType =
-    source.defaultSalesPriceType === 'average' ||
     source.defaultSalesPriceType === 'price1' ||
     source.defaultSalesPriceType === 'price2' ||
     source.defaultSalesPriceType === 'price3'
@@ -144,6 +193,40 @@ export function normalizeSettings(partial: Partial<AppSettings> | null | undefin
   }
 }
 
+
+function applyRequestedDefaultsMigration(settings: AppSettings): AppSettings {
+  if (typeof window === 'undefined') {
+    return settings
+  }
+
+  if (window.localStorage.getItem(DEFAULTS_MIGRATION_KEY) === 'done') {
+    return settings
+  }
+
+  const migrated = normalizeSettings({
+    ...settings,
+    currencyName: 'ليرة سورية جديدة',
+    currencySymbol: 'ل.س',
+    averageDecimals: 4,
+    defaultSalesPriceType: 'price1',
+    paymentMethods: [
+      'دفعة نقدية',
+      ...settings.paymentMethods
+        .map((method) => normalizePaymentMethodName(method))
+        .filter(
+          (method) =>
+            method !== 'دفعة نقدية' &&
+            !isLegacyInstaPayMethod(method),
+        ),
+    ],
+  })
+
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated))
+  window.localStorage.setItem(DEFAULTS_MIGRATION_KEY, 'done')
+
+  return migrated
+}
+
 export function loadSettings(): AppSettings {
   try {
     if (typeof window === 'undefined') {
@@ -156,18 +239,23 @@ export function loadSettings(): AppSettings {
       .find((value) => Boolean(value))
     const rawValue = savedFromPrimary ?? legacyValue ?? null
 
-    if (!rawValue) {
-      return { ...defaultSettings, paymentMethods: [...defaultSettings.paymentMethods] }
-    }
+    const loadedSettings = rawValue
+      ? normalizeSettings(JSON.parse(rawValue) as Partial<AppSettings>)
+      : { ...defaultSettings, paymentMethods: [...defaultSettings.paymentMethods] }
 
-    return normalizeSettings(JSON.parse(rawValue) as Partial<AppSettings>)
+    const normalizedSettings = applyRequestedDefaultsMigration(loadedSettings)
+    syncNumberFormatSettings(normalizedSettings)
+    return normalizedSettings
   } catch {
-    return { ...defaultSettings, paymentMethods: [...defaultSettings.paymentMethods] }
+    const fallbackSettings = { ...defaultSettings, paymentMethods: [...defaultSettings.paymentMethods] }
+    syncNumberFormatSettings(fallbackSettings)
+    return fallbackSettings
   }
 }
 
 export function saveSettings(settings: Partial<AppSettings> | AppSettings): AppSettings {
   const normalized = normalizeSettings(settings)
+  syncNumberFormatSettings(normalized)
 
   try {
     if (typeof window !== 'undefined') {

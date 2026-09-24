@@ -133,6 +133,8 @@ export interface PurchaseReturnRecord {
   date: string
   supplierId: string
   supplierName: string
+  supplierCode?: string
+  supplierPhone?: string
   warehouseId: string
   warehouseName: string
   purchaseInvoiceId: string
@@ -144,6 +146,7 @@ export interface PurchaseReturnRecord {
   notes?: string
   createdAt?: string
   updatedAt?: string
+  payments: ReturnPayment[]
   items: Array<{
     id: string
     materialId: string
@@ -171,6 +174,8 @@ export interface SalesReturnRecord {
   date: string
   customerId: string
   customerName: string
+  customerPhone?: string
+  customerCode?: string
   warehouseId: string
   warehouseName: string
   salesInvoiceId: string
@@ -182,6 +187,7 @@ export interface SalesReturnRecord {
   notes?: string
   createdAt?: string
   updatedAt?: string
+  payments: ReturnPayment[]
   items: Array<{
     id: string
     materialId: string
@@ -208,6 +214,62 @@ export interface CustomerRecord {
   updatedAt?: string
 }
 
+export type DelegateStatus = 'active' | 'inactive'
+
+export interface DelegateRecord {
+  id: string
+  code: string
+  name: string
+  phone?: string
+  address?: string
+  notes?: string
+  status?: DelegateStatus
+  isActive?: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface DelegatePayment {
+  id: string
+  delegateId: string
+  date: string
+  amount: number
+  paymentMethod?: string
+  notes?: string
+}
+
+export interface AccountPayment {
+  id: string
+  entityId: string
+  date: string
+  amount: number
+  paymentMethod?: string
+  notes?: string
+  referenceType?: 'purchase-return' | 'sales-return'
+  referenceId?: string
+  referenceNumber?: string
+}
+
+export interface ReturnPayment extends AccountPayment {
+  referenceType: 'purchase-return' | 'sales-return'
+  referenceId: string
+  referenceNumber: string
+}
+
+export interface ReturnPaymentInput {
+  date: string
+  amount: number
+  paymentMethod: string
+  notes?: string
+}
+
+export interface SalesInvoiceDelegate {
+  delegateId: string
+  delegateName: string
+  commissionPercentage: number
+  notes?: string
+}
+
 export interface SalesInvoiceItemInput {
   id?: string
   materialId: string
@@ -226,6 +288,7 @@ export interface SalesInvoiceDraftInput {
   discountType: DiscountType
   discountValue: number
   customerAdditionalFees?: number
+  delegates?: Array<{ delegateId: string; commissionPercentage: number; notes?: string }>
   notes?: string
   items: SalesInvoiceItemInput[]
 }
@@ -246,6 +309,7 @@ export interface SalesInvoiceListItem {
   date: string
   customerId: string
   customerName: string
+  customerCode?: string
   warehouseId: string
   warehouseName: string
   subtotal: number
@@ -294,6 +358,7 @@ export interface SalesInvoiceDetails {
   customerCredit: number
   paymentStatus: PaymentStatus
   notes?: string
+  delegates: SalesInvoiceDelegate[]
   createdAt?: string
   updatedAt?: string
   returns: SalesInvoiceReturnSummary[]
@@ -328,6 +393,9 @@ declare global {
       create: (payload: Partial<SupplierRecord>) => Promise<SupplierRecord[]>
       update: (id: string, payload: Partial<SupplierRecord>) => Promise<SupplierRecord[]>
       delete: (id: string) => Promise<SupplierRecord[]>
+      listPayments: (supplierId: string) => Promise<AccountPayment[]>
+      createPayment: (payload: { supplierId: string; date: string; amount: number; paymentMethod: string; notes?: string }) => Promise<AccountPayment>
+      deletePayment: (paymentId: string) => Promise<AccountPayment>
     }
     craftPurchasesAPI?: {
       getNextDraftData: () => Promise<{ invoiceNumber: string; date: string }>
@@ -346,6 +414,9 @@ declare global {
       createReturn: (payload: { date: string; supplierId: string; warehouseId: string; purchaseInvoiceId: string; notes?: string; items: PurchaseReturnItemInput[] }) => Promise<PurchaseReturnRecord>
       updateReturn: (returnId: string, payload: { date: string; supplierId: string; warehouseId: string; purchaseInvoiceId: string; notes?: string; items: PurchaseReturnItemInput[] }) => Promise<PurchaseReturnRecord>
       deleteReturn: (returnId: string) => Promise<Array<{ id: string; returnNumber: string; date: string; supplierId: string; supplierName: string; warehouseId: string; warehouseName: string; purchaseInvoiceId: string; purchaseInvoiceNumber: string; netTotal: number; status: string }>>
+      listReturnPayments: (returnId: string) => Promise<ReturnPayment[]>
+      createReturnPayment: (returnId: string, payload: ReturnPaymentInput) => Promise<ReturnPayment>
+      deleteReturnPayment: (paymentId: string) => Promise<ReturnPayment>
     }
     craftCustomersAPI?: {
       list: () => Promise<CustomerRecord[]>
@@ -353,6 +424,19 @@ declare global {
       create: (payload: Partial<CustomerRecord>) => Promise<CustomerRecord[]>
       update: (id: string, payload: Partial<CustomerRecord>) => Promise<CustomerRecord[]>
       delete: (id: string) => Promise<CustomerRecord[]>
+      listPayments: (customerId: string) => Promise<AccountPayment[]>
+      createPayment: (payload: { customerId: string; date: string; amount: number; paymentMethod: string; notes?: string }) => Promise<AccountPayment>
+      deletePayment: (paymentId: string) => Promise<AccountPayment>
+    }
+    craftDelegatesAPI?: {
+      list: () => Promise<DelegateRecord[]>
+      listActive: () => Promise<DelegateRecord[]>
+      create: (payload: Partial<DelegateRecord>) => Promise<DelegateRecord[]>
+      update: (id: string, payload: Partial<DelegateRecord>) => Promise<DelegateRecord[]>
+      delete: (id: string) => Promise<DelegateRecord[]>
+      getPayments: (delegateId: string) => Promise<DelegatePayment[]>
+      createPayment: (payload: { delegateId: string; date: string; amount: number; paymentMethod: string; notes?: string }) => Promise<DelegatePayment>
+      deletePayment: (paymentId: string) => Promise<DelegatePayment>
     }
     craftSalesAPI?: {
       getNextDraftData: () => Promise<{ invoiceNumber: string; date: string }>
@@ -371,6 +455,9 @@ declare global {
       createReturn: (payload: { date: string; customerId: string; warehouseId: string; salesInvoiceId: string; notes?: string; items: SalesReturnItemInput[] }) => Promise<SalesReturnRecord>
       updateReturn: (returnId: string, payload: { date: string; customerId: string; warehouseId: string; salesInvoiceId: string; notes?: string; items: SalesReturnItemInput[] }) => Promise<SalesReturnRecord>
       deleteReturn: (returnId: string) => Promise<Array<{ id: string; returnNumber: string; date: string; customerId: string; customerName: string; warehouseId: string; warehouseName: string; salesInvoiceId: string; salesInvoiceNumber: string; netTotal: number; status: string }>>
+      listReturnPayments: (returnId: string) => Promise<ReturnPayment[]>
+      createReturnPayment: (returnId: string, payload: ReturnPaymentInput) => Promise<ReturnPayment>
+      deleteReturnPayment: (paymentId: string) => Promise<ReturnPayment>
     }
   }
 }
@@ -404,6 +491,15 @@ export const suppliersService = {
   },
   async delete(id: string): Promise<SupplierRecord[]> {
     return getSuppliersApi().delete(id)
+  },
+  async listPayments(supplierId: string): Promise<AccountPayment[]> {
+    return getSuppliersApi().listPayments(supplierId)
+  },
+  async createPayment(payload: { supplierId: string; date: string; amount: number; paymentMethod: string; notes?: string }): Promise<AccountPayment> {
+    return getSuppliersApi().createPayment(payload)
+  },
+  async deletePayment(paymentId: string): Promise<AccountPayment> {
+    return getSuppliersApi().deletePayment(paymentId)
   },
 }
 
@@ -456,6 +552,15 @@ export const purchasesService = {
   async deleteReturn(returnId: string): Promise<Array<{ id: string; returnNumber: string; date: string; supplierId: string; supplierName: string; warehouseId: string; warehouseName: string; purchaseInvoiceId: string; purchaseInvoiceNumber: string; netTotal: number; status: string }>> {
     return getPurchasesApi().deleteReturn(returnId)
   },
+  async listReturnPayments(returnId: string): Promise<ReturnPayment[]> {
+    return getPurchasesApi().listReturnPayments(returnId)
+  },
+  async createReturnPayment(returnId: string, payload: ReturnPaymentInput): Promise<ReturnPayment> {
+    return getPurchasesApi().createReturnPayment(returnId, payload)
+  },
+  async deleteReturnPayment(paymentId: string): Promise<ReturnPayment> {
+    return getPurchasesApi().deleteReturnPayment(paymentId)
+  },
 }
 
 function getCustomersApi() {
@@ -487,6 +592,49 @@ export const customersService = {
   },
   async delete(id: string): Promise<CustomerRecord[]> {
     return getCustomersApi().delete(id)
+  },
+  async listPayments(customerId: string): Promise<AccountPayment[]> {
+    return getCustomersApi().listPayments(customerId)
+  },
+  async createPayment(payload: { customerId: string; date: string; amount: number; paymentMethod: string; notes?: string }): Promise<AccountPayment> {
+    return getCustomersApi().createPayment(payload)
+  },
+  async deletePayment(paymentId: string): Promise<AccountPayment> {
+    return getCustomersApi().deletePayment(paymentId)
+  },
+}
+
+function getDelegatesApi() {
+  if (!window.craftDelegatesAPI) {
+    throw new Error('Delegates API not available')
+  }
+  return window.craftDelegatesAPI
+}
+
+export const delegatesService = {
+  async list(): Promise<DelegateRecord[]> {
+    return getDelegatesApi().list()
+  },
+  async listActive(): Promise<DelegateRecord[]> {
+    return getDelegatesApi().listActive()
+  },
+  async create(payload: Partial<DelegateRecord>): Promise<DelegateRecord[]> {
+    return getDelegatesApi().create(payload)
+  },
+  async update(id: string, payload: Partial<DelegateRecord>): Promise<DelegateRecord[]> {
+    return getDelegatesApi().update(id, payload)
+  },
+  async delete(id: string): Promise<DelegateRecord[]> {
+    return getDelegatesApi().delete(id)
+  },
+  async getPayments(delegateId: string): Promise<DelegatePayment[]> {
+    return getDelegatesApi().getPayments(delegateId)
+  },
+  async createPayment(payload: { delegateId: string; date: string; amount: number; paymentMethod: string; notes?: string }): Promise<DelegatePayment> {
+    return getDelegatesApi().createPayment(payload)
+  },
+  async deletePayment(paymentId: string): Promise<DelegatePayment> {
+    return getDelegatesApi().deletePayment(paymentId)
   },
 }
 
@@ -538,5 +686,14 @@ export const salesService = {
   },
   async deleteReturn(returnId: string): Promise<Array<{ id: string; returnNumber: string; date: string; customerId: string; customerName: string; warehouseId: string; warehouseName: string; salesInvoiceId: string; salesInvoiceNumber: string; netTotal: number; status: string }>> {
     return getSalesApi().deleteReturn(returnId)
+  },
+  async listReturnPayments(returnId: string): Promise<ReturnPayment[]> {
+    return getSalesApi().listReturnPayments(returnId)
+  },
+  async createReturnPayment(returnId: string, payload: ReturnPaymentInput): Promise<ReturnPayment> {
+    return getSalesApi().createReturnPayment(returnId, payload)
+  },
+  async deleteReturnPayment(paymentId: string): Promise<ReturnPayment> {
+    return getSalesApi().deleteReturnPayment(paymentId)
   },
 }

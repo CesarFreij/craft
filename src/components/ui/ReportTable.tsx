@@ -3,7 +3,6 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableContainer,
   TableHead,
   TablePagination,
   TableRow,
@@ -28,24 +27,18 @@ interface ReportTableProps {
 }
 
 const craftReportTableSx = {
-  borderRadius: '18px',
-  overflow: 'hidden',
-  border: '1px solid rgba(255,255,255,.18)',
-  background: 'rgba(248,250,252,.055)',
-  backdropFilter: 'blur(20px) saturate(115%)',
-  WebkitBackdropFilter: 'blur(20px) saturate(115%)',
+  width: '100%',
+  minWidth: 1000,
+  borderCollapse: 'collapse',
+  background: 'transparent',
+  tableLayout: 'auto',
 
-  '& .MuiTable-root': {
+  '& .MuiTableHead-root, & .MuiTableBody-root': {
     background: 'transparent',
-    borderCollapse: 'collapse',
   },
 
-  '& .MuiTableHead-root .MuiTableRow-root': {
-    background: 'rgba(255,255,255,.075)',
-  },
-
-  '& .MuiTableBody-root .MuiTableRow-root': {
-    background: 'rgba(255,255,255,.018)',
+  '& .MuiTableRow-root': {
+    background: 'transparent',
   },
 
   '& .MuiTableBody-root .MuiTableRow-root:hover': {
@@ -54,7 +47,7 @@ const craftReportTableSx = {
 
   '& .MuiTableCell-root': {
     color: 'rgba(255,255,255,.88)',
-    border: '1px solid rgba(255,255,255,.16)',
+    border: '1px solid rgba(255,255,255,.14)',
     whiteSpace: 'nowrap',
   },
 
@@ -62,6 +55,17 @@ const craftReportTableSx = {
     color: 'rgba(255,255,255,.96)',
     fontWeight: 800,
   },
+}
+
+const reportTableFrameSx = {
+  width: '100%',
+  minWidth: 0,
+  overflowX: 'auto',
+  borderRadius: '18px',
+  border: '1px solid rgba(255,255,255,.18)',
+  background: 'rgba(248,250,252,.055)',
+  backdropFilter: 'blur(20px) saturate(115%)',
+  WebkitBackdropFilter: 'blur(20px) saturate(115%)',
 }
 
 export function ReportTable({
@@ -76,8 +80,8 @@ export function ReportTable({
 }: ReportTableProps) {
   return (
     <Box>
-      <TableContainer sx={craftReportTableSx}>
-        <Table size="small" sx={{ minWidth: 900 }}>
+      <Box sx={reportTableFrameSx}>
+        <Table size="small" sx={craftReportTableSx}>
           <TableHead>
             <TableRow>
               {columns.map((column) => (
@@ -141,7 +145,7 @@ export function ReportTable({
             )}
           </TableBody>
         </Table>
-      </TableContainer>
+      </Box>
 
       <TablePagination
         component="div"

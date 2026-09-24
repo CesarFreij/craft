@@ -1,5 +1,6 @@
 import { Box, Typography } from '@mui/material'
 import type { CompanyPrintSettings } from '../../types/invoicePrint'
+import { formatDateDMY } from '../../utils/displayFormatting'
 
 interface InvoiceHeaderProps {
   settings: CompanyPrintSettings
@@ -147,7 +148,7 @@ export function InvoiceHeader({
           </div>
 
           <div>
-            <b>التاريخ:</b> {documentDate || '—'}
+            <b>التاريخ:</b> {formatDateDMY(documentDate) || '—'}
           </div>
 
           <div>

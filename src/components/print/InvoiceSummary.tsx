@@ -23,7 +23,7 @@ export function InvoiceSummary({ subtotal, discount, total, notes }: InvoiceSumm
       <Box sx={{ minWidth: 260, width: { xs: '100%', sm: 'auto' }, border: '1px solid rgba(15, 23, 42, 0.12)', borderRadius: 2, background: '#fff', p: 2 }}>
         <Box sx={{ display: 'grid', gap: 1 }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, color: '#334155' }}>
-            <Typography sx={{ fontWeight: 700 }}>المجموع:</Typography>
+            <Typography sx={{ fontWeight: 700 }}>الإجمالي:</Typography>
             <Typography>{formatCurrencyValue(subtotal, 'price')}</Typography>
           </Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, color: '#334155' }}>
@@ -31,7 +31,7 @@ export function InvoiceSummary({ subtotal, discount, total, notes }: InvoiceSumm
             <Typography>{formatCurrencyValue(discount, 'price')}</Typography>
           </Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, color: '#0f172a', borderTop: '1px solid rgba(15, 23, 42, 0.12)', pt: 1 }}>
-            <Typography sx={{ fontWeight: 800 }}>الإجمالي النهائي:</Typography>
+            <Typography sx={{ fontWeight: 800 }}>الإجمالي:</Typography>
             <Typography sx={{ fontWeight: 800 }}>{formatCurrencyValue(total, 'price')}</Typography>
           </Box>
         </Box>

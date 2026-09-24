@@ -30,6 +30,14 @@ export function toEnglishDigits(value: string | number | null | undefined): stri
   return String(value).replace(/[٠-٩۰-۹]/g, (digit) => ARABIC_DIGITS[digit] ?? digit)
 }
 
+export function getLocalDateYMD(date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+export function getLocalDateTimeString(date = new Date()): string {
+  return `${getLocalDateYMD(date)}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}`
+}
+
 export function formatDisplayNumber(value: number | string | null | undefined, digits = 2): string {
   const raw = typeof value === 'number' ? value : Number(value ?? 0)
   if (Number.isNaN(raw)) {
@@ -65,7 +73,7 @@ export function formatCurrencyValue(
         : priceDecimals
 
   const formattedValue = formatDisplayNumber(value, digits)
-  return `${formattedValue} ${currencySymbol}`.trim()
+  return `\u200E${formattedValue} ${currencySymbol}`.trim()
 }
 
 export function formatDateYMD(value: string | Date | null | undefined): string {
@@ -131,17 +139,17 @@ export function formatDateDMY(value: string | Date | null | undefined): string {
     return ''
   }
 
-  const asString = String(value).trim()
+  const asString = toEnglishDigits(String(value).trim())
   const isoMatch = asString.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
   if (isoMatch) {
     const [, year, month, day] = isoMatch
-    return `${toEnglishDigits(String(day).padStart(2, '0'))}/${toEnglishDigits(String(month).padStart(2, '0'))}/${toEnglishDigits(year)}`
+    return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`
   }
 
   const dmyMatch = asString.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/)
   if (dmyMatch) {
     const [, day, month, year] = dmyMatch
-    return `${toEnglishDigits(String(day).padStart(2, '0'))}/${toEnglishDigits(String(month).padStart(2, '0'))}/${toEnglishDigits(year)}`
+    return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`
   }
 
   const date = typeof value === 'string' ? new Date(value) : value
@@ -152,5 +160,5 @@ export function formatDateDMY(value: string | Date | null | undefined): string {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
-  return `${toEnglishDigits(day)}/${toEnglishDigits(month)}/${toEnglishDigits(year)}`
+  return `${day}/${month}/${year}`
 }

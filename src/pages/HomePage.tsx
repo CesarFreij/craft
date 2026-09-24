@@ -4,14 +4,14 @@ import { motion } from 'framer-motion'
 import craftImage from '../assets/craft.png'
 
 function AnalogClock({ time }: { time: Date }) {
-  const localTimeMs =
-    time.getTime() - time.getTimezoneOffset() * 60_000
+  const seconds = time.getSeconds()
+  const minutes = time.getMinutes()
+  const hours = time.getHours() % 12
 
-  const continuousSeconds = localTimeMs / 1000
-
-  const secondDeg = continuousSeconds * 6
-  const minuteDeg = continuousSeconds * 0.1
-  const hourDeg = continuousSeconds / 120
+  // حساب زاوية كل عقرب بدقة داخل دائرته فقط (0 - 360 درجة)
+  const secondDeg = seconds * 6
+  const minuteDeg = minutes * 6 + seconds * 0.1
+  const hourDeg = hours * 30 + minutes * 0.5
 
   const minuteMarks = Array.from({ length: 60 }, (_, index) => index)
 
@@ -146,11 +146,11 @@ function AnalogClock({ time }: { time: Date }) {
           ERP SYSTEM
         </text>
 
+        {/* عقرب الساعات */}
         <g
           style={{
             transformOrigin: '160px 160px',
             transform: `rotate(${hourDeg}deg)`,
-            transition: 'transform 180ms linear',
           }}
         >
           <line
@@ -164,11 +164,11 @@ function AnalogClock({ time }: { time: Date }) {
           />
         </g>
 
+        {/* عقرب الدقائق */}
         <g
           style={{
             transformOrigin: '160px 160px',
             transform: `rotate(${minuteDeg}deg)`,
-            transition: 'transform 180ms linear',
           }}
         >
           <line
@@ -182,11 +182,11 @@ function AnalogClock({ time }: { time: Date }) {
           />
         </g>
 
+        {/* عقرب الثواني */}
         <g
           style={{
             transformOrigin: '160px 160px',
             transform: `rotate(${secondDeg}deg)`,
-            transition: 'transform 120ms linear',
           }}
         >
           <line
@@ -213,6 +213,7 @@ export function HomePage() {
 
   useEffect(() => {
     type CraftAppAPI = {
+      isSplashFinished: () => Promise<boolean>
       onSplashFinished: (callback: () => void) => void
       offSplashFinished: (callback: () => void) => void
     }
@@ -224,13 +225,24 @@ export function HomePage() {
       return
     }
 
+    let active = true
+
     const handleSplashFinished = () => {
-      setPageAnimationReady(true)
+      if (active) {
+        setPageAnimationReady(true)
+      }
     }
 
     appApi.onSplashFinished(handleSplashFinished)
 
+    void appApi.isSplashFinished().then((finished) => {
+      if (active && finished) {
+        setPageAnimationReady(true)
+      }
+    })
+
     return () => {
+      active = false
       appApi.offSplashFinished(handleSplashFinished)
     }
   }, [])

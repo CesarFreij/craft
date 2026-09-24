@@ -510,7 +510,7 @@ export function WarehousesPage() {
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="تعديل"><IconButton size="small" onClick={() => handleEditOpen(w)} sx={{color:"#60A5FA"}}><FiEdit2 size={16} /></IconButton></Tooltip>
-                        <Tooltip title="حذف المخزن">
+                        <Tooltip title="حذف">
                           <IconButton size="small" onClick={() => handleDeleteClick(w)} color="error">
                             <FiTrash2 size={16} />
                           </IconButton>
@@ -542,13 +542,15 @@ export function WarehousesPage() {
 
           <TextField
             label="كود"
+            required
             fullWidth
             value={form.code}
             onChange={(e) => setForm({ ...form, code: e.target.value })}
           />
 
           <TextField
-            label="اسم"
+            label="الاسم"
+            required
             fullWidth
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}

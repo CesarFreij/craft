@@ -85,7 +85,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Craft"
+      "shortcutName": "Craft",
+      "deleteAppDataOnUninstall": true
     }
   }
 }
