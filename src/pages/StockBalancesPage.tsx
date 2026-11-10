@@ -228,7 +228,7 @@ export function StockBalancesPage() {
       fileName: `craft-stock-balances-${getLocalDateYMD()}`,
       headers: balanceExportHeaders,
       rows: filtered.map((record) => [
-        record.warehouseName ?? '—',
+        record.warehouseName ?? '',
         record.materialNumber,
         record.name,
         record.unit ?? '',
@@ -247,7 +247,7 @@ export function StockBalancesPage() {
       fileName: 'stock-balances',
       headers: balanceExportHeaders,
       rows: filtered.map((record) => [
-        record.warehouseName ?? '—',
+        record.warehouseName ?? '',
         record.materialNumber,
         record.name,
         record.unit ?? '',
@@ -351,8 +351,17 @@ export function StockBalancesPage() {
           <Box
             component="table"
             sx={{
-              minWidth: 800,
-              tableLayout: 'fixed',
+              minWidth: 'max-content',
+              width: '100%',
+              tableLayout: 'auto',
+              '& th, & td': {
+                whiteSpace: 'nowrap',
+                wordBreak: 'normal',
+                overflowWrap: 'normal',
+                boxSizing: 'border-box',
+                verticalAlign: 'middle',
+                textAlign: 'center',
+              },
             }}
           >
             <Box component="thead">
@@ -373,7 +382,7 @@ export function StockBalancesPage() {
                 .map((r) => (
                   <Box component="tr" key={`${r.warehouseId}-${r.id}`}>
                     <Box component="td" sx={{ textAlign: 'center', p: 2 }}>
-                      {r.warehouseName ?? '—'}
+                      {r.warehouseName ?? ''}
                     </Box>
                     <Box component="td" sx={{ textAlign: 'center', p: 2 }}>
                       {r.materialNumber}
@@ -409,6 +418,7 @@ export function StockBalancesPage() {
             setRowsPerPage(Number(e.target.value))
             setPage(0)
           }}
+          labelRowsPerPage="الصفوف:"
         />
       </SectionCard>
     </Box>

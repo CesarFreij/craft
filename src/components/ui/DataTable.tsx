@@ -8,8 +8,8 @@ interface DataTableProps {
 export function DataTable({ columns, rows }: DataTableProps) {
   const theme = useTheme()
   return (
-    <TableContainer component={Box} sx={{ borderRadius: 3, boxShadow: 'none', border: '1px solid rgba(15, 23, 42, 0.08)' }}>
-      <Table>
+    <TableContainer component={Box} sx={{ width: '100%', minWidth: 0, overflowX: 'auto', borderRadius: 3, boxShadow: 'none', border: '1px solid rgba(15, 23, 42, 0.08)' }}>
+      <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
         <TableHead>
           <TableRow>
             {columns.map((column) => (

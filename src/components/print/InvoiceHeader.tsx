@@ -144,15 +144,15 @@ export function InvoiceHeader({
 
         <Box sx={{fontSize:13,color:'#334155',display:'grid',gap:.5}}>
           <div>
-            <b>رقم المستند:</b> {documentNumber || '—'}
+            <b>رقم المستند:</b> {documentNumber || ''}
           </div>
 
           <div>
-            <b>التاريخ:</b> {formatDateDMY(documentDate) || '—'}
+            <b>التاريخ:</b> {formatDateDMY(documentDate) || ''}
           </div>
 
           <div>
-            <b>{partyLabel}:</b> {partyName || '—'}
+            <b>{partyLabel}:</b> {partyName || ''}
           </div>
 
 

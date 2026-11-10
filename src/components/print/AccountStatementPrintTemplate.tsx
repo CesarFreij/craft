@@ -26,20 +26,26 @@ function previousDay(date: string): string {
 
 const tableSx = {
   width: '100%',
+  minWidth: 'max-content',
   borderCollapse: 'collapse',
-  tableLayout: 'fixed',
+  tableLayout: 'auto',
   color: '#111827',
   '& th, & td': {
     border: '1px solid #BFC5CC',
     px: 0.75,
     py: 0.72,
-    fontSize: 12.5,
     lineHeight: 1.35,
     verticalAlign: 'middle',
     textAlign: 'center',
+    whiteSpace: 'nowrap',
+    wordBreak: 'normal',
+    overflowWrap: 'normal',
+    boxSizing: 'border-box',
   },
-  '& th': { fontWeight: 800, background: '#FFFFFF', color: '#111827', whiteSpace: 'nowrap' },
+  '& th': { fontWeight: 800, background: '#FFFFFF', color: '#111827' },
   '& td': { fontWeight: 500, background: '#FFFFFF' },
+  '& thead': { display: 'table-header-group' },
+  '& tr': { pageBreakInside: 'avoid', breakInside: 'avoid' },
 }
 
 function ValueRow({ label, value }: { label: string; value: string }) {
@@ -62,6 +68,7 @@ export function AccountStatementPrintTemplate({ data, settings }: AccountStateme
     if (data.ledgerEntries?.length) {
       return data.ledgerEntries.map((entry) => ({
         ...entry,
+        type: entry.type ?? 'invoice',
         documentNumber: entry.documentNumber ?? entry.invoiceNumber ?? '',
       }))
     }
@@ -69,6 +76,7 @@ export function AccountStatementPrintTemplate({ data, settings }: AccountStateme
     const relatedInvoices = data.relatedInvoices ?? []
     const invoices = relatedInvoices.map((invoice) => ({
       id: `invoice-${invoice.id}`,
+      type: 'invoice' as const,
       debit: isSupplier ? 0 : invoice.amount,
       credit: isSupplier ? invoice.amount : 0,
       paymentMethod: '',
@@ -78,6 +86,7 @@ export function AccountStatementPrintTemplate({ data, settings }: AccountStateme
     }))
     const payments = relatedInvoices.flatMap((invoice) => invoice.payments.map((payment) => ({
       id: `payment-${payment.id}`,
+      type: 'payment' as const,
       debit: isSupplier ? payment.amount : 0,
       credit: isSupplier ? 0 : payment.amount,
       paymentMethod: payment.paymentMethod ?? '',
@@ -89,13 +98,17 @@ export function AccountStatementPrintTemplate({ data, settings }: AccountStateme
     if (!data.startDate) return all
     const start = new Date(`${data.startDate}T00:00:00`).getTime()
     const end = data.endDate ? new Date(`${data.endDate}T23:59:59.999`).getTime() : Number.POSITIVE_INFINITY
-    const prior = all.reduce((sum, entry) => sum + (isSupplier ? entry.credit - entry.debit : entry.debit - entry.credit), 0)
+    const balanceOf = (entry: typeof all[number]) => isSupplier
+      ? entry.credit - entry.debit - (entry.type === 'payment' ? entry.credit : 0)
+      : entry.debit - entry.credit
+    const prior = all.reduce((sum, entry) => sum + balanceOf(entry), 0)
     const before = all.filter((entry) => new Date(entry.date).getTime() < start)
-      .reduce((sum, entry) => sum + (isSupplier ? entry.credit - entry.debit : entry.debit - entry.credit), 0)
+      .reduce((sum, entry) => sum + balanceOf(entry), 0)
     const filtered = all.filter((entry) => new Date(entry.date).getTime() >= start && new Date(entry.date).getTime() <= end)
     const balance = Number(before) || 0
     filtered.unshift({
       id: 'carried-forward-balance',
+      type: 'invoice' as const,
       debit: isSupplier ? (balance < 0 ? Math.abs(balance) : 0) : (balance > 0 ? balance : 0),
       credit: isSupplier ? (balance > 0 ? balance : 0) : (balance < 0 ? Math.abs(balance) : 0),
       paymentMethod: '',
@@ -106,6 +119,37 @@ export function AccountStatementPrintTemplate({ data, settings }: AccountStateme
     void prior
     return filtered
   }, [data.ledgerEntries, data.relatedInvoices, data.startDate, data.endDate, isSupplier])
+  const statementTotals = useMemo(() => {
+    const gross = entries.reduce(
+      (sum, entry) => entry.type === 'invoice' && entry.id !== 'carried-forward-balance'
+        ? sum + (isSupplier ? entry.credit : entry.debit)
+        : sum,
+      0,
+    )
+    const returns = entries.reduce(
+      (sum, entry) => entry.type === 'return'
+        ? sum + (isSupplier ? entry.debit : entry.credit)
+        : sum,
+      0,
+    )
+    const payments = entries.reduce(
+      (sum, entry) => entry.type === 'payment'
+        ? sum + (isSupplier ? entry.debit : entry.credit)
+        : sum,
+      0,
+    )
+    const balance = isSupplier
+      ? entries.reduce(
+          (sum, entry) => sum + entry.credit - entry.debit - (entry.type === 'payment' ? entry.credit : 0),
+          0,
+        )
+      : data.remainingBalance
+    return {
+      net: Math.max(gross - returns, 0),
+      payments,
+      balance,
+    }
+  }, [data.remainingBalance, entries, isSupplier])
 
   const start = data.startDate ? formatDateDMY(data.startDate) : formatDateDMY('2026-01-01')
   const end = data.endDate ? formatDateDMY(data.endDate) : formatDateDMY(getLocalDateYMD())
@@ -117,7 +161,7 @@ export function AccountStatementPrintTemplate({ data, settings }: AccountStateme
   const entityLabel = isSupplier ? 'المورد' : 'العميل'
 
   return (
-    <Box dir="rtl" className="craft-print-visible" sx={{ width: '100%', minHeight: '297mm', background: '#FFFFFF', color: '#111827', boxSizing: 'border-box', padding: '12mm 12mm 14mm', fontFamily: 'Tajawal, Tahoma, Arial, sans-serif', '@media print': { background: '#FFFFFF !important', boxShadow: 'none !important', border: 'none !important', padding: '12mm 12mm 14mm' }, '@page': { size: 'A4', margin: 0 } }}>
+    <Box dir="rtl" className="craft-print-visible" sx={{ width: '100%', minHeight: '297mm', background: '#FFFFFF', color: '#111827', boxSizing: 'border-box', padding: '12mm 12mm 14mm', fontFamily: 'Tajawal, Tahoma, Arial, sans-serif', '@media print': { background: '#FFFFFF !important', boxShadow: 'none !important', border: 'none !important', padding: 0 } }}>
       <Box sx={{ display: 'flex', direction: 'rtl', justifyContent: 'space-between', alignItems: 'stretch', gap: 4, mb: 1.6 }}>
         <Box sx={{ width: 210, position: 'relative', flexShrink: 0 }}>
           {settings.logoDataUrl?.trim() ? <Box component="img" src={settings.logoDataUrl} alt="شعار الشركة" sx={{ display: 'block', position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', objectPosition: 'right center' }} /> : null}
@@ -138,18 +182,18 @@ export function AccountStatementPrintTemplate({ data, settings }: AccountStateme
         <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#374151' }}>التاريخ من: {start} إلى: {end}</Typography>
       </Box>
       <Box component="table" dir="rtl" sx={tableSx}>
-        <Box component="thead"><Box component="tr"><Box component="th">مدين</Box><Box component="th">دائن</Box><Box component="th">طريقة الدفع</Box><Box component="th">رقم المستند</Box><Box component="th">الملاحظات</Box><Box component="th">التاريخ</Box></Box></Box>
+        <Box component="thead"><Box component="tr"><Box component="th">مدين</Box><Box component="th">دائن</Box><Box component="th">نوع الحركة</Box><Box component="th">طريقة الدفع</Box><Box component="th">رقم المستند</Box><Box component="th">الملاحظات</Box><Box component="th">التاريخ</Box></Box></Box>
         <Box component="tbody">
-          {entries.length ? entries.map((entry) => <Box component="tr" key={entry.id}><Box component="td">{entry.debit > 0 ? priceNum(entry.debit) : ''}</Box><Box component="td">{entry.credit > 0 ? priceNum(entry.credit) : ''}</Box><Box component="td">{entry.paymentMethod}</Box><Box component="td">{entry.documentNumber}</Box><Box component="td">{entry.notes}</Box><Box component="td">{formatDateDMY(entry.date)}</Box></Box>) : <Box component="tr"><Box component="td" colSpan={6}>لا توجد حركات مسجلة</Box></Box>}
+          {entries.length ? entries.map((entry) => <Box component="tr" key={entry.id}><Box component="td">{entry.debit > 0 ? priceNum(entry.debit) : ''}</Box><Box component="td">{entry.credit > 0 ? priceNum(entry.credit) : ''}</Box><Box component="td">{entry.id === 'carried-forward-balance' ? 'رصيد مدور' : entry.type === 'return' ? (isSupplier ? 'مرتجع شراء' : 'مرتجع مبيعات') : entry.type === 'payment' ? (isSupplier ? (entry.debit > 0 ? 'دفعة للمورد' : 'سند قبض من المورد') : (entry.credit > 0 ? 'دفعة من العميل' : 'سند صرف للعميل')) : (isSupplier ? 'فاتورة شراء' : 'فاتورة مبيعات')}</Box><Box component="td">{entry.paymentMethod}</Box><Box component="td">{entry.documentNumber}</Box><Box component="td">{entry.notes}</Box><Box component="td">{formatDateDMY(entry.date)}</Box></Box>) : <Box component="tr"><Box component="td" colSpan={7}>لا توجد حركات مسجلة</Box></Box>}
         </Box>
       </Box>
       <Box className="invoice-summary" sx={{ mt: 1.6, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 310px', direction: 'ltr', gap: 5, alignItems: 'start' }}>
         <Box />
         <Box dir="ltr" sx={{ direction: 'ltr' }}>
           <Box sx={{ borderTop: '1px solid #C7CCD2' }}>
-            <ValueRow label="إجمالي المشتريات" value={money(isSupplier ? data.totalCredit : data.totalDebit)} />
-            <ValueRow label="إجمالي المدفوعات" value={money(isSupplier ? data.totalDebit : data.totalCredit)} />
-            <ValueRow label="الرصيد" value={money(data.remainingBalance)} />
+            <ValueRow label={isSupplier ? 'صافي المشتريات' : 'صافي المبيعات'} value={money(statementTotals.net)} />
+            <ValueRow label="الدفعات النقدية" value={money(statementTotals.payments)} />
+            <ValueRow label="الرصيد" value={money(statementTotals.balance)} />
           </Box>
         </Box>
       </Box>

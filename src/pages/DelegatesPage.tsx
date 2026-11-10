@@ -27,7 +27,7 @@ import { SectionCard } from '../components/ui/SectionCard'
 import { delegatesService, salesService, type DelegatePayment, type DelegateRecord } from '../services/purchasesService'
 import { useNotifications } from '../contexts/useNotifications'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatCurrencyValue, formatDateDMY, getLocalDateTimeString, getLocalDateYMD, toInternalDate, formatNumberBySettings } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, getLocalDateTimeString, getLocalDateYMD, normalizeRemainingAmount, roundNumber, toInternalDate, formatNumberBySettings } from '../utils/displayFormatting'
 import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
 import { loadSettings } from '../services/settingsService'
 
@@ -43,7 +43,7 @@ type DelegateForm = {
 
 type LedgerEntry = {
   id: string
-  type: 'invoice' | 'payment'
+  type: 'invoice' | 'payment' | 'return'
   debit: number
   credit: number
   paymentMethod: string
@@ -238,7 +238,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
       '& input[type="date"], & input[type="datetime-local"]': {
         colorScheme: 'dark',
       },
@@ -400,6 +400,16 @@ export function DelegatesPage() {
       notes?: string
     }>
   >([])
+  const [delegateReturns, setDelegateReturns] = useState<
+    Array<{
+      id: string
+      returnNumber: string
+      date: string
+      commissionAmount: number
+      commissionPercentage: number
+      notes?: string
+    }>
+  >([])
   const [delegatePayments, setDelegatePayments] = useState<DelegatePayment[]>([])
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [delegatePaymentsLoading, setDelegatePaymentsLoading] = useState(false)
@@ -437,16 +447,17 @@ export function DelegatesPage() {
     }
   }
 
+  const priceDecimals = loadSettings().priceDecimals
   const currentPayments = useMemo(() => {
     return delegatePayments
   }, [delegatePayments])
 
-  const { ledgerEntries, totalCredit, totalDebit, remainingBalance } = useMemo(() => {
+  const { ledgerEntries, remainingBalance } = useMemo(() => {
     const allInvoices: LedgerEntry[] = delegateInvoices.map((inv) => ({
       id: `inv-${inv.id}`,
       type: 'invoice',
       debit: 0,
-      credit: inv.commissionAmount,
+      credit: roundNumber(inv.commissionAmount, priceDecimals),
       paymentMethod: '',
       invoiceNumber: inv.invoiceNumber,
       commissionPercentage: `${inv.commissionPercentage}%`,
@@ -457,7 +468,7 @@ export function DelegatesPage() {
     const allPayments: LedgerEntry[] = currentPayments.map((p) => ({
       id: `pay-${p.id}`,
       type: 'payment',
-      debit: p.amount,
+      debit: roundNumber(p.amount, priceDecimals),
       credit: 0,
       paymentMethod: p.paymentMethod || '',
       invoiceNumber: '',
@@ -467,8 +478,23 @@ export function DelegatesPage() {
       paymentId: p.id,
     }))
 
-    const all = [...allInvoices, ...allPayments].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+    const returnEntries: LedgerEntry[] = delegateReturns.map((returnRecord) => ({
+      id: `return-${returnRecord.id}`,
+      type: 'return',
+      debit: roundNumber(returnRecord.commissionAmount, priceDecimals),
+      credit: 0,
+      paymentMethod: '',
+      invoiceNumber: returnRecord.returnNumber,
+      commissionPercentage: `${returnRecord.commissionPercentage}%`,
+      notes: returnRecord.notes || '',
+      date: returnRecord.date,
+    }))
+
+    const all = [...allInvoices, ...allPayments, ...returnEntries].sort(
+      (a, b) =>
+        new Date(a.date).getTime() - new Date(b.date).getTime()
+        || ['invoice', 'return', 'payment'].indexOf(a.type) - ['invoice', 'return', 'payment'].indexOf(b.type)
+        || a.id.localeCompare(b.id),
     )
 
     let carryOverBalance = 0
@@ -478,7 +504,7 @@ export function DelegatesPage() {
       const startMs = new Date(startDateFilter).getTime()
 
       const priorEntries = all.filter((entry) => new Date(entry.date).getTime() < startMs)
-      carryOverBalance = priorEntries.reduce((sum, item) => sum + (item.credit - item.debit), 0)
+      carryOverBalance = roundNumber(priorEntries.reduce((sum, item) => sum + (item.credit - item.debit), 0), priceDecimals)
 
       filteredEntries = all.filter((entry) => {
         const entryMs = new Date(entry.date).getTime()
@@ -515,16 +541,30 @@ export function DelegatesPage() {
       })
     }
 
-    const calcCredit = finalEntries.reduce((sum, inv) => sum + inv.credit, 0)
-    const calcDebit = finalEntries.reduce((sum, p) => sum + p.debit, 0)
+    const calcCredit = roundNumber(finalEntries.reduce((sum, inv) => sum + inv.credit, 0), priceDecimals)
+    const calcDebit = roundNumber(finalEntries.reduce((sum, p) => sum + p.debit, 0), priceDecimals)
 
     return {
       ledgerEntries: finalEntries,
       totalCredit: calcCredit,
       totalDebit: calcDebit,
-      remainingBalance: calcCredit - calcDebit,
+      remainingBalance: normalizeRemainingAmount(calcCredit - calcDebit, priceDecimals),
     }
-  }, [delegateInvoices, currentPayments, startDateFilter, endDateFilter])
+  }, [delegateInvoices, delegateReturns, currentPayments, startDateFilter, endDateFilter, priceDecimals])
+
+  const grossCommissions = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'invoice' && entry.id !== 'carried-forward-balance' ? sum + entry.credit : sum,
+    0,
+  ), priceDecimals)
+  const returnedCommissions = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'return' ? sum + entry.debit : sum,
+    0,
+  ), priceDecimals)
+  const netCommissions = roundNumber(Math.max(grossCommissions - returnedCommissions, 0), priceDecimals)
+  const cashPaid = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'payment' ? sum + entry.debit + entry.credit : sum,
+    0,
+  ), priceDecimals)
 
   const handleExportDelegatePdf = useCallback(async () => {
     if (!selectedDelegate) return
@@ -541,9 +581,9 @@ export function DelegatesPage() {
           partyLabel: 'المندوب',
           partyName: selectedDelegate.name,
           items: [],
-          subtotal: totalCredit,
+          subtotal: netCommissions,
           discount: 0,
-          total: totalCredit,
+          total: netCommissions,
           delegateCode: selectedDelegate.code,
           delegateName: selectedDelegate.name,
           delegatePhone: selectedDelegate.phone ?? '',
@@ -551,8 +591,9 @@ export function DelegatesPage() {
           paymentMethod: loadSettings().paymentMethods.join('، '),
           relatedInvoices: delegateInvoices,
           delegatePayments: currentPayments,
-          totalCommission: totalCredit,
-          totalPaid: totalDebit,
+          ledgerEntries,
+          totalCommission: netCommissions,
+          totalPaid: cashPaid,
           remainingBalance: remainingBalance,
           startDate: startDateFilter,
           endDate: endDateFilter,
@@ -563,11 +604,12 @@ export function DelegatesPage() {
   }, [
     currentPayments,
     delegateInvoices,
+    ledgerEntries,
+    cashPaid,
     navigate,
+    netCommissions,
     remainingBalance,
     selectedDelegate,
-    totalCredit,
-    totalDebit,
     startDateFilter,
     endDateFilter,
   ])
@@ -605,13 +647,14 @@ export function DelegatesPage() {
     setDetailsError('')
     setPaymentError('')
     setDelegatePayments([])
+    setDelegateReturns([])
     setStartDateFilter('')
     setEndDateFilter('')
     setQuickFilter('')
 
     try {
       const [invoices, payments] = await Promise.all([
-        salesService.listInvoices({}),
+        salesService.listInvoices({ status: 'completed' }),
         loadDelegatePayments(delegate.id),
       ])
       setDelegatePayments(payments)
@@ -624,8 +667,9 @@ export function DelegatesPage() {
               return null
             }
 
-            const commissionAmount = Number(
-              ((details.netTotal * Number(delegateInfo.commissionPercentage ?? 0)) / 100).toFixed(2),
+            const commissionAmount = roundNumber(
+              (details.netTotal * Number(delegateInfo.commissionPercentage ?? 0)) / 100,
+              priceDecimals,
             )
             return {
               id: details.id,
@@ -642,28 +686,45 @@ export function DelegatesPage() {
         }),
       )
 
-      setDelegateInvoices(
-        related.filter(Boolean) as Array<{
+      const relatedInvoices = related.filter(Boolean) as Array<{
           id: string
           invoiceNumber: string
           date: string
           commissionPercentage: number
           commissionAmount: number
           notes?: string
-        }>,
+        }>
+      setDelegateInvoices(relatedInvoices)
+
+      const commissionByInvoiceId = new Map(
+        relatedInvoices.map((invoice) => [invoice.id, invoice.commissionPercentage]),
       )
+      const returns = await salesService.listReturns({})
+      setDelegateReturns(returns.flatMap((returnRecord) => {
+        const commissionPercentage = commissionByInvoiceId.get(returnRecord.salesInvoiceId)
+        if (commissionPercentage === undefined) return []
+        return [{
+          id: returnRecord.id,
+          returnNumber: returnRecord.returnNumber,
+          date: returnRecord.date,
+          commissionPercentage,
+          commissionAmount: roundNumber(returnRecord.netTotal * commissionPercentage / 100, priceDecimals),
+          notes: '',
+        }]
+      }))
     } catch (error) {
       console.error('OPEN DELEGATE DETAILS FAILED', error)
       setDetailsError(getUserFriendlyErrorMessage(error, 'تعذر تحميل تفاصيل المندوب.'))
     } finally {
       setDetailsLoading(false)
     }
-  }, [loadDelegatePayments])
+  }, [loadDelegatePayments, priceDecimals])
 
   const closeDelegateDetails = useCallback(() => {
     setDelegateDetailsOpen(false)
     setSelectedDelegate(null)
     setDelegatePayments([])
+    setDelegateReturns([])
     setDetailsError('')
     setPaymentDialogOpen(false)
     setPaymentError('')
@@ -697,7 +758,7 @@ export function DelegatesPage() {
       await delegatesService.createPayment({
         delegateId: selectedDelegate.id,
         date: toInternalDate(paymentForm.date) || paymentForm.date,
-        amount,
+        amount: roundNumber(amount, priceDecimals),
         paymentMethod: paymentForm.paymentMethod,
         notes: paymentForm.notes.trim(),
       })
@@ -711,7 +772,7 @@ export function DelegatesPage() {
       setPaymentError(message)
       notify.error(message)
     }
-  }, [selectedDelegate, paymentForm, loadDelegatePayments, notify])
+  }, [selectedDelegate, paymentForm, loadDelegatePayments, notify, priceDecimals])
 
   const handleDeleteDelegatePayment = useCallback(async () => {
     if (!selectedDelegate || !paymentToDelete) return
@@ -741,30 +802,6 @@ export function DelegatesPage() {
     if (duplicate) {
       setFormError('رقم المندوب مستخدم مسبقاً.')
       return
-    }
-
-    if (form.id && form.status === 'inactive') {
-      try {
-        const invoices = await salesService.listInvoices({})
-        let hasInvoicesUsage = false
-
-        for (const invoice of invoices) {
-          const details = await salesService.getInvoiceById(invoice.id)
-          if ((details.delegates ?? []).some((item) => item.delegateId === form.id)) {
-            hasInvoicesUsage = true
-            break
-          }
-        }
-
-        if (hasInvoicesUsage) {
-          setFormError('لا يمكن تحويل حالة المندوب إلى غير فعال لأنه مستخدم في فواتير مبيعات مسجلة.')
-          return
-        }
-      } catch (error) {
-        console.error('CHECK DELEGATE USAGE FAILED', error)
-        setFormError(getUserFriendlyErrorMessage(error, 'تعذر التحقق من استخدام المندوب في الفواتير.'))
-        return
-      }
     }
 
     try {
@@ -837,7 +874,7 @@ export function DelegatesPage() {
         }
       >
         <Box sx={{ overflowX: 'auto' }}>
-          <Table sx={{ minWidth: 800 }}>
+          <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
             <TableHead>
               <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                 <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم المندوب</TableCell>
@@ -923,6 +960,7 @@ export function DelegatesPage() {
               setRowsPerPage(Number(event.target.value))
               setPage(0)
             }}
+            labelRowsPerPage="الصفوف:"
           />
         </Box>
       </SectionCard>
@@ -1157,11 +1195,13 @@ export function DelegatesPage() {
                   لا توجد حركات مسجلة لهذا المندوب في الفترة المحددة.
                 </Typography>
               ) : (
-                <Table sx={{ width: '100%' }}>
+                <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+                <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                   <TableHead>
                     <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>مدين</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>دائن</TableCell>
+                      <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>نوع الحركة</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>طريقة الدفع</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم الفاتورة</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>نسبة العمولة</TableCell>
@@ -1182,6 +1222,15 @@ export function DelegatesPage() {
                             : entry.credit > 0
                               ? priceNum(entry.credit)
                               : ''}
+                        </TableCell>
+                        <TableCell sx={{ textAlign: 'center' }}>
+                          {entry.id === 'carried-forward-balance'
+                            ? 'رصيد مدور'
+                            : entry.type === 'invoice'
+                              ? 'عمولة مبيعات'
+                              : entry.type === 'return'
+                                ? 'مرتجع مبيعات'
+                                : 'دفعة نقدية'}
                         </TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>{entry.paymentMethod}</TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>{entry.invoiceNumber}</TableCell>
@@ -1208,28 +1257,32 @@ export function DelegatesPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </Box>
               )}
 
-              <Table sx={{ width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
+              <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto', '& td, & th': { textAlign: 'center' } }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
-                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي</TableCell>
-                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المدفوع</TableCell>
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>صافي العمولات</TableCell>
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المدفوع نقداً</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الرصيد</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   <TableRow sx={{ textAlignLast: 'center' }}>
-                    <TableCell sx={{ textAlign: 'center' }}>{currency(totalCredit)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>{currency(totalDebit)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{currency(netCommissions)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{currency(cashPaid)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{currency(remainingBalance)}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
+          <Button sx={{ mr: 'auto' }} onClick={closeDelegateDetails}>إغلاق</Button>
           <Button
             variant="contained"
             startIcon={<FiCheckCircle />}
@@ -1238,7 +1291,7 @@ export function DelegatesPage() {
               setPaymentError('')
               setPaymentForm({
                 date: getLocalDateYMD(),
-                amount: remainingBalance > 0 ? String(remainingBalance) : '',
+                amount: remainingBalance > 0 ? String(normalizeRemainingAmount(remainingBalance, priceDecimals)) : '',
                 paymentMethod: loadSettings().paymentMethods[0] ?? '',
                 notes: '',
               })
@@ -1261,7 +1314,6 @@ export function DelegatesPage() {
           <Button variant="contained" onClick={handleExportDelegatePdf}>
             تصدير PDF
           </Button>
-          <Button onClick={closeDelegateDetails}>إغلاق</Button>
         </DialogActions>
       </Dialog>
 
@@ -1308,7 +1360,7 @@ export function DelegatesPage() {
                 setPaymentError('')
               }
             }}
-            slotProps={{ htmlInput: { min: 0, step: 1 } }}
+            slotProps={{ htmlInput: { min: 0, step: 10 ** -priceDecimals } }}
             required
           />
           <TextField

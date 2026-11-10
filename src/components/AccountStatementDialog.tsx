@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
-import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material'
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography } from '@mui/material'
 import type { DialogProps } from '@mui/material/Dialog'
 import { formatCurrencyValue, formatDateDMY, getLocalDateTimeString } from '../utils/displayFormatting'
 import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
-import type { AccountStatementEntity, AccountStatementInvoice, AccountStatementKind } from '../types/accountStatement'
+import type { AccountStatementEntity, AccountStatementInvoice, AccountStatementKind, AccountStatementReturn } from '../types/accountStatement'
 import { useNavigate } from 'react-router-dom'
 
 type Props = {
@@ -12,12 +12,13 @@ type Props = {
   entity: AccountStatementEntity | null
   kind: AccountStatementKind
   invoices: AccountStatementInvoice[]
+  returns?: AccountStatementReturn[]
   slotProps?: DialogProps['slotProps']
 }
 
 type LedgerEntry = {
   id: string
-  type: 'invoice' | 'payment'
+  type: 'invoice' | 'payment' | 'return'
   debit: number
   credit: number
   paymentMethod: string
@@ -33,7 +34,7 @@ function getPreviousDayDateString(value: string) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
-export function AccountStatementDialog({ open, onClose, entity, kind, invoices, slotProps }: Props) {
+export function AccountStatementDialog({ open, onClose, entity, kind, invoices, returns = [], slotProps }: Props) {
   const navigate = useNavigate()
   const [startDateFilter, setStartDateFilter] = useState('')
   const [endDateFilter, setEndDateFilter] = useState('')
@@ -66,7 +67,7 @@ export function AccountStatementDialog({ open, onClose, entity, kind, invoices, 
   }
 
   const ledger = useMemo(() => {
-    const entries: LedgerEntry[] = invoices.flatMap((invoice) => [
+    const invoiceEntries: LedgerEntry[] = invoices.flatMap((invoice) => [
       {
         id: `invoice-${invoice.id}`,
         type: 'invoice' as const,
@@ -88,8 +89,26 @@ export function AccountStatementDialog({ open, onClose, entity, kind, invoices, 
         date: payment.date,
       })),
     ]).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    const returnEntries: LedgerEntry[] = returns.map((returnRecord) => ({
+      id: `return-${returnRecord.id}`,
+      type: 'return',
+      debit: isSupplier ? returnRecord.amount : 0,
+      credit: isSupplier ? 0 : returnRecord.amount,
+      paymentMethod: '',
+      documentNumber: returnRecord.returnNumber,
+      notes: returnRecord.notes ?? '',
+      date: returnRecord.date,
+    }))
+    const entries = [...invoiceEntries, ...returnEntries].sort(
+      (a, b) =>
+        new Date(a.date).getTime() - new Date(b.date).getTime()
+        || ['invoice', 'return', 'payment'].indexOf(a.type) - ['invoice', 'return', 'payment'].indexOf(b.type)
+        || a.id.localeCompare(b.id),
+    )
 
-    const balanceOf = (entry: LedgerEntry) => isSupplier ? entry.credit - entry.debit : entry.debit - entry.credit
+    const balanceOf = (entry: LedgerEntry) => isSupplier
+      ? entry.credit - entry.debit - (entry.type === 'payment' ? entry.credit : 0)
+      : entry.debit - entry.credit
     const start = startDateFilter ? new Date(`${startDateFilter}T00:00:00`).getTime() : null
     const end = endDateFilter ? new Date(`${endDateFilter}T23:59:59.999`).getTime() : Number.POSITIVE_INFINITY
     const prior = start === null
@@ -114,11 +133,32 @@ export function AccountStatementDialog({ open, onClose, entity, kind, invoices, 
       date: getPreviousDayDateString(startDateFilter),
     })
     return visible
-  }, [invoices, isSupplier, startDateFilter, endDateFilter])
+  }, [invoices, returns, isSupplier, startDateFilter, endDateFilter])
 
   const totalDebit = ledger.reduce((sum, entry) => sum + entry.debit, 0)
   const totalCredit = ledger.reduce((sum, entry) => sum + entry.credit, 0)
-  const remainingBalance = isSupplier ? totalCredit - totalDebit : totalDebit - totalCredit
+  const remainingBalance = isSupplier
+    ? ledger.reduce((sum, entry) => sum + entry.credit - entry.debit - (entry.type === 'payment' ? entry.credit : 0), 0)
+    : totalDebit - totalCredit
+  const grossTransactions = ledger.reduce(
+    (sum, entry) => entry.type === 'invoice' && entry.id !== 'carried-forward-balance'
+      ? sum + (isSupplier ? entry.credit : entry.debit)
+      : sum,
+    0,
+  )
+  const returnTransactions = ledger.reduce(
+    (sum, entry) => entry.type === 'return'
+      ? sum + (isSupplier ? entry.debit : entry.credit)
+      : sum,
+    0,
+  )
+  const netTransactions = Math.max(grossTransactions - returnTransactions, 0)
+  const cashTransactions = ledger.reduce(
+    (sum, entry) => entry.type === 'payment'
+      ? sum + (isSupplier ? entry.debit : entry.credit)
+      : sum,
+    0,
+  )
 
   const exportStatement = async () => {
     if (!entity) return
@@ -136,7 +176,7 @@ export function AccountStatementDialog({ open, onClose, entity, kind, invoices, 
           partyName: entity.name,
           partyNumber: entity.code,
           items: [],
-          subtotal: totalDebit,
+          subtotal: netTransactions,
           discount: 0,
           total: remainingBalance,
           entityCode: entity.code,
@@ -144,6 +184,16 @@ export function AccountStatementDialog({ open, onClose, entity, kind, invoices, 
           entityPhone: entity.phone ?? '',
           entityAddress: entity.address ?? '',
           relatedInvoices: invoices,
+          ledgerEntries: ledger.map((entry) => ({
+            id: entry.id,
+            type: entry.type,
+            debit: entry.debit,
+            credit: entry.credit,
+            paymentMethod: entry.paymentMethod,
+            documentNumber: entry.documentNumber,
+            notes: entry.notes,
+            date: entry.date,
+          })),
           totalDebit,
           totalCredit,
           remainingBalance,
@@ -168,8 +218,17 @@ export function AccountStatementDialog({ open, onClose, entity, kind, invoices, 
           <TextField label="إلى تاريخ" type="date" size="small" value={endDateFilter} onChange={(event) => { setEndDateFilter(event.target.value); setQuickFilter('') }} slotProps={{ inputLabel: { shrink: true } }} />
           {(startDateFilter || endDateFilter || quickFilter) ? <Button variant="outlined" size="small" onClick={() => { setStartDateFilter(''); setEndDateFilter(''); setQuickFilter('') }}>إعادة ضبط</Button> : null}
         </Box>
-        {ledger.length === 0 ? <Typography>لا توجد حركات مسجلة في الفترة المحددة.</Typography> : <Table sx={{ width: '100%' }}><TableHead><TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>مدين</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>دائن</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>طريقة الدفع</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم المستند</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الملاحظات</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>التاريخ</TableCell></TableRow></TableHead><TableBody>{ledger.map((entry) => <TableRow key={entry.id} sx={{ textAlignLast: 'center' }}><TableCell sx={{ textAlign: 'center' }}>{entry.debit > 0 ? money(entry.debit) : ''}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.id === 'carried-forward-balance' && entry.debit === 0 && entry.credit === 0 ? money(0) : entry.credit > 0 ? money(entry.credit) : ''}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.paymentMethod}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.documentNumber}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.notes}</TableCell><TableCell sx={{ textAlign: 'center' }}>{formatDateDMY(entry.date)}</TableCell></TableRow>)}</TableBody></Table>}
-        <Table sx={{ width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}><TableHead><TableRow><TableCell>إجمالي المدين</TableCell><TableCell>إجمالي الدائن</TableCell><TableCell>الرصيد</TableCell></TableRow></TableHead><TableBody><TableRow><TableCell>{money(totalDebit)}</TableCell><TableCell>{money(totalCredit)}</TableCell><TableCell>{money(remainingBalance)}</TableCell></TableRow></TableBody></Table>
+        {ledger.length === 0 ? <Typography>لا توجد حركات مسجلة في الفترة المحددة.</Typography> : (
+          <TableContainer sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
+              <TableHead><TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>مدين</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>دائن</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>نوع الحركة</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>طريقة الدفع</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم المستند</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الملاحظات</TableCell><TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>التاريخ</TableCell></TableRow></TableHead>
+              <TableBody>{ledger.map((entry) => <TableRow key={entry.id} sx={{ textAlignLast: 'center' }}><TableCell sx={{ textAlign: 'center' }}>{entry.debit > 0 ? money(entry.debit) : ''}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.id === 'carried-forward-balance' && entry.debit === 0 && entry.credit === 0 ? money(0) : entry.credit > 0 ? money(entry.credit) : ''}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.id === 'carried-forward-balance' ? 'رصيد مدور' : entry.type === 'return' ? (isSupplier ? 'مرتجع شراء' : 'مرتجع مبيعات') : entry.type === 'payment' ? 'دفعة نقدية' : (isSupplier ? 'فاتورة شراء' : 'فاتورة مبيعات')}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.paymentMethod}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.documentNumber}</TableCell><TableCell sx={{ textAlign: 'center' }}>{entry.notes}</TableCell><TableCell sx={{ textAlign: 'center' }}>{formatDateDMY(entry.date)}</TableCell></TableRow>)}</TableBody>
+            </Table>
+          </TableContainer>
+        )}
+        <TableContainer sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+          <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}><TableHead><TableRow><TableCell>{isSupplier ? 'صافي المشتريات' : 'صافي المبيعات'}</TableCell><TableCell>الدفعات النقدية</TableCell><TableCell>الرصيد</TableCell></TableRow></TableHead><TableBody><TableRow><TableCell>{money(netTransactions)}</TableCell><TableCell>{money(cashTransactions)}</TableCell><TableCell>{money(remainingBalance)}</TableCell></TableRow></TableBody></Table>
+        </TableContainer>
       </DialogContent>
       <DialogActions><Button onClick={exportStatement} variant="contained">تصدير PDF</Button><Button onClick={onClose}>إغلاق</Button></DialogActions>
     </Dialog>

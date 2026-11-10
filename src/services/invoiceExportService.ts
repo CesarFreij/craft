@@ -5,18 +5,6 @@ function priceNum(value: number | undefined): string {
   return formatNumberBySettings(Number(value ?? 0), 'price')
 }
 
-declare global {
-  interface Window {
-    craftExportAPI?: {
-      exportInvoicePdf(payload: {
-        invoiceData: InvoicePrintData
-        settings: CompanyPrintSettings
-        fileName?: string
-      }): Promise<string>
-    }
-  }
-}
-
 function getExportAPI() {
   if (!window.craftExportAPI) {
     throw new Error('craftExportAPI is not available. Check preload or IPC setup.')
@@ -56,9 +44,9 @@ function renderItems(data: InvoicePrintData): string {
         return `
           <tr>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${index + 1}</td>
-            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.code || '—')}</td>
+            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.code || '')}</td>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:right;">${escapeHtml(item.name)}</td>
-            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.unit || '—')}</td>
+            <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${escapeHtml(item.unit || '')}</td>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${formatNumberBySettings(item.quantity ?? 0, 'quantity')}</td>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${priceNum(item.price ?? 0)}</td>
             <td style="border:1px solid rgba(15,23,42,0.12);padding:10px;text-align:center;">${priceNum(item.total ?? 0)}</td>
@@ -84,7 +72,7 @@ export function buildInvoiceExportHtml(data: InvoicePrintData, settings: Company
   const hasLogo = Boolean(settings.logoDataUrl && settings.logoDataUrl.trim())
   const partyDisplay = [data.partyName?.trim(), data.partyNumber?.trim()]
     .filter(Boolean)
-    .join(' / ') || '—'
+    .join(' / ') || ''
   const notesBlock = data.notes && data.notes.trim()
     ? `<div style="border:1px solid rgba(15,23,42,0.12);border-radius:10px;background:rgba(15,23,42,0.02);padding:16px;">
         <div style="font-weight:700;color:#0f172a;margin-bottom:6px;">ملاحظات</div>
@@ -95,6 +83,10 @@ export function buildInvoiceExportHtml(data: InvoicePrintData, settings: Company
   const referenceBlock = data.referenceLabel && data.referenceValue
     ? `<div><strong>${escapeHtml(data.referenceLabel)}:</strong> ${escapeHtml(String(data.referenceValue))}</div>`
     : ''
+  const purchaseFeesRow = data.documentType === 'purchase' && Number(data.additionalFees ?? 0) !== 0
+    ? `<div class="totals-row"><span>رسوم إضافية لتكلفة المخزون:</span><span>${formatCurrencyValue(data.additionalFees, 'price')}</span></div>`
+    : ''
+  const payableLabel = data.documentType === 'purchase' ? 'الصافي المستحق للمورد:' : 'الإجمالي:'
 
   return `
     <!doctype html>
@@ -295,8 +287,8 @@ export function buildInvoiceExportHtml(data: InvoicePrintData, settings: Company
             <div class="doc-box">
               <p class="doc-title">${escapeHtml(data.title)}</p>
               <div class="doc-meta">
-                <div><strong>رقم المستند:</strong> ${escapeHtml(data.documentNumber || '—')}</div>
-                <div><strong>التاريخ:</strong> ${escapeHtml(data.date || '—')}</div>
+                <div><strong>رقم المستند:</strong> ${escapeHtml(data.documentNumber || '')}</div>
+                <div><strong>التاريخ:</strong> ${escapeHtml(data.date || '')}</div>
                 <div><strong>${escapeHtml(data.partyLabel)}:</strong> ${escapeHtml(partyDisplay)}</div>
                 ${referenceBlock}
               </div>
@@ -308,14 +300,15 @@ export function buildInvoiceExportHtml(data: InvoicePrintData, settings: Company
             <div class="summary">
               <div class="payment-area">
                 <div class="payment-title">طريقة الدفع</div>
-                <div class="payment-value">${escapeHtml(data.paymentMethod || '—')}</div>
+                <div class="payment-value">${escapeHtml(data.paymentMethod || '')}</div>
                 ${notesBlock ? `<div class="notes-area">${notesBlock}</div>` : ''}
               </div>
 
               <div class="totals">
                 <div class="totals-row"><span>الاجمالي:</span><span>${formatCurrencyValue(data.subtotal, 'price')}</span></div>
                 <div class="totals-row"><span>الخصم:</span><span>${formatCurrencyValue(data.discount, 'price')}</span></div>
-                <div class="totals-row total"><span>الاجمالي:</span><span>${formatCurrencyValue(data.total, 'price')}</span></div>
+                ${purchaseFeesRow}
+                <div class="totals-row total"><span>${payableLabel}</span><span>${formatCurrencyValue(data.total, 'price')}</span></div>
               </div>
             </div>
           </div>
@@ -335,7 +328,11 @@ export function buildInvoiceCsv(data: InvoicePrintData): string {
     return [index + 1, item.code ?? '', item.name, item.unit, formatNumberBySettings(item.quantity ?? 0, 'quantity'), priceNum(item.price ?? 0), priceNum(item.total ?? 0)].join(',')
   })
 
-  const summary = `\n"الاجمالي","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"\n"الاجمالي","${formatCurrencyValue(data.total, 'price')}"`
+  const purchaseFeeSummary = data.documentType === 'purchase' && Number(data.additionalFees ?? 0) !== 0
+    ? `\n"رسوم إضافية لتكلفة المخزون","${formatCurrencyValue(data.additionalFees, 'price')}"`
+    : ''
+  const payableLabel = data.documentType === 'purchase' ? 'الصافي المستحق للمورد' : 'الاجمالي'
+  const summary = `\n"الاجمالي","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"${purchaseFeeSummary}\n"${payableLabel}","${formatCurrencyValue(data.total, 'price')}"`
   return `"${data.title}","${data.documentNumber}"\n"التاريخ","${data.date}"\n"${data.partyLabel}","${data.partyName}"\n${headers.join(',')}\n${rows.join('\n')}${summary}`
 }
 

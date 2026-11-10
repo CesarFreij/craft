@@ -5,6 +5,7 @@ export interface WarehouseRecord {
   location?: string
   notes?: string
   status?: string
+  isDefault?: boolean
   createdAt?: string
   updatedAt?: string
 }
@@ -105,6 +106,7 @@ declare global {
   interface Window {
     craftInventoryAPI?: {
       listWarehouses: () => Promise<WarehouseRecord[]>
+      setDefaultWarehouse: (warehouseId: string) => Promise<WarehouseRecord[]>
       createWarehouse: (payload: Partial<WarehouseRecord>) => Promise<WarehouseRecord[]>
       updateWarehouse: (id: string, payload: Partial<WarehouseRecord>) => Promise<WarehouseRecord[]>
       toggleWarehouseStatus: (id: string, status: string) => Promise<WarehouseRecord[]>
@@ -156,6 +158,9 @@ function getInventoryAPI() {
 export const inventoryService = {
   async listWarehouses(): Promise<WarehouseRecord[]> {
     return getInventoryAPI().listWarehouses()
+  },
+  async setDefaultWarehouse(warehouseId: string): Promise<WarehouseRecord[]> {
+    return getInventoryAPI().setDefaultWarehouse(warehouseId)
   },
   async createWarehouse(payload: Partial<WarehouseRecord>): Promise<WarehouseRecord[]> {
     return getInventoryAPI().createWarehouse(payload)

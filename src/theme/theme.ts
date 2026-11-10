@@ -121,6 +121,18 @@ export function createCraftTheme(options: ThemeOptions) {
 
           table: {
             borderCollapse: 'collapse',
+            width: '100%',
+            minWidth: 'max-content',
+            tableLayout: 'auto',
+            '& th, & td': {
+              fontSize: 'inherit',
+              whiteSpace: 'nowrap',
+              wordBreak: 'normal',
+              overflowWrap: 'normal',
+              boxSizing: 'border-box',
+              verticalAlign: 'middle',
+              textAlign: 'center',
+            },
           },
 
           /*
@@ -198,6 +210,14 @@ export function createCraftTheme(options: ThemeOptions) {
           root: {
             color: 'rgba(255,255,255,0.68)',
 
+            '& .MuiFormLabel-asterisk, & .MuiInputLabel-asterisk': {
+              color: '#EF4444',
+              fontSize: '1.25rem',
+              fontWeight: 700,
+              lineHeight: 1,
+              verticalAlign: 'middle',
+            },
+
             '&.Mui-focused': {
               color: '#67E8F9',
             },
@@ -208,7 +228,11 @@ export function createCraftTheme(options: ThemeOptions) {
       MuiFormLabel: {
         styleOverrides: {
           asterisk: {
-            color: '#EF4444 !important',
+            color: '#FCA5A5',
+            fontSize: '1.25rem',
+            fontWeight: 700,
+            lineHeight: 1,
+            verticalAlign: 'middle',
           },
         },
       },
@@ -369,7 +393,10 @@ export function createCraftTheme(options: ThemeOptions) {
        * نخليه Light Glass لأن هاد النمط الحالي الموجود بالثيم.
        */
       MuiDialog: {
-        styleOverrides: {
+         defaultProps: {
+           scroll: 'body',
+         },
+         styleOverrides: {
           paper: {
             borderRadius: componentRadiusMap[options.borderRadius],
 
@@ -421,6 +448,9 @@ export function createCraftTheme(options: ThemeOptions) {
         styleOverrides: {
           root: {
             borderCollapse: 'collapse',
+            width: '100%',
+            minWidth: 'max-content',
+            tableLayout: 'auto',
           },
         },
       },
@@ -428,16 +458,24 @@ export function createCraftTheme(options: ThemeOptions) {
       MuiTableCell: {
         styleOverrides: {
           root: {
+            fontSize: 'inherit',
+            color: 'rgba(255, 255, 255, 0.88)',
             verticalAlign: 'middle',
+            whiteSpace: 'nowrap',
+            wordBreak: 'normal',
+            overflowWrap: 'normal',
+            boxSizing: 'border-box',
 
             textAlign: 'center',
             textAlignLast: 'center',
 
-            borderColor: 'rgba(255,255,255,0.10)',
+            borderColor: 'rgba(255, 255, 255, 0.18)',
           },
 
           head: {
             fontWeight: 700,
+            color: 'rgba(255, 255, 255, 0.94)',
+            background: 'rgba(255, 255, 255, 0.055)',
           },
         },
       },

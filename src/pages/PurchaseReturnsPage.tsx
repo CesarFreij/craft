@@ -32,13 +32,14 @@ import {
   type PurchaseReturnRecord,
   type ReturnPaymentInput,
 } from '../services/purchasesService'
-import { formatCurrencyValue, formatDateDMY, getLocalDateYMD, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, getLocalDateYMD, formatNumberBySettings, roundNumberBySettings, toInternalDate } from '../utils/displayFormatting'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
 import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
 import type { InvoicePrintData } from '../types/invoicePrint'
 import { useNotifications } from '../contexts/useNotifications'
 import { loadSettings } from '../services/settingsService'
 import { FiCheckCircle } from 'react-icons/fi'
+import { calculateProratedReturnLineTotal } from '../utils/invoiceCalculations'
 
 const darkPopupPaperSx = {
   mt: 0.75,
@@ -213,7 +214,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
 
       '& .MuiDialogTitle-root': {
         color: 'rgba(255, 255, 255, 0.96)',
@@ -378,8 +379,12 @@ type ReturnLineForm = {
   materialName: string
   unit: string
   unitPrice: number
+  invoiceQuantity: number
+  invoiceItemNetTotal: number
+  previouslyReturnedQuantity: number
+  previouslyReturnedTotal: number
   availableQuantity: number
-  quantity: number
+  quantity: number | string
 }
 
 function currency(value: number): string {
@@ -388,6 +393,21 @@ function currency(value: number): string {
 
 function priceNum(value: number | undefined): string {
   return formatNumberBySettings(Number(value ?? 0), 'price')
+}
+
+function getReturnLineTotal(line: ReturnLineForm): number {
+  return calculateProratedReturnLineTotal(
+    roundNumberBySettings(Number(line.quantity), 'quantity'),
+    line.invoiceQuantity,
+    line.invoiceItemNetTotal,
+    line.previouslyReturnedQuantity,
+    line.previouslyReturnedTotal,
+    loadSettings().priceDecimals,
+  )
+}
+
+function getReturnTotal(lines: ReturnLineForm[]): number {
+  return roundNumberBySettings(lines.reduce((sum, line) => sum + getReturnLineTotal(line), 0), 'currency')
 }
 
 function DateFilterField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
@@ -485,6 +505,7 @@ export function PurchaseReturnsPage() {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [selectedReturn, setSelectedReturn] = useState<PurchaseReturnRecord | null>(null)
   const [editingReturnId, setEditingReturnId] = useState<string | null>(null)
+  const [editingReturnPaidAmount, setEditingReturnPaidAmount] = useState(0)
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false)
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
   const [returnPaymentDialogOpen, setReturnPaymentDialogOpen] = useState(false)
@@ -558,6 +579,7 @@ export function PurchaseReturnsPage() {
     setReturnDate(getLocalDateYMD())
     setReturnNotes('')
     setEditingReturnId(null)
+    setEditingReturnPaidAmount(0)
     setPendingReturnPayments([])
 
     if (!invoiceId) {
@@ -570,18 +592,23 @@ export function PurchaseReturnsPage() {
     try {
       const invoice = await purchasesService.getInvoiceById(invoiceId)
       const returnList = await purchasesService.listReturns()
-      const alreadyReturned = new Map<string, number>()
+      const alreadyReturned = new Map<string, { quantity: number; total: number }>()
 
       for (const returnSummary of returnList.filter((item) => item.purchaseInvoiceId === invoiceId)) {
         const details = await purchasesService.getReturnById(returnSummary.id)
         for (const detailItem of details.items) {
-          alreadyReturned.set(detailItem.materialId, (alreadyReturned.get(detailItem.materialId) ?? 0) + detailItem.quantity)
+          const previous = alreadyReturned.get(detailItem.materialId) ?? { quantity: 0, total: 0 }
+          alreadyReturned.set(detailItem.materialId, {
+            quantity: previous.quantity + detailItem.quantity,
+            total: previous.total + detailItem.lineTotal,
+          })
         }
       }
 
       const lines = invoice.items
-        .map((item) => {
-          const used = alreadyReturned.get(item.materialId) ?? 0
+        .map((item): ReturnLineForm | null => {
+          const previous = alreadyReturned.get(item.materialId) ?? { quantity: 0, total: 0 }
+          const used = previous.quantity
           const availableQuantity = Math.max(item.quantity - used, 0)
           if (availableQuantity <= 0) return null
 
@@ -590,7 +617,11 @@ export function PurchaseReturnsPage() {
             materialId: item.materialId,
             materialName: item.materialName,
             unit: item.unit,
-            unitPrice: item.unitPrice,
+            unitPrice: item.netUnitPrice,
+            invoiceQuantity: item.quantity,
+            invoiceItemNetTotal: item.netTotal,
+            previouslyReturnedQuantity: previous.quantity,
+            previouslyReturnedTotal: previous.total,
             availableQuantity,
             quantity: availableQuantity,
           }
@@ -615,17 +646,22 @@ const openEditReturn = useCallback(async (returnId: string) => {
         return acc
       }, {})
       const returnList = await purchasesService.listReturns()
-      const otherReturnTotals = new Map<string, number>()
+      const otherReturnTotals = new Map<string, { quantity: number; total: number }>()
 
       for (const summary of returnList.filter((item) => item.purchaseInvoiceId === details.purchaseInvoiceId && item.id !== returnId)) {
         const current = await purchasesService.getReturnById(summary.id)
         for (const detailItem of current.items) {
-          otherReturnTotals.set(detailItem.materialId, (otherReturnTotals.get(detailItem.materialId) ?? 0) + detailItem.quantity)
+          const previous = otherReturnTotals.get(detailItem.materialId) ?? { quantity: 0, total: 0 }
+          otherReturnTotals.set(detailItem.materialId, {
+            quantity: previous.quantity + detailItem.quantity,
+            total: previous.total + detailItem.lineTotal,
+          })
         }
       }
 
-      const lines = invoice.items.map((item) => {
-        const alreadyReturned = otherReturnTotals.get(item.materialId) ?? 0
+      const lines = invoice.items.map((item): ReturnLineForm => {
+        const previous = otherReturnTotals.get(item.materialId) ?? { quantity: 0, total: 0 }
+        const alreadyReturned = previous.quantity
         const currentQty = excludeCurrent[item.materialId] ?? 0
         const availableQuantity = Math.max(item.quantity - alreadyReturned, 0)
         return {
@@ -633,13 +669,18 @@ const openEditReturn = useCallback(async (returnId: string) => {
           materialId: item.materialId,
           materialName: item.materialName,
           unit: item.unit,
-          unitPrice: item.unitPrice,
+          unitPrice: item.netUnitPrice,
+          invoiceQuantity: item.quantity,
+          invoiceItemNetTotal: item.netTotal,
+          previouslyReturnedQuantity: previous.quantity,
+          previouslyReturnedTotal: previous.total,
           availableQuantity,
           quantity: currentQty, // 👈 تم الحل هنا: وضع الكمية المحفوظة فقط
         }
-      }).filter((item) => item.availableQuantity > 0 || item.quantity > 0) // 👈 إخفاء المواد غير المتاحة والتي لم ترجع
+      }).filter((item) => item.availableQuantity > 0 || Number(item.quantity) > 0) // 👈 إخفاء المواد غير المتاحة والتي لم ترجع
 
       setEditingReturnId(returnId)
+      setEditingReturnPaidAmount(details.payments.reduce((sum, payment) => sum + Number(payment.amount ?? 0), 0))
       setSelectedInvoiceId(details.purchaseInvoiceId)
       setSelectedInvoice(invoice)
       setReturnDate(details.date)
@@ -684,6 +725,7 @@ useEffect(() => {
     setReturnLines([])
     setReturnError('')
     setEditingReturnId(null)
+    setEditingReturnPaidAmount(0)
     setPendingReturnPayments([])
   }, [])
 
@@ -705,10 +747,13 @@ useEffect(() => {
     }
 
     const payloadItems = returnLines
-      .filter((line) => Number(line.quantity) > 0 && Number(line.quantity) <= line.availableQuantity)
+      .filter((line) => {
+        const quantity = roundNumberBySettings(Number(line.quantity), 'quantity')
+        return quantity > 0 && quantity <= line.availableQuantity
+      })
       .map((line) => ({
         materialId: line.materialId,
-        quantity: Number(line.quantity),
+        quantity: roundNumberBySettings(Number(line.quantity), 'quantity'),
         unit: line.unit,
         unitPrice: Number(line.unitPrice),
       }))
@@ -765,11 +810,11 @@ useEffect(() => {
   const openCreateReturnPaymentDialog = () => {
     setReturnPaymentTargetId(null)
     setReturnPaymentError('')
-    const returnTotal = returnLines.reduce((sum, line) => sum + Number(line.quantity) * Number(line.unitPrice), 0)
+    const returnTotal = getReturnTotal(returnLines)
     const pendingPaid = pendingReturnPayments.reduce((sum, payment) => sum + Number(payment.amount), 0)
     setReturnPaymentForm({
       date: getLocalDateYMD(),
-      amount: Math.max(returnTotal - pendingPaid, 0),
+      amount: Math.max(roundNumberBySettings(returnTotal - editingReturnPaidAmount - pendingPaid, 'currency'), 0),
       paymentMethod: loadSettings().paymentMethods[0] ?? '',
       notes: '',
     })
@@ -809,6 +854,18 @@ useEffect(() => {
     }
 
     const payment = { ...returnPaymentForm, date: toInternalDate(returnPaymentForm.date), amount: Number(returnPaymentForm.amount) }
+    const paidAmount = returnPaymentTargetId
+      ? selectedReturn?.payments.reduce((sum, existingPayment) => sum + Number(existingPayment.amount ?? 0), 0) ?? 0
+      : editingReturnPaidAmount + pendingReturnPayments.reduce((sum, pendingPayment) => sum + Number(pendingPayment.amount), 0)
+    const returnTotal = returnPaymentTargetId
+      ? Number(selectedReturn?.netTotal ?? 0)
+      : getReturnTotal(returnLines)
+    const remainingAmount = Math.max(roundNumberBySettings(returnTotal - paidAmount, 'currency'), 0)
+    if (payment.amount > remainingAmount) {
+      setReturnPaymentError('مبلغ الدفعة يتجاوز المبلغ المتبقي من قيمة المرتجع.')
+      return
+    }
+
     try {
       setReturnPaymentError('')
       if (returnPaymentTargetId) {
@@ -836,7 +893,7 @@ useEffect(() => {
   }, [])
 
   const selectedInvoiceOption = useMemo(
-    () => invoices.find((invoice) => invoice.id === selectedInvoiceId) ?? null,
+    () => invoices.find((invoice) => invoice.id === selectedInvoiceId && invoice.status === 'completed') ?? null,
     [invoices, selectedInvoiceId],
   )
 
@@ -881,7 +938,7 @@ useEffect(() => {
       discount: 0,
       total: Number(selectedReturn.netTotal ?? subtotal),
       paymentMethod: selectedReturn.payments
-        .map((payment) => `${payment.paymentMethod || '—'}\t${currency(payment.amount)}`)
+        .map((payment) => `${payment.paymentMethod || ''}\t${currency(payment.amount)}`)
         .join('\n'),
       paidAmount,
       remainingAmount: Math.max(Number(selectedReturn.netTotal ?? subtotal) - paidAmount, 0),
@@ -924,7 +981,7 @@ useEffect(() => {
           <Box sx={{ display: 'grid', placeItems: 'center', p: 3 }}><CircularProgress /></Box>
         ) : (
           <Box sx={{ overflowX: 'auto' }}>
-            <Table sx={{ minWidth: 1000 }}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                   <TableCell>رقم المرتجع</TableCell>
@@ -986,6 +1043,7 @@ useEffect(() => {
               setRowsPerPage(Number(event.target.value))
               setPage(0)
             }}
+            labelRowsPerPage="الصفوف:"
           />
         </Box>
       </SectionCard>
@@ -1002,7 +1060,7 @@ useEffect(() => {
 
           <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
             <Autocomplete
-              options={invoices}
+              options={invoices.filter((invoice) => invoice.status === 'completed')}
               value={selectedInvoiceOption}
               getOptionLabel={(option) => `${option.invoiceNumber} - ${option.supplierName}`}
               onChange={(_, value) => {
@@ -1032,14 +1090,17 @@ useEffect(() => {
           ) : null}
 
           {returnLines.length > 0 ? (
-            <Table>
+            <>
+            <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                   <TableCell>المادة</TableCell>
                   <TableCell>الوحدة</TableCell>
                   <TableCell>الكمية المتبقية للإرجاع</TableCell>
-                  <TableCell>سعر الوحدة</TableCell>
+                  <TableCell>سعر الوحدة الصافي بعد الخصم</TableCell>
                   <TableCell>كمية المرتجع</TableCell>
+                  <TableCell>إجمالي السطر</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -1047,7 +1108,7 @@ useEffect(() => {
                   <TableRow key={line.key}>
                     <TableCell>{line.materialName}</TableCell>
                     <TableCell>{line.unit}</TableCell>
-                    <TableCell>{line.availableQuantity}</TableCell>
+                    <TableCell>{formatNumberBySettings(line.availableQuantity, 'quantity')}</TableCell>
                     <TableCell>{priceNum(line.unitPrice)}</TableCell>
                     <TableCell>
                       <TextField
@@ -1055,11 +1116,29 @@ useEffect(() => {
                         type="number"
                         value={line.quantity}
                         onChange={(event) => {
-                          const rawValue = Number(event.target.value)
+                          const rawValue = event.target.value
+                          const numericValue = Number(rawValue)
                           setReturnLines((prev) => prev.map((item) => item.key === line.key
                             ? {
                                 ...item,
-                                quantity: Number.isFinite(rawValue) ? Math.min(Math.max(rawValue, 0), item.availableQuantity) : 0,
+                                quantity: rawValue === ''
+                                  ? ''
+                                  : Number.isFinite(numericValue)
+                                    ? numericValue < 0
+                                      ? 0
+                                      : numericValue > item.availableQuantity
+                                        ? item.availableQuantity
+                                        : rawValue
+                                    : '',
+                              }
+                            : item,
+                          ))
+                        }}
+                        onBlur={() => {
+                          setReturnLines((prev) => prev.map((item) => item.key === line.key
+                            ? {
+                                ...item,
+                                quantity: roundNumberBySettings(Math.min(Math.max(Number(item.quantity), 0), item.availableQuantity), 'quantity'),
                               }
                             : item,
                           ))
@@ -1068,15 +1147,21 @@ useEffect(() => {
                             htmlInput: {
                                 min: 0,
                                 max: line.availableQuantity,
-                                step: 1,
+                                step: 'any',
                             },
                         }}
                       />
                     </TableCell>
+                    <TableCell>{currency(getReturnLineTotal(line))}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+            </Box>
+            <Typography sx={{ textAlign: 'end', fontWeight: 700 }}>
+              إجمالي قيمة المرتجع: {currency(getReturnTotal(returnLines))}
+            </Typography>
+            </>
           ) : selectedInvoice ? (
             <Typography sx={{ color: 'rgba(255, 255, 255, 0.72)' }}>
               تم إرجاع كامل مواد هذه الفاتورة، ولم يتبقَ شيء متاح للإرجاع.
@@ -1095,20 +1180,21 @@ useEffect(() => {
             minRows={2}
           />
 
-          <SectionCard title="سند قبض">
+          {pendingReturnPayments.length > 0 ? (
             <Box sx={{ display: 'grid', gap: 1.5 }}>
               {pendingReturnPayments.map((payment, index) => (
                 <Typography key={`${payment.date}-${index}`}>
                   {formatDateDMY(payment.date)} - {priceNum(payment.amount)} - {payment.paymentMethod}
                 </Typography>
               ))}
-              <Button variant="outlined" onClick={openCreateReturnPaymentDialog} sx={{ width: 'fit-content' }}>
-                قبض دفعة
-              </Button>
             </Box>
-          </SectionCard>
+          ) : null}
         </DialogContent>
         <DialogActions>
+          <Button sx={{ mr: 'auto' }} onClick={() => resetDialog()}>إلغاء</Button>
+          <Button variant="outlined" onClick={openCreateReturnPaymentDialog}>
+            قبض دفعة
+          </Button>
           <Button
             variant="contained"
             onClick={() => setSaveConfirmOpen(true)}
@@ -1124,7 +1210,6 @@ useEffect(() => {
           >
             {saving ? 'جارٍ الحفظ...' : 'حفظ المرتجع'}
           </Button>
-          <Button onClick={() => resetDialog()}>إلغاء</Button>
         </DialogActions>
       </Dialog>
 
@@ -1169,13 +1254,14 @@ useEffect(() => {
                 <Box>المخزن: <strong>{selectedReturn.warehouseName}</strong></Box>
               </Box>
 
-              <Table>
+              <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                     <TableCell>المادة</TableCell>
                     <TableCell>الوحدة</TableCell>
                     <TableCell>الكمية المرتجعة</TableCell>
-                    <TableCell>تكلفة الوحدة</TableCell>
+                    <TableCell>سعر الوحدة الصافي بعد الخصم</TableCell>
                     <TableCell>الإجمالي</TableCell>
                     <TableCell>ملاحظات</TableCell>
                   </TableRow>
@@ -1197,9 +1283,11 @@ useEffect(() => {
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
 
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, flexWrap: 'wrap', mt: 1 }}>
-                <Table sx={{ minWidth: 420, '& td, & th': { textAlign: 'center' } }}>
+                <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+                <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto', '& td, & th': { textAlign: 'center' } }}>
                   <TableHead><TableRow><TableCell>الاجمالي</TableCell><TableCell>المقبوض</TableCell><TableCell>المتبقي</TableCell></TableRow></TableHead>
                   <TableBody><TableRow>
                     <TableCell>{currency(selectedReturn.netTotal)}</TableCell>
@@ -1207,12 +1295,14 @@ useEffect(() => {
                     <TableCell>{currency(Math.max(Number(selectedReturn.netTotal) - selectedReturn.payments.reduce((sum, payment) => sum + Number(payment.amount), 0), 0))}</TableCell>
                   </TableRow></TableBody>
                 </Table>
+                </Box>
               </Box>
               <SectionCard title="سجل الدفعات">
                 {selectedReturn.payments.length === 0 ? (
                   <Typography>لا توجد دفعات مرتبطة بهذا المرتجع.</Typography>
                 ) : (
-                  <Table>
+                  <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+                  <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                     <TableHead>
                       <TableRow>
                         <TableCell>التاريخ</TableCell>
@@ -1238,15 +1328,16 @@ useEffect(() => {
                       ))}
                     </TableBody>
                   </Table>
+                  </Box>
                 )}
               </SectionCard>
             </Box>
           )}
         </DialogContent>
         <DialogActions sx={{ display: 'flex', gap: 1 }}>
+          <Button sx={{ mr: 'auto' }} onClick={() => setDetailsOpen(false)}>إغلاق</Button>
           <Button variant="contained" sx={{ background: '#66bb6a', '&:hover': { background: '#66bb6a' }}} startIcon={<FiCheckCircle />} onClick={openDetailsReturnPaymentDialog}>قبض دفعة</Button>
           <Button variant="contained" onClick={() => { void handleExportPdf() }}>تصدير PDF</Button>
-          <Button onClick={() => setDetailsOpen(false)}>إغلاق</Button>
         </DialogActions>
       </Dialog>
 

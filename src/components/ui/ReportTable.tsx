@@ -28,10 +28,18 @@ interface ReportTableProps {
 
 const craftReportTableSx = {
   width: '100%',
-  minWidth: 1000,
+  minWidth: 'max-content',
   borderCollapse: 'collapse',
   background: 'transparent',
   tableLayout: 'auto',
+  '& td, & th, & .MuiTableCell-root': {
+    whiteSpace: 'nowrap',
+    wordBreak: 'normal',
+    overflowWrap: 'normal',
+    boxSizing: 'border-box',
+    verticalAlign: 'middle',
+    textAlign: 'center',
+  },
 
   '& .MuiTableHead-root, & .MuiTableBody-root': {
     background: 'transparent',
@@ -48,7 +56,6 @@ const craftReportTableSx = {
   '& .MuiTableCell-root': {
     color: 'rgba(255,255,255,.88)',
     border: '1px solid rgba(255,255,255,.14)',
-    whiteSpace: 'nowrap',
   },
 
   '& .MuiTableHead-root .MuiTableCell-root': {
@@ -81,7 +88,7 @@ export function ReportTable({
   return (
     <Box>
       <Box sx={reportTableFrameSx}>
-        <Table size="small" sx={craftReportTableSx}>
+        <Table size="small" sx={{ ...craftReportTableSx, minWidth: 'max-content', tableLayout: 'auto' }}>
           <TableHead>
             <TableRow>
               {columns.map((column) => (
@@ -134,8 +141,8 @@ export function ReportTable({
                       >
                         {column.render
                           ? column.render(value, row)
-                          : value == null
-                            ? '—'
+                          : value == null || value === ''
+                            ? ''
                             : String(value)}
                       </TableCell>
                     )

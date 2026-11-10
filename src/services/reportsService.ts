@@ -7,6 +7,7 @@ export type ReportType =
   | 'inventory_adjustments'
   | 'production'
   | 'production_cost'
+  | 'cash_flow'
 
 export type ReportPeriod =
   | 'daily'

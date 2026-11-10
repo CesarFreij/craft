@@ -34,7 +34,7 @@ import { materialsService, type MaterialRecord } from '../services/materialsServ
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatCurrencyValue, formatDateDMY, getLocalDateYMD, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, getLocalDateYMD, formatNumberBySettings, roundNumberBySettings, toInternalDate } from '../utils/displayFormatting'
 import { useNotifications } from '../contexts/useNotifications'
 import { downloadExcelTable, printTableData, type TableCellValue } from '../utils/tableExport'
 import { loadSettings } from '../services/settingsService'
@@ -213,7 +213,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
 
       '& .MuiDialogTitle-root': {
         color: 'rgba(255, 255, 255, 0.96)',
@@ -514,9 +514,6 @@ const emptyLine = (): AdjustmentLineItem => ({
   unitCost: '',
 })
 
-const roundTo2 = (value: number): number =>
-  Math.round((value + Number.EPSILON) * 100) / 100
-
 const roundToDecimals = (value: number, decimals: number): number => {
   const factor = 10 ** decimals
   return Math.round((value + Number.EPSILON) * factor) / factor
@@ -529,7 +526,7 @@ const formatNumber2 = (value: number | string | null | undefined): string => {
 const normalizeNumberInput = (value: string): string => {
   if (value.trim() === '') return ''
   const number = Number(value)
-  return Number.isFinite(number) ? formatNumber2(roundTo2(number)) : value
+  return Number.isFinite(number) ? formatNumber2(roundNumberBySettings(number, 'quantity')) : value
 }
 
 const normalizeAverageCostInput = (value: string): string => {
@@ -607,7 +604,7 @@ function sanitizeAdjustmentNote(rawNote: string | null | undefined): string {
 }
 
 function getDifferenceLabel(value: number): string {
-  const normalized = roundTo2(value)
+  const normalized = roundNumberBySettings(value, 'quantity')
   if (normalized > 0) return 'زيادة'
   if (normalized < 0) return 'نقص'
   return 'بدون فرق'
@@ -616,7 +613,26 @@ function getDifferenceLabel(value: number): string {
 function getAdjustmentItemValues(item: AdjustmentDetailItem) {
   const quantityIn = Number(item.quantityIn ?? 0)
   const quantityOut = Number(item.quantityOut ?? 0)
-  const systemQuantity = Number(item.systemQuantity ?? 0)
+  let snapshotSystemQuantity: number | undefined
+  if (item.systemQuantity === undefined && item.notes) {
+    try {
+      const parsed: unknown = JSON.parse(item.notes)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const snapshot = (parsed as Record<string, unknown>).snapshot
+        if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) {
+          const value = Number((snapshot as Record<string, unknown>).systemQuantity)
+          if (Number.isFinite(value)) {
+            snapshotSystemQuantity = value
+          }
+        }
+      }
+    } catch {
+      snapshotSystemQuantity = undefined
+    }
+  }
+  const systemQuantity = item.systemQuantity !== undefined
+    ? Number(item.systemQuantity)
+    : snapshotSystemQuantity ?? 0
   const countedQuantity =
     item.countedQuantity !== undefined
       ? Number(item.countedQuantity)
@@ -626,7 +642,7 @@ function getAdjustmentItemValues(item: AdjustmentDetailItem) {
   return {
     systemQuantity,
     countedQuantity,
-    difference: roundTo2(countedQuantity - systemQuantity),
+    difference: roundNumberBySettings(countedQuantity - systemQuantity, 'quantity'),
     unitCost,
   }
 }
@@ -891,7 +907,7 @@ export default function StockAdjustmentsPage() {
         return 'الكمية الفعلية يجب أن تكون رقماً صحيحاً وألا تكون سالبة.'
       }
 
-      const difference = roundTo2(countedQuantity - item.systemQuantity)
+      const difference = roundNumberBySettings(countedQuantity - item.systemQuantity, 'quantity')
 
       if (difference > 0) {
         const unitCost = Number(item.unitCost)
@@ -921,7 +937,7 @@ export default function StockAdjustmentsPage() {
       notes: documentNotes.trim(),
       items: items.map((item) => ({
         materialId: item.materialId,
-        countedQuantity: roundTo2(Number(item.countedQuantity)),
+        countedQuantity: roundNumberBySettings(Number(item.countedQuantity), 'quantity'),
         unit: item.unit,
         unitCost:
           item.unitCost.trim() === ''
@@ -1081,9 +1097,9 @@ export default function StockAdjustmentsPage() {
         rows.push([
           formatDateDMY(document.date ?? record.date),
           record.reference,
-          record.warehouseSummary || '—',
-          '—',
-          '—',
+          record.warehouseSummary || '',
+          '',
+          '',
           formatted ? formatNumberBySettings(0, 'quantity') : 0,
           formatted ? formatNumberBySettings(0, 'quantity') : 0,
           formatted ? formatNumberBySettings(0, 'quantity') : 0,
@@ -1102,9 +1118,9 @@ export default function StockAdjustmentsPage() {
         rows.push([
           formatDateDMY(document.date ?? record.date),
           record.reference,
-          item.warehouseName || record.warehouseSummary || '—',
-          item.materialName || item.materialId || '—',
-          item.unit || '—',
+          item.warehouseName || record.warehouseSummary || '',
+          item.materialName || item.materialId || '',
+          item.unit || '',
           formatted
             ? formatNumberBySettings(values.systemQuantity, 'quantity')
             : values.systemQuantity,
@@ -1221,7 +1237,7 @@ export default function StockAdjustmentsPage() {
         ) : (
           <>
             <Box sx={{ overflowX: 'auto' }}>
-              <Table sx={{ minWidth: 850 }}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                 <TableHead sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                   <TableRow>
                     <TableCell sx={{ fontWeight: 700 }}>التاريخ</TableCell>
@@ -1247,7 +1263,7 @@ export default function StockAdjustmentsPage() {
                         <TableCell sx={{ fontWeight: 700, color: 'rgba(255, 255, 255, 0.88)' }}>
                           {record.reference}
                         </TableCell>
-                        <TableCell>{record.warehouseSummary || '—'}</TableCell>
+                        <TableCell>{record.warehouseSummary || ''}</TableCell>
                         <TableCell>{formatNumberBySettings(record.itemCount ?? 0, 'quantity')}</TableCell>
                         <TableCell>{record.documentNotes?.trim() || ''}</TableCell>
                         <TableCell>
@@ -1257,7 +1273,6 @@ export default function StockAdjustmentsPage() {
                               alignItems: 'center',
                               justifyContent: 'center',
                               gap: 0.5,
-                              whiteSpace: 'nowrap',
                             }}
                           >
                             <Tooltip title="عرض التفاصيل">
@@ -1312,6 +1327,7 @@ export default function StockAdjustmentsPage() {
                 setRowsPerPage(Number(event.target.value))
                 setPage(0)
               }}
+              labelRowsPerPage="الصفوف:"
             />
           </>
         )}
@@ -1416,17 +1432,17 @@ export default function StockAdjustmentsPage() {
                 borderRadius: '14px',
               }}
             >
-              <Table size="small" sx={{ minWidth: 1250 }}>
+              <Table size="small" sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                 <TableHead sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                   <TableRow>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 220 }}>المادة</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 100 }}>الوحدة</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 120 }}>الرصيد</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 140 }}>الكمية الفعلية</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 110 }}>الفارق</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 120 }}>النوع</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 140 }}>تكلفة الوحدة</TableCell>
-                    <TableCell sx={{ fontWeight: 700, minWidth: 190 }}>ملاحظات</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>المادة</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>الوحدة</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>الرصيد</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>الكمية الفعلية</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>الفارق</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>النوع</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>تكلفة الوحدة</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>ملاحظات</TableCell>
                     <TableCell sx={{ fontWeight: 700, width: 70 }} />
                   </TableRow>
                 </TableHead>
@@ -1441,7 +1457,7 @@ export default function StockAdjustmentsPage() {
                     const difference =
                       countedNumber === null || !Number.isFinite(countedNumber)
                         ? null
-                        : roundTo2(countedNumber - item.systemQuantity)
+                        : roundNumberBySettings(countedNumber - item.systemQuantity, 'quantity')
 
                     const selectedElsewhere = new Set(
                       items
@@ -1491,7 +1507,7 @@ export default function StockAdjustmentsPage() {
                         <TableCell>
                           <TextField
                             size="small"
-                            value={item.unit || '—'}
+                            value={item.unit || ''}
                             fullWidth
                             slotProps={{ input: { readOnly: true } }}
                           />
@@ -1523,7 +1539,7 @@ export default function StockAdjustmentsPage() {
                             slotProps={{
                               htmlInput: {
                                 min: 0,
-                                step: 1,
+                                step: 'any',
                               },
                             }}
                             sx={adjustmentEditableFieldSx}
@@ -1542,7 +1558,6 @@ export default function StockAdjustmentsPage() {
                         <TableCell>
                           <Typography
                             sx={{
-                              fontSize: 13,
                               fontWeight: 750,
                               color:
                                 difference === null
@@ -1552,10 +1567,9 @@ export default function StockAdjustmentsPage() {
                                     : difference < 0
                                       ? '#FCA5A5'
                                       : '#CBD5E1',
-                              whiteSpace: 'nowrap',
                             }}
                           >
-                            {difference === null ? '—' : getDifferenceLabel(difference)}
+                            {difference === null ? '' : getDifferenceLabel(difference)}
                           </Typography>
                         </TableCell>
 
@@ -1672,7 +1686,7 @@ export default function StockAdjustmentsPage() {
                 </Typography>
                 <Typography>
                   <strong>المخزن:</strong>{' '}
-                  {detailDocument.items?.[0]?.warehouseName ?? '—'}
+                  {detailDocument.items?.[0]?.warehouseName ?? ''}
                 </Typography>
                 <Typography>
                   <strong>الملاحظات:</strong> {detailDocument.notes?.trim() || ''}
@@ -1680,7 +1694,7 @@ export default function StockAdjustmentsPage() {
               </Box>
 
               <Box sx={{ overflowX: 'auto' }}>
-                <Table sx={{ minWidth: 1050 }}>
+                <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                   <TableHead sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                     <TableRow>
                       <TableCell sx={{ fontWeight: 700 }}>المادة</TableCell>
@@ -1702,9 +1716,9 @@ export default function StockAdjustmentsPage() {
                         return (
                           <TableRow key={`${item.materialId ?? 'line'}-${index}`}>
                             <TableCell>
-                              {item.materialName || item.materialId || '—'}
+                              {item.materialName || item.materialId || ''}
                             </TableCell>
-                            <TableCell>{item.unit || '—'}</TableCell>
+                            <TableCell>{item.unit || ''}</TableCell>
                             <TableCell>{formatNumberBySettings(values.systemQuantity, 'quantity')}</TableCell>
                             <TableCell>{formatNumberBySettings(values.countedQuantity, 'quantity')}</TableCell>
                             <TableCell>{formatNumberBySettings(values.difference, 'quantity')}</TableCell>

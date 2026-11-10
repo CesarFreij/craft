@@ -17,6 +17,7 @@ import {
 import { FiEdit2, FiEye, FiPlus, FiTrash2 } from 'react-icons/fi'
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
+import { inventoryService, type StockBalanceRecord } from '../services/inventoryService'
 import { materialsService, type MaterialRecord } from '../services/materialsService'
 import {
   manufacturingService,
@@ -24,7 +25,7 @@ import {
   type ManufacturingRecipeRecord,
 } from '../services/manufacturingService'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatNumberBySettings } from '../utils/displayFormatting'
+import { formatNumberBySettings, roundNumberBySettings } from '../utils/displayFormatting'
 import { useNotifications } from '../contexts/useNotifications'
 
 const darkPopupPaperSx = {
@@ -212,7 +213,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
 
       '& .MuiDialogTitle-root': {
         color: 'rgba(255, 255, 255, 0.96)',
@@ -224,6 +225,11 @@ const craftDialogSlotProps = {
 
       '& .MuiDialogContent-root': {
         color: 'rgba(255, 255, 255, 0.88)',
+        minWidth: 0,
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+        overflowX: 'hidden',
+        gridTemplateColumns: 'minmax(0, 1fr)',
       },
 
       '& .MuiTypography-root': {
@@ -373,8 +379,10 @@ const craftErrorAlertSx = {
 
 const craftHtmlTableSx = {
   width: '100%',
+  minWidth: 'max-content',
   borderCollapse: 'collapse',
   background: 'transparent',
+  tableLayout: 'auto',
   border: '1px solid rgba(255, 255, 255, 0.18)',
   '& thead': {
     background: 'rgba(255, 255, 255, 0.055)',
@@ -385,17 +393,54 @@ const craftHtmlTableSx = {
   '& tbody tr:hover': {
     background: 'rgba(255, 255, 255, 0.055)',
   },
+  '& td, & th': {
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+    whiteSpace: 'nowrap',
+    wordBreak: 'normal',
+    overflowWrap: 'normal',
+    boxSizing: 'border-box',
+    verticalAlign: 'middle',
+    textAlign: 'center',
+  },
   '& th': {
     color: 'rgba(255, 255, 255, 0.94)',
-    border: '1px solid rgba(255, 255, 255, 0.18)',
     fontWeight: 700,
   },
   '& td': {
     color: 'rgba(255, 255, 255, 0.88)',
-    border: '1px solid rgba(255, 255, 255, 0.18)',
     fontWeight: 400,
   },
 }
+
+const tableScrollSx = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  overflowX: 'auto',
+  overflowY: 'hidden',
+  display: 'block',
+}
+
+const blendedFieldSx = {
+  width: '100%',
+  '& .MuiOutlinedInput-root': {
+    background: 'transparent',
+    borderRadius: '8px',
+    '& fieldset': {
+      borderColor: 'rgba(255, 255, 255, 0.12)',
+    },
+    '&:hover fieldset': {
+      borderColor: 'rgba(255, 255, 255, 0.25)',
+    },
+    '&.Mui-focused fieldset': { borderColor: '#67E8F9 !important' },
+  },
+  '& input': { textAlign: 'center' },
+}
+
+const materialFieldSx = { ...blendedFieldSx, minWidth: 170 }
+const unitFieldSx = { ...blendedFieldSx, minWidth: 75 }
+const quantityFieldSx = { ...blendedFieldSx, minWidth: 105 }
+const notesFieldSx = { ...blendedFieldSx, minWidth: 120 }
 
 type RecipeFormItem = {
   id: string
@@ -426,21 +471,74 @@ function formatRecipeMaterialLabel(material: MaterialRecord): string {
   return `${material.materialNumber} - ${material.name}`
 }
 
-function roundToTwo(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0
-  }
-
-  return Math.round((value + Number.EPSILON) * 100) / 100
-}
-
 function formatNumber(value: number | string | null | undefined): string {
   return formatNumberBySettings(value, 'quantity')
 }
 
-function formatEditableNumber(value: number | string | null | undefined): string {
-  const numericValue = Number(value ?? 0)
-  return Number.isFinite(numericValue) ? roundToTwo(numericValue).toFixed(2) : '0.00'
+function roundQuantity(value: number): number {
+  return roundNumberBySettings(value, 'quantity')
+}
+
+function roundCurrency(value: number): number {
+  return roundNumberBySettings(value, 'currency')
+}
+
+function formatEditableQuantity(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? String(roundQuantity(numericValue)) : ''
+}
+
+function editableNumberString(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? String(numericValue) : ''
+}
+
+function formatCurrency(value: number | string | null | undefined): string {
+  return formatNumberBySettings(value, 'currency')
+}
+
+function getMaterialUnitCost(material: MaterialRecord | undefined, balances: StockBalanceRecord[]): number {
+  if (!material) {
+    return 0
+  }
+
+  const materialBalances = balances.filter((balance) => balance.materialNumber === material.materialNumber)
+  const weightedBalances = materialBalances.filter((balance) =>
+    Number.isFinite(balance.quantity) &&
+    balance.quantity > 0 &&
+    Number.isFinite(balance.averageCost) &&
+    balance.averageCost > 0,
+  )
+  const totalQuantity = weightedBalances.reduce((sum, balance) => sum + balance.quantity, 0)
+  const weightedCost = totalQuantity > 0
+    ? weightedBalances.reduce((sum, balance) => sum + balance.quantity * balance.averageCost, 0) / totalQuantity
+    : Number.NaN
+  const fallbackCost = Number(material.costPrice ?? 0)
+
+  return Number.isFinite(weightedCost) ? weightedCost : Number.isFinite(fallbackCost) ? fallbackCost : 0
+}
+
+function estimateRecipeMaterialCost(
+  items: Array<{ materialId: string; quantity: number | string }>,
+  materials: MaterialRecord[],
+  balances: StockBalanceRecord[],
+): number {
+  const materialById = new Map(materials.map((material) => [material.id, material]))
+  const total = items.reduce((sum, item) => {
+    const quantity = Number(item.quantity ?? 0)
+    const lineCost = (Number.isFinite(quantity) ? quantity : 0) * getMaterialUnitCost(materialById.get(item.materialId), balances)
+    return sum + roundCurrency(lineCost)
+  }, 0)
+
+  return roundCurrency(total)
 }
 
 function formatInteger(value: number | string | null | undefined): string {
@@ -483,6 +581,7 @@ export function ManufacturingRecipesPage() {
   const notify = useNotifications()
   const [recipes, setRecipes] = useState<ManufacturingRecipeRecord[]>([])
   const [materials, setMaterials] = useState<MaterialRecord[]>([])
+  const [stockBalances, setStockBalances] = useState<StockBalanceRecord[]>([])
   const [newRecipeOpen, setNewRecipeOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -525,15 +624,16 @@ export function ManufacturingRecipesPage() {
     () => stockableMaterials.filter((material) => material.id !== form.productMaterialId),
     [stockableMaterials, form.productMaterialId],
   )
-
   const loadRecipes = async () => {
-    const [allRecipes, allMaterials] = await Promise.all([
+    const [allRecipes, allMaterials, allBalances] = await Promise.all([
       manufacturingService.listRecipes(),
       materialsService.listMaterials(),
+      inventoryService.getBalancesByWarehouse(null),
     ])
 
     setRecipes(allRecipes)
     setMaterials(allMaterials)
+    setStockBalances(allBalances)
   }
 
   useEffect(() => {
@@ -564,13 +664,13 @@ export function ManufacturingRecipesPage() {
     setForm({
       name: details.name,
       productMaterialId: details.productMaterialId,
-      standardOutputQuantity: formatEditableNumber(details.standardOutputQuantity),
+      standardOutputQuantity: editableNumberString(details.standardOutputQuantity),
       status: details.status,
       notes: details.notes ?? '',
       items: (details.items ?? []).map((item) => ({
         id: item.id,
         materialId: item.materialId,
-        quantity: formatEditableNumber(item.quantity),
+        quantity: editableNumberString(item.quantity),
         notes: item.notes ?? '',
       })),
     })
@@ -602,7 +702,13 @@ export function ManufacturingRecipesPage() {
   }
 
   const handleProductChange = (materialId: string) => {
-    setForm((current) => ({ ...current, productMaterialId: materialId }))
+    setForm((current) => ({
+      ...current,
+      productMaterialId: materialId,
+      items: current.items.map((item) => item.materialId === materialId
+        ? { ...item, materialId: '' }
+        : item),
+    }))
   }
 
   const handleAddItem = () => {
@@ -706,14 +812,14 @@ export function ManufacturingRecipesPage() {
     const payload: ManufacturingRecipePayload = {
       name: form.name.trim(),
       productMaterialId: form.productMaterialId,
-      standardOutputQuantity: roundToTwo(Number(form.standardOutputQuantity)),
+      standardOutputQuantity: roundQuantity(Number(form.standardOutputQuantity)),
       notes: form.notes.trim(),
       status: form.status,
-      items: form.items.map((item) => ({
+      items: form.items.map((item, index) => ({
         materialId: item.materialId,
-        quantity: roundToTwo(Number(item.quantity)),
+        quantity: roundQuantity(Number(item.quantity)),
         notes: item.notes.trim(),
-        sortOrder: 0,
+        sortOrder: index + 1,
       })),
     }
 
@@ -761,6 +867,11 @@ export function ManufacturingRecipesPage() {
   }
 
   const selectedProduct = stockableMaterials.find((material) => material.id === form.productMaterialId)
+  const estimatedRecipeMaterialCost = estimateRecipeMaterialCost(form.items, stockableMaterials, stockBalances)
+  const standardOutputQuantity = Number(form.standardOutputQuantity)
+  const estimatedStandardUnitCost = standardOutputQuantity > 0
+    ? roundCurrency(estimatedRecipeMaterialCost / standardOutputQuantity)
+    : ''
 
   return (
     <Box sx={craftPageGlassSx}>
@@ -771,8 +882,8 @@ export function ManufacturingRecipesPage() {
           نموذج تصنيع جديد
         </Button>
       }>
-        <Box sx={{ overflowX: 'auto' }}>
-          <Box component="table" sx={{ ...craftHtmlTableSx, minWidth: 900 }}>
+        <Box sx={tableScrollSx}>
+          <Box component="table" sx={craftHtmlTableSx}>
             <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
               <Box component="tr">
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>رقم النموذج</Box>
@@ -782,10 +893,17 @@ export function ManufacturingRecipesPage() {
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>الوحدة</Box>
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>عدد المكونات</Box>
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>الحالة</Box>
-                <Box component="th" sx={{ p: 1, textAlign: 'center', fontWeight: 700, width: 130, minWidth: 130, maxWidth: 130 }}>الإجراءات</Box>
+                <Box component="th" sx={{ p: 1, textAlign: 'center', fontWeight: 700 }}>الإجراءات</Box>
               </Box>
-            </Box>
+              </Box>
             <Box component="tbody">
+              {recipes.length === 0 ? (
+                <Box component="tr">
+                  <Box component="td" colSpan={8} sx={{ p: 3, textAlign: 'center', color: 'rgba(255, 255, 255, 0.72)' }}>
+                    لا توجد نماذج تصنيع.
+                  </Box>
+                </Box>
+              ) : null}
               {recipes
                 .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
                 .map((recipe) => (
@@ -794,14 +912,14 @@ export function ManufacturingRecipesPage() {
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.name}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.productName}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatNumber(recipe.standardOutputQuantity)}</Box>
-                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.unit || '—'}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{recipe.unit || ''}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatInteger(recipe.componentCount)}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>
-                    <Box component="span" sx={{ display: 'inline-flex', px: 1.3, py: 0.6, borderRadius: 999, background: recipe.status === 'active' ? 'rgba(34, 211, 238, 0.16)' : 'rgba(148, 163, 184, 0.12)', color: recipe.status === 'active' ? '#67E8F9' : '#C7D2E0', border: recipe.status === 'active' ? '1px solid rgba(34, 211, 238, 0.32)' : '1px solid rgba(148, 163, 184, 0.28)', fontSize: 12, fontWeight: 700 }}>
+                    <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', px: 1.25, py: 0.4, borderRadius: 999, fontSize: '0.85em', fontWeight: 400, whiteSpace: 'nowrap', background: recipe.status === 'active' ? 'rgba(34, 211, 238, 0.16)' : 'rgba(148, 163, 184, 0.12)', color: recipe.status === 'active' ? '#67E8F9' : '#C7D2E0', border: recipe.status === 'active' ? '1px solid rgba(34, 211, 238, 0.32)' : '1px solid rgba(148, 163, 184, 0.28)' }}>
                       {recipe.status === 'active' ? 'فعال' : 'غير فعال'}
                     </Box>
                   </Box>
-                  <Box component="td" sx={{ p: 1, width: 130, minWidth: 130, maxWidth: 130 }}>
+                  <Box component="td" sx={{ p: 1 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap' }}>
                       <Tooltip title="عرض التفاصيل">
                         <IconButton size="small" color="secondary" onClick={() => { void openRecipeDetails(recipe.id) }}>
@@ -833,6 +951,7 @@ export function ManufacturingRecipesPage() {
             page={page}
             onPageChange={(_, newPage) => setPage(newPage)}
             rowsPerPage={rowsPerPage}
+            labelRowsPerPage="الصفوف:"
             onRowsPerPageChange={(event) => {
               setRowsPerPage(Number(event.target.value))
               setPage(0)
@@ -845,12 +964,12 @@ export function ManufacturingRecipesPage() {
         <DialogTitle>{editingRecipeId ? 'تعديل نموذج التصنيع' : 'نموذج تصنيع جديد'}</DialogTitle>
         <DialogContent
           ref={recipeDialogContentRef}
-          sx={{ display: 'grid', gap: 2, pt: '20px !important' }}
+          sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', gap: 2, pt: '20px !important' }}
         >
           {errorMessage ? <Alert severity="error" sx={craftErrorAlertSx}>{errorMessage}</Alert> : null}
 
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: 2 }}>
-            <TextField label="رقم النموذج" value={editingRecipeId ? selectedRecipe?.recipeNumber ?? recipeNumberPreview : recipeNumberPreview} slotProps={{ input: { readOnly: true }}} fullWidth />
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' }, minWidth: 0, maxWidth: '100%', gap: 2 }}>
+            <TextField label="رقم النموذج" value={recipeNumberPreview} slotProps={{ input: { readOnly: true }}} fullWidth />
             <TextField label="اسم النموذج" value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} required fullWidth />
             <Autocomplete
               options={stockableMaterials}
@@ -873,11 +992,11 @@ export function ManufacturingRecipesPage() {
                 setForm((current) => ({
                   ...current,
                   standardOutputQuantity: current.standardOutputQuantity
-                    ? formatEditableNumber(current.standardOutputQuantity)
+                    ? formatEditableQuantity(current.standardOutputQuantity)
                     : '',
                 }))
               }}
-              slotProps={{ htmlInput: { min: 0, step: 1 } }}
+              slotProps={{ htmlInput: { min: 0, step: 'any' } }}
               required
               fullWidth
             />
@@ -890,27 +1009,29 @@ export function ManufacturingRecipesPage() {
 
           <TextField label="ملاحظات" value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} multiline minRows={3} fullWidth />
 
-          <Box sx={{ border: '1px solid rgba(255, 255, 255, 0.14)', borderRadius: '14px', p: 2, background: 'rgba(255, 255, 255, 0.035)' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Box sx={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden', border: '1px solid rgba(255, 255, 255, 0.14)', borderRadius: '14px', p: 2, background: 'rgba(255, 255, 255, 0.035)' }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', minWidth: 0, maxWidth: '100%', mb: 2 }}>
               <Box sx={{ fontWeight: 700 }}>مواد نموذج التصنيع</Box>
               <Button variant="outlined" onClick={handleAddItem}>إضافة مادة</Button>
             </Box>
 
-            <Box sx={{ overflowX: 'auto' }}>
-              <Box component="table" sx={{ ...craftHtmlTableSx, tableLayout: 'fixed', minWidth: 760 }}>
+            <Box sx={tableScrollSx}>
+              <Box component="table" sx={craftHtmlTableSx}>
                 <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                   <Box component="tr">
-                    <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '38%', fontWeight: 700 }}>المادة</Box>
-                    <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '14%', fontWeight: 700 }}>الوحدة</Box>
-                    <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '18%', fontWeight: 700 }}>الكمية المطلوبة</Box>
-                    <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '22%', fontWeight: 700 }}>ملاحظات</Box>
-                    <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '8%', fontWeight: 700 }}>الإجراءات</Box>
+                    <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>المادة</Box>
+                    <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>الوحدة</Box>
+                    <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>الكمية المطلوبة</Box>
+                    <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>تكلفة الوحدة</Box>
+                    <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>إجمالي التكلفة التقديرية</Box>
+                    <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>ملاحظات</Box>
+                    <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>الإجراءات</Box>
                   </Box>
-                </Box>
+                  </Box>
                 <Box component="tbody">
                   {form.items.length === 0 ? (
                     <Box component="tr">
-                      <Box component="td" colSpan={5} sx={{ p: 2, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', color: 'rgba(255, 255, 255, 0.62)' }}>
+                      <Box component="td" colSpan={7} sx={{ p: 2, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', color: 'rgba(255, 255, 255, 0.62)' }}>
                         لا توجد مواد مضافة إلى نموذج التصنيع.
                       </Box>
                     </Box>
@@ -934,7 +1055,7 @@ export function ManufacturingRecipesPage() {
                                 variant="outlined"
                                 size="small"
                                 fullWidth
-                            sx={{ '& input': { textAlign: 'center' } }}
+                                sx={materialFieldSx}
                               />
                             )}
                           />
@@ -945,7 +1066,8 @@ export function ManufacturingRecipesPage() {
                             slotProps={{ input: { readOnly: true } }}
                             variant="outlined"
                             size="small"
-                            sx={{ '& input': { textAlign: 'center' } }}
+                            fullWidth
+                            sx={unitFieldSx}
                           />
                         </Box>
                         <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>
@@ -955,15 +1077,21 @@ export function ManufacturingRecipesPage() {
                             onChange={(event) => handleItemChange(item.id, 'quantity', event.target.value)}
                             onBlur={() => {
                               if (item.quantity) {
-                                handleItemChange(item.id, 'quantity', formatEditableNumber(item.quantity))
+                                handleItemChange(item.id, 'quantity', formatEditableQuantity(item.quantity))
                               }
                             }}
                             variant="outlined"
                             size="small"
                             fullWidth
-                            slotProps={{ htmlInput: { min: 0, step: 1 } }}
-                            sx={{ '& input': { textAlign: 'center' } }}
+                            slotProps={{ htmlInput: { min: 0, step: 'any' } }}
+                            sx={quantityFieldSx}
                           />
+                        </Box>
+                        <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>
+                          {formatCurrency(getMaterialUnitCost(itemMaterial, stockBalances))}
+                        </Box>
+                        <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>
+                          {formatCurrency(roundCurrency(Number(item.quantity || 0) * getMaterialUnitCost(itemMaterial, stockBalances)))}
                         </Box>
                         <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>
                           <TextField
@@ -972,7 +1100,7 @@ export function ManufacturingRecipesPage() {
                             variant="outlined"
                             size="small"
                             fullWidth
-                            sx={{ '& input': { textAlign: 'center' } }}
+                            sx={notesFieldSx}
                           />
                         </Box>
                         <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>
@@ -986,7 +1114,12 @@ export function ManufacturingRecipesPage() {
                 </Box>
               </Box>
             </Box>
-          </Box>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(3, minmax(0, 1fr))' }, minWidth: 0, maxWidth: '100%', gap: 2, mt: 2 }}>
+                <TextField label="إجمالي تكلفة المواد التقديرية" value={formatCurrency(estimatedRecipeMaterialCost)} slotProps={{ input: { readOnly: true } }} fullWidth />
+                <TextField label="الكمية القياسية الناتجة" value={form.standardOutputQuantity ? formatNumber(form.standardOutputQuantity) : ''} slotProps={{ input: { readOnly: true } }} fullWidth />
+                <TextField label="تكلفة الوحدة القياسية المتوقعة" value={estimatedStandardUnitCost === '' ? '' : formatCurrency(estimatedStandardUnitCost)} slotProps={{ input: { readOnly: true } }} fullWidth />
+              </Box>
+            </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={handleCloseRecipeDialog}>إلغاء</Button>
@@ -996,10 +1129,10 @@ export function ManufacturingRecipesPage() {
 
       <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} fullWidth maxWidth="lg" slotProps={craftDialogSlotProps}>
         <DialogTitle>تفاصيل نموذج التصنيع</DialogTitle>
-        <DialogContent sx={{ display: 'grid', gap: 3, pt: '20px !important' }}>
+        <DialogContent sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', gap: 3, pt: '20px !important' }}>
           {selectedRecipe ? (
             <>
-              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: 2 }}>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' }, minWidth: 0, maxWidth: '100%', gap: 2 }}>
                 <TextField label="رقم النموذج" value={selectedRecipe.recipeNumber} slotProps={{ input: { readOnly: true }}} fullWidth />
                 <TextField label="اسم النموذج" value={selectedRecipe.name} slotProps={{ input: { readOnly: true }}} fullWidth />
                 <TextField label="المنتج" value={selectedRecipe.productName} slotProps={{ input: { readOnly: true }}} fullWidth />
@@ -1007,24 +1140,26 @@ export function ManufacturingRecipesPage() {
                 <TextField label="الوحدة" value={selectedRecipe.unit} slotProps={{ input: { readOnly: true }}} fullWidth />
                 <TextField label="الحالة" value={selectedRecipe.status === 'active' ? 'فعال' : 'غير فعال'} slotProps={{ input: { readOnly: true }}} fullWidth />
               </Box>
-              <TextField label="الملاحظات" value={selectedRecipe.notes || '—'} slotProps={{ input: { readOnly: true }}} multiline minRows={3} fullWidth />
+              <TextField label="الملاحظات" value={selectedRecipe.notes || ''} slotProps={{ input: { readOnly: true }}} multiline minRows={3} fullWidth />
 
-              <Box sx={{ border: '1px solid rgba(255, 255, 255, 0.14)', borderRadius: '14px', p: 2, background: 'rgba(255, 255, 255, 0.035)' }}>
+              <Box sx={{ minWidth: 0, maxWidth: '100%', overflow: 'hidden', border: '1px solid rgba(255, 255, 255, 0.14)', borderRadius: '14px', p: 2, background: 'rgba(255, 255, 255, 0.035)' }}>
                 <Box sx={{ fontWeight: 700, mb: 2 }}>مواد نموذج التصنيع</Box>
-                <Box sx={{ overflowX: 'auto' }}>
-                  <Box component="table" sx={{ ...craftHtmlTableSx, tableLayout: 'fixed' }}>
+                <Box sx={tableScrollSx}>
+                  <Box component="table" sx={craftHtmlTableSx}>
                     <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                       <Box component="tr">
-                        <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '40%', fontWeight: 700 }}>المادة</Box>
-                        <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '15%', fontWeight: 700 }}>الوحدة</Box>
-                        <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '20%', fontWeight: 700 }}>الكمية المطلوبة</Box>
-                        <Box component="th" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', width: '25%', fontWeight: 700 }}>ملاحظات</Box>
+                        <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>المادة</Box>
+                        <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>الوحدة</Box>
+                        <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>الكمية المطلوبة</Box>
+                        <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>تكلفة الوحدة</Box>
+                        <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>إجمالي التكلفة التقديرية</Box>
+                        <Box component="th" sx={{ p: 1.5, fontWeight: 700 }}>ملاحظات</Box>
                       </Box>
                     </Box>
                     <Box component="tbody">
                       {(selectedRecipe.items ?? []).length === 0 ? (
                         <Box component="tr">
-                          <Box component="td" colSpan={4} sx={{ p: 2, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', color: 'rgba(255, 255, 255, 0.62)' }}>
+                          <Box component="td" colSpan={6} sx={{ p: 2, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)', color: 'rgba(255, 255, 255, 0.62)' }}>
                             لا توجد مواد مضافة إلى نموذج التصنيع.
                           </Box>
                         </Box>
@@ -1034,11 +1169,26 @@ export function ManufacturingRecipesPage() {
                           <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{item.materialName}</Box>
                           <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{item.unit}</Box>
                           <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{formatNumber(item.quantity)}</Box>
-                          <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{item.notes || '—'}</Box>
+                          <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{formatCurrency(getMaterialUnitCost(stockableMaterials.find((material) => material.id === item.materialId), stockBalances))}</Box>
+                          <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{formatCurrency(roundCurrency(Number(item.quantity) * getMaterialUnitCost(stockableMaterials.find((material) => material.id === item.materialId), stockBalances)))}</Box>
+                          <Box component="td" sx={{ p: 1.5, textAlign: 'center', verticalAlign: 'middle', border: '1px solid rgba(255, 255, 255, 0.18)' }}>{item.notes || ''}</Box>
                         </Box>
                       ))}
                     </Box>
                   </Box>
+                </Box>
+                <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' }, minWidth: 0, maxWidth: '100%', gap: 2, mt: 2 }}>
+                  <TextField label="إجمالي تكلفة المواد التقديرية" value={formatCurrency(estimateRecipeMaterialCost(selectedRecipe.items ?? [], stockableMaterials, stockBalances))} slotProps={{ input: { readOnly: true } }} fullWidth />
+                  <TextField
+                    label="تكلفة الوحدة القياسية المتوقعة"
+                    value={formatCurrency(
+                      Number(selectedRecipe.standardOutputQuantity) > 0
+                        ? roundCurrency(estimateRecipeMaterialCost(selectedRecipe.items ?? [], stockableMaterials, stockBalances) / Number(selectedRecipe.standardOutputQuantity))
+                        : 0,
+                    )}
+                    slotProps={{ input: { readOnly: true } }}
+                    fullWidth
+                  />
                 </Box>
               </Box>
             </>

@@ -22,6 +22,7 @@ import {
   deleteProductionOrder,
   initDatabase,
   listWarehouses,
+  setDefaultWarehouse,
   createWarehouse,
   updateWarehouse,
   toggleWarehouseStatus,
@@ -314,19 +315,14 @@ async function exportInvoicePdfFromHtml({ invoiceData, settings, fileName }) {
     const pdfBuffer = await exportWindow.webContents.printToPDF({
       printBackground: true,
       pageSize: 'A4',
+      scale: 1,
       landscape: false,
       preferCSSPageSize: true,
-      displayHeaderFooter: true,
-      headerTemplate: '<div></div>',
-      footerTemplate: `
-        <div style="width:100%; text-align:center; font-size:9px; color:#64748b; font-family:Arial,sans-serif;">
-          صفحة <span class="pageNumber"></span> من <span class="totalPages"></span>
-        </div>
-      `,
+      displayHeaderFooter: false,
       margins: {
         top: 0,
         right: 0,
-        bottom: 0.28,
+        bottom: 0,
         left: 0,
       },
     })
@@ -749,6 +745,10 @@ ipcMain.handle('productionOrders:delete', async (_, id) => {
 // Warehouses IPC
 ipcMain.handle('warehouses:list', async () => {
   return listWarehouses()
+})
+
+ipcMain.handle('warehouses:setDefault', async (_, warehouseId) => {
+  return setDefaultWarehouse(warehouseId)
 })
 
 ipcMain.handle('warehouses:create', async (_, payload) => {
@@ -1208,12 +1208,12 @@ app.whenReady().then(async () => {
     if (!splash.isDestroyed()) {
       splash.destroy()
     }
-
+    
     app.quit()
     return
   }
 
-  Menu.setApplicationMenu(null)
+  // Menu.setApplicationMenu(null)
 
   createWindow(splash)
 

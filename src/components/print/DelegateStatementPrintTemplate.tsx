@@ -29,6 +29,17 @@ export interface DelegateStatementPrintData extends InvoicePrintData {
   delegateAddress: string
   relatedInvoices: DelegateStatementInvoice[]
   delegatePayments: DelegateStatementPayment[]
+  ledgerEntries?: Array<{
+    id: string
+    type?: 'invoice' | 'payment' | 'return'
+    debit: number
+    credit: number
+    paymentMethod: string
+    invoiceNumber?: string
+    commissionPercentage: string
+    notes: string
+    date: string
+  }>
   totalCommission: number
   totalPaid: number
   remainingBalance: number
@@ -99,7 +110,6 @@ function ValueRow({
           display: 'flex',
           alignItems: 'center',
           px: 0.75,
-          fontSize: 12.5,
           fontWeight: bold ? 900 : 800,
           direction: 'ltr',
           textAlign: 'right',
@@ -127,20 +137,26 @@ function ValueRow({
 
 const tableSx = {
   width: '100%',
+  minWidth: 'max-content',
   borderCollapse: 'collapse',
-  tableLayout: 'fixed',
+  tableLayout: 'auto',
   color: '#111827',
   '& th, & td': {
     border: '1px solid #BFC5CC',
     px: 0.75,
     py: 0.72,
-    fontSize: 12.5,
     lineHeight: 1.35,
     verticalAlign: 'middle',
     textAlign: 'center',
+    whiteSpace: 'nowrap',
+    wordBreak: 'normal',
+    overflowWrap: 'normal',
+    boxSizing: 'border-box',
   },
-  '& th': { fontWeight: 800, background: '#FFFFFF', color: '#111827', whiteSpace: 'nowrap' },
+  '& th': { fontWeight: 800, background: '#FFFFFF', color: '#111827' },
   '& td': { fontWeight: 500, background: '#FFFFFF' },
+  '& thead': { display: 'table-header-group' },
+  '& tr': { pageBreakInside: 'avoid', breakInside: 'avoid' },
 }
 
 export function DelegateStatementPrintTemplate({
@@ -155,8 +171,17 @@ export function DelegateStatementPrintTemplate({
   const hasLogo = Boolean(settings.logoDataUrl?.trim())
 
   const entries = useMemo(() => {
+    if (data.ledgerEntries?.length) {
+      return data.ledgerEntries.map((entry) => ({
+        ...entry,
+        type: entry.type ?? 'invoice',
+        invoiceNumber: entry.invoiceNumber ?? '',
+      }))
+    }
+
     const invoicesAsEntries = (data.relatedInvoices || []).map((inv) => ({
       id: `inv-${inv.invoiceNumber}`,
+      type: 'invoice' as const,
       debit: inv.debit ?? 0,
       credit: inv.credit ?? inv.commissionAmount ?? 0,
       paymentMethod: inv.paymentMethod || '',
@@ -171,6 +196,7 @@ export function DelegateStatementPrintTemplate({
 
     const paymentsAsEntries = (data.delegatePayments || []).map((p) => ({
       id: `pay-${p.date}-${p.amount}`,
+      type: 'payment' as const,
       debit: p.amount ?? 0,
       credit: 0,
       paymentMethod: p.paymentMethod || '',
@@ -205,6 +231,7 @@ export function DelegateStatementPrintTemplate({
 
       filtered.unshift({
         id: 'carried-forward-balance',
+        type: 'invoice' as const,
         debit: carryOverDebit,
         credit: carryOverCredit,
         paymentMethod: '',
@@ -220,8 +247,7 @@ export function DelegateStatementPrintTemplate({
     }
 
     return all
-  }, [data.relatedInvoices, data.delegatePayments, data.startDate, data.endDate])
-
+  }, [data.ledgerEntries, data.relatedInvoices, data.delegatePayments, data.startDate, data.endDate])
   const formattedStartDate = data.startDate ? formatDateDMY(data.startDate) : formatDateDMY('2026-01-01')
   const formattedEndDate = data.endDate
     ? formatDateDMY(data.endDate)
@@ -243,9 +269,8 @@ export function DelegateStatementPrintTemplate({
           background: '#FFFFFF !important',
           boxShadow: 'none !important',
           border: 'none !important',
-          padding: '12mm 12mm 14mm',
+          padding: 0,
         },
-        '@page': { size: 'A4', margin: 0 },
       }}
     >
       {/* أعلى الفاتورة: الشعار يسار وبيانات الشركة يمين */}
@@ -371,6 +396,7 @@ export function DelegateStatementPrintTemplate({
           <Box component="tr">
             <Box component="th">مدين</Box>
             <Box component="th">دائن</Box>
+            <Box component="th">نوع الحركة</Box>
             <Box component="th">طريقة الدفع</Box>
             <Box component="th">رقم الفاتورة</Box>
             <Box component="th">نسبة العمولة</Box>
@@ -390,6 +416,15 @@ export function DelegateStatementPrintTemplate({
                       ? priceNum(entry.credit)
                       : ''}
                 </Box>
+                <Box component="td">
+                  {entry.id === 'carried-forward-balance'
+                    ? 'رصيد مدور'
+                    : entry.type === 'return'
+                      ? 'مرتجع مبيعات - عكس عمولة'
+                      : entry.type === 'payment'
+                        ? 'دفعة نقدية'
+                        : 'عمولة مبيعات'}
+                </Box>
                 <Box component="td">{entry.paymentMethod?.trim() || ''}</Box>
                 <Box component="td">{entry.invoiceNumber || ''}</Box>
                 <Box component="td">{entry.commissionPercentage}</Box>
@@ -399,7 +434,7 @@ export function DelegateStatementPrintTemplate({
             ))
           ) : (
             <Box component="tr">
-              <Box component="td" colSpan={7}>
+              <Box component="td" colSpan={8}>
                 لا توجد بيانات متعلقة بهذا المندوب
               </Box>
             </Box>

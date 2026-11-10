@@ -19,6 +19,14 @@ export interface AccountStatementInvoice {
   payments: AccountStatementTransactionPayment[]
 }
 
+export interface AccountStatementReturn {
+  id: string
+  returnNumber: string
+  date: string
+  amount: number
+  notes?: string
+}
+
 export interface AccountStatementEntity {
   code: string
   name: string

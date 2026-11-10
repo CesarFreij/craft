@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Alert, Box, Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, IconButton, Tooltip, TablePagination } from '@mui/material'
-import { FiEdit2, FiPlus, FiToggleLeft, FiToggleRight, FiTrash2 } from 'react-icons/fi'
+import { FiEdit2, FiPlus, FiStar, FiToggleLeft, FiToggleRight, FiTrash2 } from 'react-icons/fi'
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
 import { inventoryService, type WarehouseRecord } from '../services/inventoryService'
@@ -155,7 +155,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
 
       '& .MuiDialogTitle-root': {
         color: 'rgba(255, 255, 255, 0.96)',
@@ -314,7 +314,7 @@ const craftErrorAlertSx = {
   },
 }
 
-export function WarehousesPage() {
+export function WarehousesPage({ embedded = false }: { embedded?: boolean }) {
   const notify = useNotifications()
   const [warehouses, setWarehouses] = useState<WarehouseRecord[]>([])
   const [open, setOpen] = useState(false)
@@ -375,6 +375,18 @@ export function WarehousesPage() {
     } catch (error) {
       console.error('TOGGLE WAREHOUSE STATUS FAILED', error)
       showPageError(getUserFriendlyErrorMessage(error, 'تعذر تغيير حالة المخزن. يرجى المحاولة مرة أخرى.'))
+    }
+  }
+
+  const handleSetDefault = async (warehouse: WarehouseRecord) => {
+    try {
+      await inventoryService.setDefaultWarehouse(warehouse.id)
+      await load()
+      setPageErrorMessage('')
+      notify.success(`تم تعيين ${warehouse.name} كمخزن افتراضي.`)
+    } catch (error) {
+      console.error('SET DEFAULT WAREHOUSE FAILED', error)
+      showPageError(getUserFriendlyErrorMessage(error, 'تعذر تعيين المخزن الافتراضي. يرجى المحاولة مرة أخرى.'))
     }
   }
 
@@ -440,7 +452,7 @@ export function WarehousesPage() {
 
   return (
     <Box sx={craftPageGlassSx}>
-      <PageHeader title="إضافة مخازن" breadcrumb="إدارة المستودعات" />
+      {!embedded && <PageHeader title="إضافة مخازن" breadcrumb="إدارة المستودعات" />}
       {pageErrorMessage ? (
         <Alert severity="error" sx={{ ...craftErrorAlertSx, mb: 2 }}>
           {pageErrorMessage}
@@ -457,8 +469,8 @@ export function WarehousesPage() {
             sx={{
               width: '100%',
               borderCollapse: 'collapse',
-              minWidth: 700,
-              tableLayout: 'fixed',
+              minWidth: 'max-content',
+              tableLayout: 'auto',
               border: '1px solid rgba(255, 255, 255, 0.18)',
               '& th, & td': {
                 border: '1px solid rgba(255, 255, 255, 0.18)',
@@ -467,11 +479,11 @@ export function WarehousesPage() {
           >
             <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
               <Box component="tr">
-                <Box component="th" sx={{ p: 2, width: '20%', fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الكود</Box>
-                <Box component="th" sx={{ p: 2, width: '20%', fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الاسم</Box>
-                <Box component="th" sx={{ p: 2, width: '20%', fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الموقع</Box>
-                <Box component="th" sx={{ p: 2, width: '20%', fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الحالة</Box>
-                <Box component="th" sx={{ p: 1.25, width: '20%', minWidth: 132, fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)', whiteSpace: 'nowrap' }}>الإجراءات</Box>
+                <Box component="th" sx={{ p: 2, fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الكود</Box>
+                <Box component="th" sx={{ p: 2, fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الاسم</Box>
+                <Box component="th" sx={{ p: 2, fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الموقع</Box>
+                <Box component="th" sx={{ p: 2, fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الحالة</Box>
+                <Box component="th" sx={{ p: 1.25, fontWeight: 700, color: 'rgba(255, 255, 255, 0.94)' }}>الإجراءات</Box>
               </Box>
             </Box>
             <Box component="tbody">
@@ -479,16 +491,37 @@ export function WarehousesPage() {
                 .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
                 .map((w) => (
                   <Box component="tr" key={w.id} sx={{ background: 'rgba(255, 255, 255, 0.022)', '&:hover': { background: 'rgba(255, 255, 255, 0.055)' } }}>
-                    <Box component="td" sx={{ textAlign: 'center', p: 2, color: 'rgba(255, 255, 255, 0.88)', whiteSpace: 'nowrap' }}>{w.code}</Box>
-                    <Box component="td" sx={{ textAlign: 'center', p: 2, color: 'rgba(255, 255, 255, 0.88)', whiteSpace: 'nowrap' }}>{w.name}</Box>
-                    <Box component="td" sx={{ textAlign: 'center', p: 2, color: 'rgba(255, 255, 255, 0.88)' }}>{w.location || '—'}</Box>
+                    <Box component="td" sx={{ textAlign: 'center', p: 2, color: 'rgba(255, 255, 255, 0.88)' }}>{w.code}</Box>
+                    <Box component="td" sx={{ textAlign: 'center', p: 2, color: 'rgba(255, 255, 255, 0.88)' }}>{w.name}</Box>
+                    <Box component="td" sx={{ textAlign: 'center', p: 2, color: 'rgba(255, 255, 255, 0.88)' }}>{w.location || ''}</Box>
                     <Box component="td" sx={{ textAlign: 'center', p: 2 }}>
-                      <Box component="span" sx={{ display: 'inline-flex', px: 1.2, py: 0.6, borderRadius: 999, background: w.status === 'active' ? 'rgba(34, 211, 238, 0.16)' : 'rgba(148, 163, 184, 0.12)', color: w.status === 'active' ? '#67E8F9' : '#C7D2E0', fontSize: 12, fontWeight: 700 }}>
+                      <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', px: 1.25, py: 0.4, borderRadius: 999, fontSize: '0.85em', fontWeight: 400, whiteSpace: 'nowrap', background: w.status === 'active' ? 'rgba(34, 211, 238, 0.16)' : 'rgba(148, 163, 184, 0.12)', color: w.status === 'active' ? '#67E8F9' : '#C7D2E0' }}>
                         {w.status === 'active' ? 'نشط' : 'معطل'}
                       </Box>
                     </Box>
-                    <Box component="td" sx={{ p: 1.25, whiteSpace: 'nowrap' }}>
+                    <Box component="td" sx={{ p: 1.25 }}>
                       <Box sx={{ display: 'flex', gap: 0.35, alignItems: 'center', justifyContent: 'center' }}>
+                        <Tooltip title={w.isDefault ? 'المخزن الافتراضي' : 'تعيين كمخزن افتراضي'}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              disabled={w.isDefault}
+                              onClick={() => void handleSetDefault(w)}
+                              sx={{
+                                color: w.isDefault ? '#FBBF24' : '#CBD5E1',
+                                '&:hover': {
+                                  color: '#FDE68A',
+                                  background: 'rgba(251, 191, 36, 0.12)',
+                                },
+                                '&.Mui-disabled': {
+                                  color: '#FBBF24',
+                                },
+                              }}
+                            >
+                              <FiStar size={17} fill={w.isDefault ? 'currentColor' : 'none'} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                         <Tooltip title={w.status === 'active' ? 'تعطيل' : 'تفعيل'}>
                           <IconButton
                             size="small"

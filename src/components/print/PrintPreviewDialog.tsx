@@ -39,7 +39,11 @@ function buildCsv(data: InvoicePrintData): string {
     ].join(',')
   })
 
-  const summary = `\n"الإجمالي","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"\n"الإجمالي","${formatCurrencyValue(data.total, 'price')}"`
+  const purchaseFeeSummary = data.documentType === 'purchase' && Number(data.additionalFees ?? 0) !== 0
+    ? `\n"رسوم إضافية لتكلفة المخزون","${formatCurrencyValue(data.additionalFees, 'price')}"`
+    : ''
+  const payableLabel = data.documentType === 'purchase' ? 'الصافي المستحق للمورد' : 'الإجمالي'
+  const summary = `\n"الإجمالي","${formatCurrencyValue(data.subtotal, 'price')}"\n"الخصم","${formatCurrencyValue(data.discount, 'price')}"${purchaseFeeSummary}\n"${payableLabel}","${formatCurrencyValue(data.total, 'price')}"`
   return `"${data.title}","${data.documentNumber}"\n"التاريخ","${formatDateDMY(data.date)}"\n"${data.partyLabel}","${data.partyName}"\n${headers.join(',')}\n${rows.join('\n')}${summary}`
 }
 

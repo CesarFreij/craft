@@ -63,6 +63,7 @@ contextBridge.exposeInMainWorld('craftManufacturingAPI', {
 
 contextBridge.exposeInMainWorld('craftInventoryAPI', {
   listWarehouses: () => ipcRenderer.invoke('warehouses:list'),
+  setDefaultWarehouse: (warehouseId) => ipcRenderer.invoke('warehouses:setDefault', warehouseId),
   createWarehouse: (payload) => ipcRenderer.invoke('warehouses:create', payload),
   updateWarehouse: (id, payload) => ipcRenderer.invoke('warehouses:update', { id, payload }),
   toggleWarehouseStatus: (id, status) => ipcRenderer.invoke('warehouses:toggleStatus', { id, status }),

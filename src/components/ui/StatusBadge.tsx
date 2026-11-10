@@ -7,9 +7,23 @@ interface StatusBadgeProps {
 
 export function StatusBadge({ label, color }: StatusBadgeProps) {
   return (
-    <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 1, px: 2, py: 0.75, borderRadius: 2, background: `${color}1A`, color, fontWeight: 700, fontSize: 12 }}>
-      <Box sx={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
-      <Typography>{label}</Typography>
+    <Box sx={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 0.75,
+      minWidth: 0,
+      px: 1.25,
+      py: 0.4,
+      borderRadius: 999,
+      background: `${color}1A`,
+      color,
+      fontSize: '0.85em',
+      fontWeight: 400,
+      whiteSpace: 'nowrap',
+    }}>
+      <Box sx={{ width: 8, height: 8, flexShrink: 0, borderRadius: '50%', background: color }} />
+      <Typography sx={{ whiteSpace: 'nowrap', fontSize: 'inherit', fontWeight: 400 }}>{label}</Typography>
     </Box>
   )
 }

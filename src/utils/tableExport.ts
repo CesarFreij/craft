@@ -496,9 +496,9 @@ function buildPrintableDocument(options: TableExportOptions): string {
     .join('')
 
   const hasPrintDetails = Boolean(options.printDetails)
-  const warehouseLabel = options.printDetails?.warehouse?.trim() || '__'
-  const fromDateLabel = options.printDetails?.fromDate?.trim() || '__'
-  const toDateLabel = options.printDetails?.toDate?.trim() || '__'
+  const warehouseLabel = options.printDetails?.warehouse?.trim() || ''
+  const fromDateLabel = options.printDetails?.fromDate?.trim() || ''
+  const toDateLabel = options.printDetails?.toDate?.trim() || ''
   const summaryPosition = options.summaryPosition ?? 'above'
 
   return `<!doctype html>
@@ -510,6 +510,12 @@ function buildPrintableDocument(options: TableExportOptions): string {
     @page {
       size: A4 landscape;
       margin: 12mm;
+
+      @bottom-right {
+        content: counter(page) "/" counter(pages);
+        color: #64748b;
+        font: 9pt Arial, Tahoma, sans-serif;
+      }
     }
 
     * {
@@ -693,6 +699,7 @@ function buildPrintableDocument(options: TableExportOptions): string {
         margin: 0;
         padding: 0;
         box-shadow: none;
+        zoom: 1.2;
       }
 
       .table-block {

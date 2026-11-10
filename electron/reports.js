@@ -429,9 +429,11 @@ export function getReportData(db, reportType, filters = {}) {
     const total = readNumber(db, `SELECT COUNT(*) FROM purchase_invoices pi ${where}`, params)
     const rows = db.exec(
       `SELECT pi.id, pi.invoice_number, pi.date, s.name AS supplier_name, w.name AS warehouse_name,
-              pi.net_total, COALESCE(pi.expenses, 0) AS expenses,
+              pi.net_total,
+              COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0) AS return_total,
+              COALESCE(pi.expenses, 0) AS expenses,
               COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
-              COALESCE(pi.net_total - (SELECT COALESCE(SUM(pp.amount), 0) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS remaining_amount,
+              MAX(COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0), 0) AS remaining_amount,
               pi.status
        FROM purchase_invoices pi
        LEFT JOIN suppliers s ON s.id = pi.supplier_id
@@ -443,7 +445,8 @@ export function getReportData(db, reportType, filters = {}) {
     )[0]?.values ?? []
 
     const chartSeries = [
-      { key: 'total', label: 'إجمالي المشتريات' },
+      { key: 'total', label: 'صافي المشتريات بعد المرتجعات' },
+      { key: 'returns', label: 'مردودات المشتريات' },
       { key: 'expenses', label: 'المصاريف الإضافية' },
       { key: 'paid', label: 'المدفوع' },
       { key: 'remaining', label: 'المتبقي' },
@@ -451,13 +454,14 @@ export function getReportData(db, reportType, filters = {}) {
     const bucketExpression = getDateBucketExpression('pi.date', chartGranularity)
     const chartDataRows = db.exec(
       `SELECT ${bucketExpression} AS label,
-              SUM(COALESCE(pi.net_total, 0)) AS total_value,
+              SUM(MAX(COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0), 0)) AS total_value,
+              SUM(COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0)) AS returns_value,
               SUM(COALESCE(pi.expenses, 0)) AS expenses_value,
               SUM(COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)) AS paid_value,
               SUM(
                 CASE
-                  WHEN COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) > 0
-                    THEN COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)
+                  WHEN MAX(COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0), 0) > 0
+                    THEN MAX(COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0), 0)
                   ELSE 0
                 END
               ) AS remaining_value
@@ -468,14 +472,18 @@ export function getReportData(db, reportType, filters = {}) {
       params
     )[0]?.values ?? []
 
-    const summaryNet = readNumber(db, `SELECT COALESCE(SUM(pi.net_total), 0) FROM purchase_invoices pi ${where}`, params)
+    const summaryGross = readNumber(db, `SELECT COALESCE(SUM(pi.net_total), 0) FROM purchase_invoices pi ${where}`, params)
+    const summaryReturns = readNumber(db, `SELECT COALESCE(SUM((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id)), 0) FROM purchase_invoices pi ${where}`, params)
+    const summaryNet = readNumber(db, `SELECT COALESCE(SUM(MAX(COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0), 0)), 0) FROM purchase_invoices pi ${where}`, params)
     const summaryExpenses = readNumber(db, `SELECT COALESCE(SUM(pi.expenses), 0) FROM purchase_invoices pi ${where}`, params)
     const summaryPaid = readNumber(db, `SELECT COALESCE(SUM(COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)), 0) FROM purchase_invoices pi ${where}`, params)
     return {
       reportType,
       summary: [
         { label: 'عدد الفواتير', value: total },
-        { label: 'إجمالي المشتريات', value: summaryNet },
+        { label: 'إجمالي المشتريات قبل المرتجعات', value: summaryGross },
+        { label: 'مردودات المشتريات', value: summaryReturns },
+        { label: 'صافي المشتريات بعد المرتجعات', value: summaryNet },
         { label: 'المصاريف الإضافية', value: summaryExpenses },
         { label: 'المبالغ المدفوعة', value: summaryPaid },
       ],
@@ -486,10 +494,12 @@ export function getReportData(db, reportType, filters = {}) {
         supplierName: row[3] ?? '',
         warehouseName: row[4] ?? '',
         netTotal: normalizeNumber(row[5]),
-        expenses: normalizeNumber(row[6]),
-        paidAmount: normalizeNumber(row[7]),
-        remainingAmount: normalizeNumber(row[8]),
-        status: row[9] ?? '',
+        returnTotal: normalizeNumber(row[6]),
+        netAfterReturns: Math.max(normalizeNumber(row[5]) - normalizeNumber(row[6]), 0),
+        expenses: normalizeNumber(row[7]),
+        paidAmount: normalizeNumber(row[8]),
+        remainingAmount: normalizeNumber(row[9]),
+        status: row[10] ?? '',
       })),
       chartSeries,
       chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
@@ -525,7 +535,8 @@ export function getReportData(db, reportType, filters = {}) {
     )[0]?.values ?? []
 
     const chartSeries = [
-      { key: 'total', label: 'إجمالي المبيعات' },
+      { key: 'total', label: 'صافي المبيعات بعد المرتجعات' },
+      { key: 'returns', label: 'مردودات المبيعات' },
       { key: 'fees', label: 'رسوم إضافية على العميل' },
       { key: 'paid', label: 'المستلم' },
       { key: 'remaining', label: 'المتبقي' },
@@ -533,13 +544,14 @@ export function getReportData(db, reportType, filters = {}) {
     const bucketExpression = getDateBucketExpression('si.date', chartGranularity)
     const chartDataRows = db.exec(
       `SELECT ${bucketExpression} AS label,
-              SUM(COALESCE(si.net_total, 0)) AS total_value,
+              SUM(MAX(COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0), 0)) AS total_value,
+              SUM(COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0)) AS returns_value,
               SUM(COALESCE(si.customer_additional_fees, 0)) AS fees_value,
               SUM(COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)) AS paid_value,
               SUM(
                 CASE
-                  WHEN COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) > 0
-                    THEN COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)
+                  WHEN MAX(COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0), 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) > 0
+                    THEN MAX(COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0), 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)
                   ELSE 0
                 END
               ) AS remaining_value
@@ -550,20 +562,28 @@ export function getReportData(db, reportType, filters = {}) {
       params
     )[0]?.values ?? []
 
-    const summaryNet = readNumber(db, `SELECT COALESCE(SUM(si.net_total), 0) FROM sales_invoices si ${where}`, params)
+    const summaryGross = readNumber(db, `SELECT COALESCE(SUM(si.net_total), 0) FROM sales_invoices si ${where}`, params)
+    const summaryReturns = readNumber(db, `SELECT COALESCE(SUM((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id)), 0) FROM sales_invoices si ${where}`, params)
+    const summaryNet = readNumber(db, `SELECT COALESCE(SUM(MAX(COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0), 0)), 0) FROM sales_invoices si ${where}`, params)
+    const summaryReceivables = readNumber(db, `SELECT COALESCE(SUM(MAX(COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0), 0)), 0) FROM sales_invoices si ${where}`, params)
     const summaryFees = readNumber(db, `SELECT COALESCE(SUM(si.customer_additional_fees), 0) FROM sales_invoices si ${where}`, params)
     const summaryPaid = readNumber(db, `SELECT COALESCE(SUM(COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)), 0) FROM sales_invoices si ${where}`, params)
     return {
       reportType,
       summary: [
         { label: 'عدد الفواتير', value: total },
-        { label: 'إجمالي المبيعات', value: summaryNet },
+        { label: 'إجمالي المبيعات قبل المرتجعات', value: summaryGross },
+        { label: 'مردودات المبيعات', value: summaryReturns },
+        { label: 'صافي المبيعات', value: summaryNet },
         { label: 'رسوم إضافية على العميل', value: summaryFees },
         { label: 'المبالغ المستلمة', value: summaryPaid },
+        { label: 'ذمم العملاء', value: summaryReceivables },
       ],
       rows: rows.map((row) => {
         const netTotal = normalizeNumber(row[5])
         const paidAmount = normalizeNumber(row[8])
+        const returnTotal = normalizeNumber(row[7])
+        const netAfterReturns = Math.max(netTotal - returnTotal, 0)
 
         return {
           id: row[0] ?? '',
@@ -572,9 +592,11 @@ export function getReportData(db, reportType, filters = {}) {
           customerName: row[3] ?? '',
           warehouseName: row[4] ?? '',
           netTotal,
+          returnTotal,
+          netAfterReturns,
           customerAdditionalFees: normalizeNumber(row[6]),
           paidAmount,
-          remainingAmount: Math.max(netTotal - paidAmount, 0),
+          remainingAmount: Math.max(netAfterReturns - paidAmount, 0),
           delegateNames: row[9] ?? '',
           delegateCommissionTotal: normalizeNumber(row[10]),
           status: row[11] ?? '',
@@ -762,7 +784,9 @@ export function getReportData(db, reportType, filters = {}) {
                 WHEN COALESCE(po.actual_output_quantity, 0) > 0
                   THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
                 ELSE 0
-              END AS unit_production_cost
+              END AS unit_production_cost,
+              COALESCE((SELECT SUM(poi.planned_quantity * poi.unit_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id), 0) AS planned_material_cost,
+              COALESCE((SELECT SUM(poi.total_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id), 0) AS actual_issued_material_cost
        FROM production_orders po
        LEFT JOIN materials m ON m.id = po.product_material_id
        LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
@@ -828,6 +852,9 @@ export function getReportData(db, reportType, filters = {}) {
           laborCost: normalizeNumber(row[8]),
           totalProductionCost: normalizeNumber(row[9]),
           unitProductionCost: normalizeNumber(row[10]),
+          plannedMaterialCost: normalizeNumber(row[11]),
+          actualIssuedMaterialCost: normalizeNumber(row[12]),
+          materialCostVariance: normalizeNumber(row[12]) - normalizeNumber(row[11]),
         }
       }),
       chartSeries,
@@ -854,7 +881,9 @@ export function getReportData(db, reportType, filters = {}) {
                 WHEN COALESCE(po.actual_output_quantity, 0) > 0
                   THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
                 ELSE 0
-              END AS unit_production_cost
+              END AS unit_production_cost,
+              COALESCE((SELECT SUM(poi.planned_quantity * poi.unit_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id), 0) AS planned_material_cost,
+              COALESCE((SELECT SUM(poi.total_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id), 0) AS actual_issued_material_cost
        FROM production_orders po
        LEFT JOIN materials m ON m.id = po.product_material_id
        LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
@@ -867,6 +896,8 @@ export function getReportData(db, reportType, filters = {}) {
     const totalLabor = readNumber(db, `SELECT COALESCE(SUM(labor_cost), 0) FROM production_orders po ${where}`, params)
     const totalMaterials = readNumber(db, `SELECT COALESCE(SUM(material_cost_total), 0) FROM production_orders po ${where}`, params)
     const totalCost = totalMaterials + totalLabor
+    const plannedMaterials = readNumber(db, `SELECT COALESCE(SUM((SELECT SUM(poi.planned_quantity * poi.unit_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id)), 0) FROM production_orders po ${where}`, params)
+    const actualIssuedMaterials = readNumber(db, `SELECT COALESCE(SUM((SELECT SUM(poi.total_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id)), 0) FROM production_orders po ${where}`, params)
 
     const chartSeries = [
       { key: 'materials', label: 'تكلفة المواد' },
@@ -893,6 +924,9 @@ export function getReportData(db, reportType, filters = {}) {
         { label: 'تكلفة المواد', value: totalMaterials },
         { label: 'تكلفة الأجور', value: totalLabor },
         { label: 'إجمالي التكلفة', value: totalCost },
+        { label: 'تكلفة المواد المخططة', value: plannedMaterials },
+        { label: 'تكلفة المواد المصروفة فعلياً', value: actualIssuedMaterials },
+        { label: 'انحراف تكلفة المواد', value: actualIssuedMaterials - plannedMaterials },
       ],
       rows: rows.map((row) => ({
         orderNumber: row[0] ?? '',
@@ -905,9 +939,119 @@ export function getReportData(db, reportType, filters = {}) {
         laborCost: normalizeNumber(row[7]),
         totalProductionCost: normalizeNumber(row[8]),
         unitProductionCost: normalizeNumber(row[9]),
+        plannedMaterialCost: normalizeNumber(row[10]),
+        actualIssuedMaterialCost: normalizeNumber(row[11]),
+        materialCostVariance: normalizeNumber(row[11]) - normalizeNumber(row[10]),
       })),
       chartSeries,
       chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
+      pagination: buildPagination(total, page, pageSize),
+      generatedAt: new Date().toISOString(),
+    }
+  }
+
+  if (reportType === 'cash_flow') {
+    const salesClauses = ["si.status = 'completed'"]
+    const salesParams = []
+    addWhereClause(salesClauses, salesParams, 'si.warehouse_id = ?', warehouseId)
+    buildDateRangeClauses(salesClauses, salesParams, 'sp.date', fromDate, toDate)
+    const purchaseClauses = ["pi.status = 'completed'"]
+    const purchaseParams = []
+    addWhereClause(purchaseClauses, purchaseParams, 'pi.warehouse_id = ?', warehouseId)
+    buildDateRangeClauses(purchaseClauses, purchaseParams, 'pp.date', fromDate, toDate)
+    const salesWhere = `WHERE ${salesClauses.join(' AND ')}`
+    const purchaseWhere = `WHERE ${purchaseClauses.join(' AND ')}`
+    const paymentRowsQuery = `
+      SELECT sp.date AS date, si.invoice_number AS reference, c.name AS counterparty,
+             'تحصيل من عميل' AS direction, sp.amount AS amount
+      FROM sales_payments sp
+      JOIN sales_invoices si ON si.id = sp.invoice_id
+      LEFT JOIN customers c ON c.id = si.customer_id
+      ${salesWhere}
+      UNION ALL
+      SELECT pp.date AS date, pi.invoice_number AS reference, s.name AS counterparty,
+             'سداد لمورد' AS direction, pp.amount AS amount
+      FROM purchase_payments pp
+      JOIN purchase_invoices pi ON pi.id = pp.invoice_id
+      LEFT JOIN suppliers s ON s.id = pi.supplier_id
+      ${purchaseWhere}`
+    const total = readNumber(db, `SELECT COUNT(*) FROM (${paymentRowsQuery}) cash_payments`, [...salesParams, ...purchaseParams])
+    const rows = db.exec(
+      `SELECT date, reference, counterparty, direction, amount
+       FROM (${paymentRowsQuery}) cash_payments
+       ORDER BY date DESC, reference DESC
+       LIMIT ? OFFSET ?`,
+      [...salesParams, ...purchaseParams, pageSize, page * pageSize],
+    )[0]?.values ?? []
+    const incomingTotal = readNumber(
+      db,
+      `SELECT COALESCE(SUM(sp.amount), 0)
+       FROM sales_payments sp JOIN sales_invoices si ON si.id = sp.invoice_id
+       ${salesWhere}`,
+      salesParams,
+    )
+    const outgoingTotal = readNumber(
+      db,
+      `SELECT COALESCE(SUM(pp.amount), 0)
+       FROM purchase_payments pp JOIN purchase_invoices pi ON pi.id = pp.invoice_id
+       ${purchaseWhere}`,
+      purchaseParams,
+    )
+    const salesBucket = getDateBucketExpression('sp.date', chartGranularity)
+    const purchaseBucket = getDateBucketExpression('pp.date', chartGranularity)
+    const incomingByBucket = db.exec(
+      `SELECT ${salesBucket} AS label, SUM(sp.amount) AS amount
+       FROM sales_payments sp JOIN sales_invoices si ON si.id = sp.invoice_id
+       ${salesWhere}
+       GROUP BY ${salesBucket}`,
+      salesParams,
+    )[0]?.values ?? []
+    const outgoingByBucket = db.exec(
+      `SELECT ${purchaseBucket} AS label, SUM(pp.amount) AS amount
+       FROM purchase_payments pp JOIN purchase_invoices pi ON pi.id = pp.invoice_id
+       ${purchaseWhere}
+       GROUP BY ${purchaseBucket}`,
+      purchaseParams,
+    )[0]?.values ?? []
+    const cashByBucket = new Map()
+    incomingByBucket.forEach((row) => {
+      cashByBucket.set(String(row[0] ?? ''), {
+        collections: normalizeNumber(row[1]),
+        supplierPayments: 0,
+      })
+    })
+    outgoingByBucket.forEach((row) => {
+      const label = String(row[0] ?? '')
+      const bucket = cashByBucket.get(label) ?? { collections: 0, supplierPayments: 0 }
+      bucket.supplierPayments = normalizeNumber(row[1])
+      cashByBucket.set(label, bucket)
+    })
+    const chartSeries = [
+      { key: 'collections', label: 'تحصيلات العملاء' },
+      { key: 'supplierPayments', label: 'مدفوعات الموردين' },
+    ]
+    const chartRows = Array.from(cashByBucket.entries()).map(([label, values]) => [
+      label,
+      values.collections,
+      values.supplierPayments,
+    ])
+
+    return {
+      reportType,
+      summary: [
+        { label: 'إجمالي التحصيلات الفعلية', value: incomingTotal },
+        { label: 'إجمالي مدفوعات الموردين', value: outgoingTotal },
+        { label: 'صافي التدفق النقدي', value: incomingTotal - outgoingTotal },
+      ],
+      rows: rows.map((row) => ({
+        date: row[0] ?? '',
+        reference: row[1] ?? '',
+        counterparty: row[2] ?? '',
+        direction: row[3] ?? '',
+        amount: normalizeNumber(row[4]),
+      })),
+      chartSeries,
+      chartData: buildChartData(chartRows, chartSeries, fromDate, toDate, chartGranularity),
       pagination: buildPagination(total, page, pageSize),
       generatedAt: new Date().toISOString(),
     }
@@ -996,9 +1140,11 @@ export function getReportExportRows(db, reportType, filters = {}) {
 
     const rows = db.exec(
       `SELECT pi.id, pi.invoice_number, pi.date, s.name AS supplier_name, w.name AS warehouse_name,
-              pi.net_total, COALESCE(pi.expenses, 0) AS expenses,
+              pi.net_total,
+              COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0) AS return_total,
+              COALESCE(pi.expenses, 0) AS expenses,
               COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
-              COALESCE(pi.net_total - (SELECT COALESCE(SUM(pp.amount), 0) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS remaining_amount,
+              MAX(COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0), 0) AS remaining_amount,
               pi.status
        FROM purchase_invoices pi
        LEFT JOIN suppliers s ON s.id = pi.supplier_id
@@ -1015,10 +1161,12 @@ export function getReportExportRows(db, reportType, filters = {}) {
       supplierName: row[3] ?? '',
       warehouseName: row[4] ?? '',
       netTotal: normalizeNumber(row[5]),
-      expenses: normalizeNumber(row[6]),
-      paidAmount: normalizeNumber(row[7]),
-      remainingAmount: normalizeNumber(row[8]),
-      status: row[9] ?? '',
+      returnTotal: normalizeNumber(row[6]),
+      netAfterReturns: Math.max(normalizeNumber(row[5]) - normalizeNumber(row[6]), 0),
+      expenses: normalizeNumber(row[7]),
+      paidAmount: normalizeNumber(row[8]),
+      remainingAmount: normalizeNumber(row[9]),
+      status: row[10] ?? '',
     }))
   }
 
@@ -1049,7 +1197,9 @@ export function getReportExportRows(db, reportType, filters = {}) {
     return rows.map((row) => {
       const netTotal = normalizeNumber(row[5])
       const customerAdditionalFees = normalizeNumber(row[6])
+      const returnTotal = normalizeNumber(row[7])
       const paidAmount = normalizeNumber(row[8])
+      const netAfterReturns = Math.max(netTotal - returnTotal, 0)
 
       return {
         id: row[0] ?? '',
@@ -1058,9 +1208,11 @@ export function getReportExportRows(db, reportType, filters = {}) {
         customerName: row[3] ?? '',
         warehouseName: row[4] ?? '',
         netTotal,
+        returnTotal,
+        netAfterReturns,
         customerAdditionalFees,
         paidAmount,
-        remainingAmount: Math.max(netTotal - paidAmount, 0),
+        remainingAmount: Math.max(netAfterReturns - paidAmount, 0),
         delegateNames: row[9] ?? '',
         delegateCommissionTotal: normalizeNumber(row[10]),
         status: row[11] ?? '',
@@ -1159,7 +1311,9 @@ export function getReportExportRows(db, reportType, filters = {}) {
                 WHEN COALESCE(po.actual_output_quantity, 0) > 0
                   THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
                 ELSE 0
-              END AS unit_production_cost
+              END AS unit_production_cost,
+              COALESCE((SELECT SUM(poi.planned_quantity * poi.unit_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id), 0) AS planned_material_cost,
+              COALESCE((SELECT SUM(poi.total_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id), 0) AS actual_issued_material_cost
        FROM production_orders po
        LEFT JOIN materials m ON m.id = po.product_material_id
        LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
@@ -1205,7 +1359,9 @@ export function getReportExportRows(db, reportType, filters = {}) {
                 WHEN COALESCE(po.actual_output_quantity, 0) > 0
                   THEN (COALESCE(po.material_cost_total, 0) + COALESCE(po.labor_cost, 0)) / po.actual_output_quantity
                 ELSE 0
-              END AS unit_production_cost
+              END AS unit_production_cost,
+              COALESCE((SELECT SUM(poi.planned_quantity * poi.unit_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id), 0) AS planned_material_cost,
+              COALESCE((SELECT SUM(poi.total_cost) FROM production_order_inputs poi WHERE poi.production_order_id = po.id), 0) AS actual_issued_material_cost
        FROM production_orders po
        LEFT JOIN materials m ON m.id = po.product_material_id
        LEFT JOIN warehouses w ON w.id = po.output_warehouse_id
@@ -1225,6 +1381,48 @@ export function getReportExportRows(db, reportType, filters = {}) {
       laborCost: normalizeNumber(row[7]),
       totalProductionCost: normalizeNumber(row[8]),
       unitProductionCost: normalizeNumber(row[9]),
+      plannedMaterialCost: normalizeNumber(row[10]),
+      actualIssuedMaterialCost: normalizeNumber(row[11]),
+      materialCostVariance: normalizeNumber(row[11]) - normalizeNumber(row[10]),
+    }))
+  }
+
+  if (reportType === 'cash_flow') {
+    const salesClauses = ["si.status = 'completed'"]
+    const salesParams = []
+    addWhereClause(salesClauses, salesParams, 'si.warehouse_id = ?', warehouseId)
+    buildDateRangeClauses(salesClauses, salesParams, 'sp.date', fromDate, toDate)
+    const purchaseClauses = ["pi.status = 'completed'"]
+    const purchaseParams = []
+    addWhereClause(purchaseClauses, purchaseParams, 'pi.warehouse_id = ?', warehouseId)
+    buildDateRangeClauses(purchaseClauses, purchaseParams, 'pp.date', fromDate, toDate)
+    const rows = db.exec(
+      `SELECT date, reference, counterparty, direction, amount
+       FROM (
+         SELECT sp.date AS date, si.invoice_number AS reference, c.name AS counterparty,
+                'تحصيل من عميل' AS direction, sp.amount AS amount
+         FROM sales_payments sp
+         JOIN sales_invoices si ON si.id = sp.invoice_id
+         LEFT JOIN customers c ON c.id = si.customer_id
+         WHERE ${salesClauses.join(' AND ')}
+         UNION ALL
+         SELECT pp.date AS date, pi.invoice_number AS reference, s.name AS counterparty,
+                'سداد لمورد' AS direction, pp.amount AS amount
+         FROM purchase_payments pp
+         JOIN purchase_invoices pi ON pi.id = pp.invoice_id
+         LEFT JOIN suppliers s ON s.id = pi.supplier_id
+         WHERE ${purchaseClauses.join(' AND ')}
+       ) cash_payments
+       ORDER BY date DESC, reference DESC`,
+      [...salesParams, ...purchaseParams],
+    )[0]?.values ?? []
+
+    return rows.map((row) => ({
+      date: row[0] ?? '',
+      reference: row[1] ?? '',
+      counterparty: row[2] ?? '',
+      direction: row[3] ?? '',
+      amount: normalizeNumber(row[4]),
     }))
   }
 

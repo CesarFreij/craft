@@ -25,7 +25,6 @@ export interface InvoicePrintItem {
   cost?: number
   plannedQuantity?: number
   actualQuantity?: number
-  notes?: string
 }
 
 export interface InvoicePrintData {

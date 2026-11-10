@@ -1,12 +1,13 @@
-import { Box, Button, CircularProgress, Stack } from '@mui/material'
-import { useEffect, useMemo, useState, type WheelEvent } from 'react'
+import { Box, Button, CircularProgress, IconButton, Stack } from '@mui/material'
+import { useEffect, useRef, useState, type WheelEvent } from 'react'
+import { FiX } from 'react-icons/fi'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { InvoicePrintTemplate } from '../components/print/InvoicePrintTemplate'
 import { DelegateStatementPrintTemplate, type DelegateStatementPrintData } from '../components/print/DelegateStatementPrintTemplate'
 import { CustomerStatementPrintTemplate } from '../components/print/CustomerStatementPrintTemplate'
 import { SupplierStatementPrintTemplate } from '../components/print/SupplierStatementPrintTemplate'
 import type { AccountStatementPrintData } from '../types/accountStatement'
-import type { CompanyPrintSettings, InvoicePrintData, InvoicePrintItem } from '../types/invoicePrint'
+import type { CompanyPrintSettings, InvoicePrintData } from '../types/invoicePrint'
 import { useNotifications } from '../contexts/useNotifications'
 
 type PrintableData = InvoicePrintData | DelegateStatementPrintData | AccountStatementPrintData
@@ -40,97 +41,6 @@ const A4_HEIGHT_PX = 297 * MM_TO_PX
 const MIN_PREVIEW_SCALE = 0.35
 const MAX_PREVIEW_SCALE = 1.6
 const PREVIEW_SCALE_STEP = 0.08
-const PAGE_GAP_PX = 18
-
-const FIRST_PAGE_ROWS = 11
-const CONTINUATION_PAGE_ROWS = 21
-const LAST_PAGE_ROWS = 17
-const LAST_PAGE_ROWS_WITH_NOTES = 14
-
-type InvoicePrintDataWithDiscount = InvoicePrintData & {
-  discountType?: 'none' | 'percentage' | 'fixed'
-  discountValue?: number
-}
-
-interface InvoicePageChunk {
-  items: InvoicePrintItem[]
-  isFirst: boolean
-  isLast: boolean
-}
-
-function buildPageChunks(data: InvoicePrintDataWithDiscount): InvoicePageChunk[] {
-  const items = data.items ?? []
-
-  if (items.length <= FIRST_PAGE_ROWS) {
-    return [
-      {
-        items,
-        isFirst: true,
-        isLast: true,
-      },
-    ]
-  }
-
-  const firstItems = items.slice(0, FIRST_PAGE_ROWS)
-  const remainingItems = items.slice(FIRST_PAGE_ROWS)
-
-  const hasPercentageDiscount = data.discountType === 'percentage'
-  const finalPageCapacity = data.notes?.trim()
-    ? LAST_PAGE_ROWS_WITH_NOTES - (hasPercentageDiscount ? 1 : 0)
-    : LAST_PAGE_ROWS - (hasPercentageDiscount ? 1 : 0)
-
-  let continuationPageCount = 1
-
-  while (
-    remainingItems.length >
-    (continuationPageCount - 1) * CONTINUATION_PAGE_ROWS + finalPageCapacity
-  ) {
-    continuationPageCount += 1
-  }
-
-  const baseSize = Math.floor(remainingItems.length / continuationPageCount)
-  const extra = remainingItems.length % continuationPageCount
-  const pageSizes = Array.from(
-    { length: continuationPageCount },
-    (_, index) => baseSize + (index < extra ? 1 : 0),
-  )
-
-  const lastIndex = pageSizes.length - 1
-  let overflowFromLast = Math.max(0, pageSizes[lastIndex] - finalPageCapacity)
-
-  if (overflowFromLast > 0) {
-    for (let index = 0; index < lastIndex && overflowFromLast > 0; index += 1) {
-      const availableRoom = CONTINUATION_PAGE_ROWS - pageSizes[index]
-      const moveCount = Math.min(availableRoom, overflowFromLast)
-
-      pageSizes[index] += moveCount
-      pageSizes[lastIndex] -= moveCount
-      overflowFromLast -= moveCount
-    }
-  }
-
-  const chunks: InvoicePageChunk[] = [
-    {
-      items: firstItems,
-      isFirst: true,
-      isLast: false,
-    },
-  ]
-
-  let offset = 0
-
-  pageSizes.forEach((pageSize, index) => {
-    chunks.push({
-      items: remainingItems.slice(offset, offset + pageSize),
-      isFirst: false,
-      isLast: index === pageSizes.length - 1,
-    })
-
-    offset += pageSize
-  })
-
-  return chunks
-}
 
 export default function InvoicePrintPage() {
   const notify = useNotifications()
@@ -147,23 +57,31 @@ export default function InvoicePrintPage() {
     } | null) ?? null,
   )
 
-  const [fitScale, setFitScale] = useState(1)
-  const [manualScale, setManualScale] = useState<number | null>(null)
+  const [manualScale, setManualScale] = useState<number | null>(1.2)
+  const [totalPages, setTotalPages] = useState(1)
+  const paperRef = useRef<HTMLDivElement>(null)
 
-  const previewScale = manualScale ?? fitScale
+  const previewScale = manualScale ?? 1.2
   const isPdfMode = new URLSearchParams(location.search).get('mode') === 'pdf'
 
-  const pageChunks = useMemo(
-    () => (payload && payload.invoiceData.printKind !== 'delegate-statement' && payload.invoiceData.printKind !== 'supplier-statement' && payload.invoiceData.printKind !== 'customer-statement'
-      ? buildPageChunks(payload.invoiceData as InvoicePrintDataWithDiscount)
-      : payload
-        ? [{ items: [], isFirst: true, isLast: true }]
-        : []),
-    [payload],
-  )
+  useEffect(() => {
+    const paperElement = paperRef.current
+    if (!paperElement) {
+      return
+    }
 
-  const pageCount = pageChunks.length || 1
-  const isMultiPage = pageCount > 1
+    const updatePageCount = () => {
+      setTotalPages(
+        Math.max(1, Math.ceil((paperElement.scrollHeight - 50) / A4_HEIGHT_PX)),
+      )
+    }
+
+    updatePageCount()
+    const observer = new ResizeObserver(updatePageCount)
+    observer.observe(paperElement)
+
+    return () => observer.disconnect()
+  }, [payload])
 
   useEffect(() => {
     if (!payload && window.invoicePrintAPI) {
@@ -205,36 +123,7 @@ export default function InvoicePrintPage() {
     }
 
     void ready()
-  }, [payload, pageCount])
-
-  useEffect(() => {
-    if (isPdfMode) {
-      return undefined
-    }
-
-    const updateFitScale = () => {
-      const horizontalSpace = 24
-      const verticalSpace = isMultiPage ? 24 : 0
-
-      const availableWidth = Math.max(320, window.innerWidth - horizontalSpace)
-      const availableHeight = Math.max(420, window.innerHeight - verticalSpace)
-
-      const nextScale = Math.min(
-        availableWidth / A4_WIDTH_PX,
-        availableHeight / A4_HEIGHT_PX,
-        1,
-      )
-
-      setFitScale(Math.max(MIN_PREVIEW_SCALE, nextScale))
-    }
-
-    updateFitScale()
-    window.addEventListener('resize', updateFitScale)
-
-    return () => {
-      window.removeEventListener('resize', updateFitScale)
-    }
-  }, [isPdfMode, isMultiPage])
+  }, [payload])
 
   const handlePreviewWheel = (event: WheelEvent<HTMLDivElement>) => {
     if (!event.ctrlKey) {
@@ -244,7 +133,7 @@ export default function InvoicePrintPage() {
     event.preventDefault()
 
     const direction = event.deltaY < 0 ? 1 : -1
-    const currentScale = manualScale ?? fitScale
+    const currentScale = manualScale ?? 1.2
 
     const nextScale = Math.min(
       MAX_PREVIEW_SCALE,
@@ -258,7 +147,7 @@ export default function InvoicePrintPage() {
   }
 
   const handleResetZoom = () => {
-    setManualScale(null)
+    setManualScale(1.2)
   }
 
   const handleSavePdf = async () => {
@@ -305,178 +194,220 @@ export default function InvoicePrintPage() {
     )
   }
 
-  const renderPage = (
-    chunk: InvoicePageChunk,
-    pageIndex: number,
-    scale: number,
-    pdfMode: boolean,
-  ) => {
-    const pageNumber = pageIndex + 1
+  const pageData = payload.invoiceData
+  const printableContent = pageData.printKind === 'delegate-statement' ? (
+    <DelegateStatementPrintTemplate
+      data={pageData as DelegateStatementPrintData}
+      settings={payload.settings}
+    />
+  ) : pageData.printKind === 'supplier-statement' ? (
+    <SupplierStatementPrintTemplate
+      data={pageData as AccountStatementPrintData}
+      settings={payload.settings}
+    />
+  ) : pageData.printKind === 'customer-statement' ? (
+    <CustomerStatementPrintTemplate
+      data={pageData as AccountStatementPrintData}
+      settings={payload.settings}
+    />
+  ) : (
+    <InvoicePrintTemplate
+      data={pageData as InvoicePrintData}
+      settings={payload.settings}
+    />
+  )
 
-    const pageData: PrintableData = {
-      ...payload.invoiceData,
-      items: chunk.items,
-    }
-
-    const hideTopSections = !chunk.isFirst
-    const hideSummary = !chunk.isLast
-
-    return (
+  const paper = (
+    <Box
+      ref={paperRef}
+      className="invoice-a4"
+      sx={{
+        width: '210mm',
+        minHeight: isPdfMode ? 'auto' : '297mm',
+        height: isPdfMode ? 'auto' : 'max-content',
+        paddingBottom: isPdfMode ? '12mm' : '20mm',
+        position: 'relative',
+        background: '#FFFFFF',
+        color: '#111827',
+        boxSizing: 'border-box',
+        borderRadius: isPdfMode ? 0 : '8px',
+        boxShadow: isPdfMode ? 'none' : '0 24px 70px rgba(0, 0, 0, 0.34)',
+        overflow: 'visible',
+        '& .craft-print-visible': {
+          minHeight: '0 !important',
+          height: 'auto !important',
+          overflow: 'visible !important',
+          boxSizing: 'border-box !important',
+        },
+        '& table': {
+          pageBreakInside: 'auto',
+          breakInside: 'auto',
+        },
+        '& tr': {
+          pageBreakInside: 'avoid',
+          pageBreakAfter: 'auto',
+          breakInside: 'avoid',
+        },
+        '& thead': {
+          display: 'table-header-group',
+        },
+        '& tfoot': {
+          display: 'table-footer-group',
+        },
+        '& .prevent-break': {
+          pageBreakInside: 'avoid',
+          breakInside: 'avoid',
+        },
+        '@page': {
+          size: 'A4 portrait',
+          margin: '10mm',
+        },
+        '@media print': {
+          width: '190mm',
+          height: 'auto !important',
+          minHeight: '0 !important',
+          margin: 0,
+          padding: 0,
+          paddingBottom: '12mm !important',
+          borderRadius: 0,
+          boxShadow: 'none',
+          overflow: 'visible !important',
+          transform: 'none !important',
+          zoom: '1 !important',
+          pageBreakAfter: 'auto',
+        },
+      }}
+    >
+      {printableContent}
       <Box
-        key={`invoice-page-${pageNumber}`}
         sx={{
-          width: pdfMode ? '210mm' : `${A4_WIDTH_PX * scale}px`,
-          height: pdfMode ? '297mm' : `${A4_HEIGHT_PX * scale}px`,
-          position: 'relative',
-          flexShrink: 0,
-          breakAfter: pageIndex < pageCount - 1 ? 'page' : 'auto',
-          pageBreakAfter: pageIndex < pageCount - 1 ? 'always' : 'auto',
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 0,
+          pointerEvents: 'none',
+          zIndex: 100,
+          overflow: 'visible',
         }}
       >
-        <Box
-          className="invoice-a4"
-          sx={{
-            width: '210mm',
-            height: '297mm',
-            minHeight: '297mm',
-            position: 'relative',
-            background: '#FFFFFF',
-            color: '#111827',
-            borderRadius: pdfMode ? 0 : '8px',
-            boxShadow: pdfMode
-              ? 'none'
-              : '0 24px 70px rgba(0, 0, 0, 0.34)',
-            overflow: 'hidden',
-            transform: pdfMode ? 'none' : `scale(${scale})`,
-            transformOrigin: 'top left',
-
-            ...(hideTopSections
-              ? {
-                  '& .craft-print-visible > :nth-of-type(1)': {
-                    display: 'none !important',
-                  },
-                  '& .craft-print-visible > :nth-of-type(2)': {
-                    display: 'none !important',
-                  },
-                }
-              : {}),
-
-            ...(hideSummary
-              ? {
-                  '& .invoice-document-notes, & .invoice-summary': {
-                    display: 'none !important',
-                  },
-                }
-              : {}),
-
-            '& .craft-print-visible': {
-              minHeight: '297mm !important',
-              height: '297mm !important',
-              overflow: 'hidden !important',
-              boxSizing: 'border-box !important',
-            },
-
-            '@media print': {
-              width: '210mm',
-              height: '297mm',
-              minHeight: '297mm',
-              borderRadius: 0,
-              boxShadow: 'none',
-              overflow: 'hidden',
-              transform: 'none',
-            },
-          }}
-        >
-          {pageData.printKind === 'delegate-statement' ? (
-            <DelegateStatementPrintTemplate
-              data={pageData as DelegateStatementPrintData}
-              settings={payload.settings}
-            />
-          ) : pageData.printKind === 'supplier-statement' ? (
-            <SupplierStatementPrintTemplate 
-              data={pageData as AccountStatementPrintData} 
-              settings={payload.settings} 
-            />
-          ) : pageData.printKind === 'customer-statement' ? (
-            <CustomerStatementPrintTemplate 
-              data={pageData as AccountStatementPrintData} 
-              settings={payload.settings} 
-            />
-          ) : (
-            <InvoicePrintTemplate
-              data={pageData as InvoicePrintData}
-              settings={payload.settings}
-            />
-          )}
-
+        {Array.from({ length: totalPages }, (_, index) => (
           <Box
+            key={`page-number-${index + 1}`}
             aria-hidden="true"
             sx={{
               position: 'absolute',
+              top: isPdfMode
+                ? `calc(${(index + 1) * 277}mm - 7mm)`
+                : `calc(${(index + 1) * 297}mm - 15mm)`,
               left: 0,
               right: 0,
-              bottom: '4mm',
+              height: 'auto',
+              lineHeight: 1,
               textAlign: 'center',
               fontSize: 11,
-              lineHeight: 1,
+              fontWeight: 700,
               color: '#64748B',
               direction: 'ltr',
               pointerEvents: 'none',
+              '@media print': {
+                top: `calc(${(index + 1) * 277}mm - 7mm) !important`,
+                height: 'auto !important',
+              },
             }}
           >
-            {pageNumber}
+            {index + 1}/{totalPages}
           </Box>
-        </Box>
+        ))}
       </Box>
-    )
-  }
+    </Box>
+  )
+
+  const printGlobalStyles = (
+    <style>{`
+      @page {
+        size: A4 portrait;
+        margin: 10mm;
+      }
+      @media print {
+        html, body, #root, .invoice-preview-background, .invoice-pdf-document, .invoice-a4 {
+          background: #FFFFFF !important;
+          background-color: #FFFFFF !important;
+          background-image: none !important;
+          box-shadow: none !important;
+          height: auto !important;
+          min-height: 0 !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+        html::before, html::after, body::before, body::after, #root::before, #root::after {
+          display: none !important;
+          content: none !important;
+          background: none !important;
+        }
+        .invoice-a4 {
+          padding-bottom: 12mm !important;
+          min-height: 0 !important;
+          height: auto !important;
+        }
+      }
+    `}</style>
+  )
 
   if (isPdfMode) {
     return (
-      <Box
-        sx={{
-          width: '210mm',
-          minHeight: '297mm',
-          background: '#FFFFFF',
-          p: 0,
-          m: 0,
-          '@media print': {
-            width: '210mm',
+      <>
+        {printGlobalStyles}
+        <Box
+          className="invoice-pdf-document"
+          sx={{
+            width: '190mm',
+            height: 'auto',
+            minHeight: 0,
             background: '#FFFFFF !important',
-            m: 0,
+            backgroundImage: 'none !important',
             p: 0,
-          },
-          '@page': {
-            size: 'A4',
-            margin: 0,
-          },
-        }}
-      >
-        {pageChunks.map((chunk, pageIndex) =>
-          renderPage(chunk, pageIndex, 1, true),
-        )}
-      </Box>
+            m: 0,
+            '@media print': {
+              width: '190mm',
+              height: 'auto !important',
+              minHeight: '0 !important',
+              background: '#FFFFFF !important',
+              backgroundImage: 'none !important',
+              m: 0,
+              p: 0,
+            },
+          }}
+        >
+          {paper}
+        </Box>
+      </>
     )
   }
 
-  const manualZoomNeedsScroll =
-    manualScale !== null && manualScale > fitScale + 0.001
-
-  const shouldScroll = isMultiPage || manualZoomNeedsScroll
-
   return (
-    <Box
-      className="invoice-preview-background"
-      onWheel={handlePreviewWheel}
-      sx={{
-        width: '100vw',
-        height: '100vh',
-        background: '#0B1636',
-        position: 'relative',
-        overflow: shouldScroll ? 'auto' : 'hidden',
-        boxSizing: 'border-box',
-      }}
-    >
+    <>
+      {printGlobalStyles}
+      <Box
+        className="invoice-preview-background"
+        onWheel={handlePreviewWheel}
+        sx={{
+          width: '100vw',
+          height: '100vh',
+          background: '#0B1636',
+          position: 'relative',
+          overflow: 'auto',
+          boxSizing: 'border-box',
+          '@media print': {
+            background: '#FFFFFF !important',
+            margin: '0 !important',
+            padding: '0 !important',
+            width: '100% !important',
+            height: '100% !important',
+            overflow: 'visible !important',
+          },
+        }}
+      >
       <Stack
         direction="row"
         spacing={1.5}
@@ -484,11 +415,28 @@ export default function InvoicePrintPage() {
         sx={{
           position: 'fixed',
           top: 24,
-          right: 32,
+          left: 16,
           zIndex: 10,
           alignItems: 'center',
         }}
       >
+        <IconButton
+          aria-label="إغلاق"
+          onClick={() => navigate(-1)}
+          sx={{
+            width: 40,
+            height: 40,
+            borderRadius: '50%',
+            color: '#E2E8F0',
+            '&:hover': {
+              borderColor: '#67E8F9',
+              color: '#67E8F9',
+              background: 'rgba(103, 232, 249, 0.06)',
+            },
+          }}
+        >
+          <FiX size={30} />
+        </IconButton>
         <Button
           variant="contained"
           onClick={() => {
@@ -533,46 +481,27 @@ export default function InvoicePrintPage() {
           ملاءمة {Math.round(previewScale * 100)}%
         </Button>
 
-        <Button
-          variant="outlined"
-          onClick={() => navigate(-1)}
-          sx={{
-            minWidth: 72,
-            height: 40,
-            borderRadius: '12px',
-            fontWeight: 700,
-            color: '#E2E8F0',
-            borderColor: 'rgba(226, 232, 240, 0.42)',
-            '&:hover': {
-              borderColor: '#67E8F9',
-              color: '#67E8F9',
-              background: 'rgba(103, 232, 249, 0.06)',
-            },
-          }}
-        >
-          إغلاق
-        </Button>
       </Stack>
 
       <Box
+        className="invoice-preview-paper-wrapper"
         sx={{
-          width: `${A4_WIDTH_PX * previewScale}px`,
-          minHeight: isMultiPage
-            ? `${
-                pageCount * A4_HEIGHT_PX * previewScale +
-                (pageCount - 1) * PAGE_GAP_PX
-              }px`
-            : `${A4_HEIGHT_PX * previewScale}px`,
-          display: 'grid',
-          gap: isMultiPage ? `${PAGE_GAP_PX}px` : 0,
+          width: `${A4_WIDTH_PX}px`,
+          minHeight: '297mm',
+          zoom: previewScale,
           mx: 'auto',
-          my: isMultiPage ? '12px' : 0,
+          my: '12px',
+          '@media print': {
+            width: '190mm',
+              minHeight: 0,
+            zoom: '1 !important',
+            transform: 'none !important',
+          },
         }}
       >
-        {pageChunks.map((chunk, pageIndex) =>
-          renderPage(chunk, pageIndex, previewScale, false),
-        )}
+        {paper}
       </Box>
-    </Box>
+      </Box>
+    </>
   )
 }

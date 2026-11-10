@@ -1,4 +1,4 @@
-import { Box, Typography } from '@mui/material'
+import { Box } from '@mui/material'
 import { formatNumberBySettings } from '../../utils/displayFormatting'
 import type { InvoicePrintItem } from '../../types/invoicePrint'
 
@@ -15,7 +15,7 @@ function priceNum(value: number | undefined): string {
   return formatNumberBySettings(Number(value ?? 0), 'price')
 }
 
-const cellSx = {
+const baseCellSx = {
   border: '1px solid rgba(15, 23, 42, 0.12)',
   px: 0.8,
   py: 1.05,
@@ -24,24 +24,22 @@ const cellSx = {
   verticalAlign: 'middle',
 }
 
-const noWrapCellSx = {
-  ...cellSx,
+const cellSx = {
+  ...baseCellSx,
   whiteSpace: 'nowrap',
-  overflowWrap: 'normal',
   wordBreak: 'normal',
+  overflowWrap: 'normal',
+  boxSizing: 'border-box',
 }
 
 const numericCellSx = {
-  ...noWrapCellSx,
+  ...cellSx,
   direction: 'ltr',
   fontVariantNumeric: 'tabular-nums',
 }
 
 const nameCellSx = {
   ...cellSx,
-  whiteSpace: 'normal',
-  overflowWrap: 'break-word',
-  wordBreak: 'normal',
   minWidth: 0,
 }
 
@@ -54,7 +52,9 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
     <Box
       dir="rtl"
       sx={{
-        overflow: 'hidden',
+        width: '100%',
+        overflowX: 'auto',
+        overflowY: 'hidden',
         border: '1px solid rgba(15, 23, 42, 0.12)',
         borderRadius: '10px',
         background: '#FFFFFF',
@@ -69,9 +69,9 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
         component="table"
         sx={{
           width: '100%',
+          minWidth: 'max-content',
           borderCollapse: 'collapse',
           tableLayout: 'auto',
-          fontSize: 13,
           '@media print': {
             breakInside: 'auto',
             pageBreakInside: 'auto',
@@ -99,6 +99,9 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
                   fontWeight: 800,
                   color: '#0F172A',
                   whiteSpace: 'nowrap',
+                  wordBreak: 'normal',
+                  overflowWrap: 'normal',
+                  boxSizing: 'border-box',
                 }}
               >
                 {header}
@@ -145,10 +148,10 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
                   </>
                 ) : (
                   <>
-                    <Box component="td" sx={noWrapCellSx}>{index + 1}</Box>
-                    <Box component="td" sx={noWrapCellSx}>{item.code || '—'}</Box>
+                    <Box component="td" sx={cellSx}>{index + 1}</Box>
+                    <Box component="td" sx={cellSx}>{item.code || ''}</Box>
                     <Box component="td" sx={nameCellSx}>{item.name}</Box>
-                    <Box component="td" sx={noWrapCellSx}>{item.unit || '—'}</Box>
+                    <Box component="td" sx={cellSx}>{item.unit || ''}</Box>
                     <Box component="td" sx={numericCellSx}>{formatNumber(item.quantity)}</Box>
                     <Box component="td" sx={numericCellSx}>{priceNum(item.price ?? 0)}</Box>
                     <Box component="td" sx={numericCellSx}>{priceNum(item.total ?? 0)}</Box>
@@ -160,20 +163,6 @@ export function InvoiceDetailsTable({ items, productionMode = false }: InvoiceDe
         </Box>
       </Box>
 
-      {items.some((item) => item.notes?.trim()) ? (
-        <Box sx={{ borderTop: '1px solid rgba(15, 23, 42, 0.12)', p: 1.5 }}>
-          <Typography sx={{ fontWeight: 700, color: '#0F172A', mb: 0.75, fontSize: 12.5 }}>
-            ملاحظات العناصر
-          </Typography>
-          {items
-            .filter((item) => item.notes?.trim())
-            .map((item, index) => (
-              <Typography key={`${item.id ?? item.name}-${index}`} sx={{ color: '#475569', fontSize: 12, mb: 0.25 }}>
-                {item.name}: {item.notes}
-              </Typography>
-            ))}
-        </Box>
-      ) : null}
     </Box>
   )
 }

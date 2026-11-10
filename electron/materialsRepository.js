@@ -73,6 +73,9 @@ function ensureInvoiceFeeColumns(db) {
   ensureColumns('delegate_payments', [
     { name: 'payment_method', definition: 'TEXT DEFAULT ""' },
   ])
+  ensureColumns('warehouses', [
+    { name: 'is_default', definition: 'INTEGER NOT NULL DEFAULT 0' },
+  ])
 }
 
 export async function initDatabase() {
@@ -496,6 +499,7 @@ function initializeSchema(db) {
       location TEXT,
       notes TEXT,
       status TEXT NOT NULL DEFAULT 'active',
+      is_default INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -666,6 +670,7 @@ function initializeSchema(db) {
       amount REAL NOT NULL,
       notes TEXT,
       payment_method TEXT DEFAULT '',
+      payment_direction TEXT NOT NULL DEFAULT 'out',
       reference_type TEXT,
       reference_id TEXT,
       reference_number TEXT,
@@ -934,6 +939,10 @@ function initializeSchema(db) {
       { name: 'updated_at', definition: 'updated_at TEXT' },
     ])
 
+    db.run(`UPDATE purchase_invoices
+            SET net_total = MAX(subtotal - discount_amount, 0)
+            WHERE net_total <> MAX(subtotal - discount_amount, 0)`)
+
     ensureColumns('purchase_returns', [
       { name: 'original_invoice_number', definition: 'original_invoice_number TEXT' },
     ])
@@ -942,11 +951,29 @@ function initializeSchema(db) {
       { name: 'original_invoice_number', definition: 'original_invoice_number TEXT' },
     ])
 
+    try {
+      db.run(`ALTER TABLE account_payments
+              ADD COLUMN payment_direction TEXT NOT NULL DEFAULT 'out'`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!message.includes('duplicate column name')) {
+        throw error
+      }
+    }
+
     ensureColumns('account_payments', [
+      { name: 'payment_direction', definition: "TEXT NOT NULL DEFAULT 'out'" },
       { name: 'reference_type', definition: 'reference_type TEXT' },
       { name: 'reference_id', definition: 'reference_id TEXT' },
       { name: 'reference_number', definition: 'reference_number TEXT' },
     ])
+    db.run(`UPDATE account_payments
+            SET payment_direction = CASE
+              WHEN reference_type = 'purchase-return' THEN 'in'
+              WHEN reference_type = 'sales-return' THEN 'out'
+              WHEN entity_type = 'supplier' THEN 'out'
+              ELSE 'in'
+            END`)
 
     const purchaseReturnsToBackfill = db.exec(`SELECT id, purchase_invoice_id FROM purchase_returns WHERE original_invoice_number IS NULL OR original_invoice_number = ''`)[0]?.values ?? []
     for (const [returnId, purchaseInvoiceId] of purchaseReturnsToBackfill) {
@@ -1042,9 +1069,9 @@ function initializeSchema(db) {
 // Warehouses CRUD
 export function listWarehouses() {
   const db = getDatabase()
-  const rows = db.exec(`SELECT id, code, name, location, notes, status, created_at, updated_at FROM warehouses ORDER BY created_at`)[0]?.values ?? []
+  const rows = db.exec(`SELECT id, code, name, location, notes, status, created_at, updated_at, is_default FROM warehouses ORDER BY created_at`)[0]?.values ?? []
   return rows.map((r) => ({
-    id: r[0], code: r[1], name: r[2], location: r[3], notes: r[4], status: r[5], createdAt: r[6], updatedAt: r[7]
+    id: r[0], code: r[1], name: r[2], location: r[3], notes: r[4], status: r[5], createdAt: r[6], updatedAt: r[7], isDefault: Number(r[8]) === 1
   }))
 }
 
@@ -1059,6 +1086,41 @@ export function createWarehouse(payload) {
   db.run(`INSERT INTO warehouses (id, code, name, location, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [id, payload.code, payload.name, payload.location ?? '', payload.notes ?? '', payload.status ?? 'active', now, now])
   persistDatabase(db)
   return listWarehouses()
+}
+
+export function setDefaultWarehouse(id) {
+  const db = getDatabase()
+  const warehouse = db.exec(
+    `SELECT id, status FROM warehouses WHERE id = ?`,
+    [id],
+  )[0]?.values?.[0]
+
+  if (!warehouse) {
+    throw new Error('المخزن غير موجود.')
+  }
+
+  if (warehouse[1] !== 'active') {
+    throw new Error('لا يمكن تعيين مخزن غير فعال كمخزن افتراضي.')
+  }
+
+  db.run('BEGIN')
+  try {
+    db.run(`UPDATE warehouses SET is_default = 0`)
+    db.run(
+      `UPDATE warehouses SET is_default = 1, updated_at = ? WHERE id = ?`,
+      [new Date().toISOString(), id],
+    )
+    db.run('COMMIT')
+    persistDatabase(db)
+    return listWarehouses()
+  } catch (error) {
+    try {
+      db.run('ROLLBACK')
+    } catch (rollbackError) {
+      console.error('Failed to rollback default warehouse update', rollbackError)
+    }
+    throw error
+  }
 }
 
 export function updateWarehouse(id, payload) {
@@ -1076,7 +1138,12 @@ export function updateWarehouse(id, payload) {
 export function toggleWarehouseStatus(id, status) {
   const db = getDatabase()
   const now = new Date().toISOString()
-  db.run(`UPDATE warehouses SET status = ?, updated_at = ? WHERE id = ?`, [status, now, id])
+  db.run(
+    `UPDATE warehouses
+     SET status = ?, is_default = CASE WHEN ? = 'active' THEN is_default ELSE 0 END, updated_at = ?
+     WHERE id = ?`,
+    [status, status, now, id],
+  )
   persistDatabase(db)
   return listWarehouses()
 }
@@ -1206,11 +1273,14 @@ function getValidPurchasableMaterial(db, materialId) {
 
 function normalizeDiscount(discountType, discountValue, subtotal) {
   const type = discountType ?? 'none'
-  const value = Number(discountValue ?? 0)
+  const rawValue = Number(discountValue ?? 0)
+  const value = type === 'fixed'
+    ? normalizeMoney(rawValue)
+    : roundByDecimals(rawValue, 6)
   if (!['none', 'percentage', 'fixed'].includes(type)) {
     throw new Error('نوع الحسم غير صالح.')
   }
-  if (Number.isNaN(value) || value < 0) {
+  if (!Number.isFinite(value) || value < 0) {
     throw new Error('قيمة الحسم غير صالحة.')
   }
 
@@ -1220,9 +1290,9 @@ function normalizeDiscount(discountType, discountValue, subtotal) {
 
   let discountAmount = 0
   if (type === 'percentage') {
-    discountAmount = (subtotal * value) / 100
+    discountAmount = normalizeMoney((subtotal * value) / 100)
   } else if (type === 'fixed') {
-    discountAmount = value
+    discountAmount = normalizeMoney(value)
   }
 
   if (discountAmount > subtotal) {
@@ -1233,75 +1303,36 @@ function normalizeDiscount(discountType, discountValue, subtotal) {
     discountType: type,
     discountValue: value,
     discountAmount,
-    netTotal: subtotal - discountAmount,
+    netTotal: normalizeMoney(subtotal - discountAmount),
   }
 }
 
 function normalizeAdditionalFeeValue(value, fieldName) {
   const numericValue = Number(value ?? 0)
-  if (Number.isNaN(numericValue) || numericValue < 0) {
+  if (!Number.isFinite(numericValue) || numericValue < 0) {
     throw new Error(`${fieldName} غير صالح.`)
   }
   return normalizeMoney(numericValue)
 }
 
-function buildPurchaseNetItemCosts(items, discountType, discountValue, subtotal, expenses = 0) {
+function buildPurchaseNetItemCosts(items, invoiceSubtotal, totalDiscount, totalExpenses) {
   if (!Array.isArray(items) || items.length === 0) {
     return []
   }
 
-  const safeSubtotal = Number(subtotal ?? 0)
-  const type = discountType ?? 'none'
-  const value = Number(discountValue ?? 0)
-  const feeTotal = normalizeMoney(Number(expenses ?? 0))
-
-  if (safeSubtotal <= 0 && feeTotal <= 0) {
-    return items.map((item) => ({
-      ...item,
-      netLineTotal: normalizeInventoryCost(Number(item.lineTotal ?? 0)),
-      netUnitPrice: item.quantity > 0 ? normalizeInventoryCost(Number(item.lineTotal ?? 0) / Number(item.quantity)) : 0,
-    }))
-  }
-
-  const totalGross = items.reduce((sum, item) => sum + Number(item.lineTotal ?? 0), 0)
-  const totalQuantity = items.reduce((sum, item) => sum + Number(item.quantity ?? 0), 0)
-  const discountAmount = type === 'percentage' ? (safeSubtotal * value) / 100 : type === 'fixed' ? Math.min(Number(value), safeSubtotal) : 0
-  const totalNet = normalizeInventoryCost(Math.max(safeSubtotal - discountAmount + feeTotal, 0))
-
-  let adjustedItems = items.map((item, index) => {
-    const grossLineTotal = Number(item.lineTotal ?? 0)
-    const share = totalGross > 0 ? grossLineTotal / totalGross : 0
-    const lineDiscount = type === 'none' || Number(value) <= 0 ? 0 : discountAmount * share
+  return items.map((item) => {
+    const lineTotal = normalizeMoney(Number(item.lineTotal ?? 0))
+    const lineWeight = invoiceSubtotal > 0 ? lineTotal / invoiceSubtotal : 0
+    const lineExpense = Number(totalExpenses ?? 0) * lineWeight
+    const lineDiscount = Number(totalDiscount ?? 0) * lineWeight
     const quantity = Number(item.quantity ?? 0)
-    const lineExpense = totalQuantity > 0 ? feeTotal * (quantity / totalQuantity) : feeTotal / Math.max(items.length, 1)
-    const rawNetLineTotal = grossLineTotal - lineDiscount + lineExpense
+    const lineNetTotal = normalizeMoney(lineTotal + lineExpense - lineDiscount)
     return {
       ...item,
-      netLineTotal: normalizeInventoryCost(rawNetLineTotal),
-      netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeInventoryCost(rawNetLineTotal / Number(item.quantity)) : 0,
-      __index: index,
+      netLineTotal: lineNetTotal,
+      netUnitPrice: quantity > 0 ? lineNetTotal / quantity : 0,
     }
   })
-
-  const netSum = adjustedItems.reduce((sum, item) => sum + Number(item.netLineTotal ?? 0), 0)
-  const diff = normalizeInventoryCost(totalNet - netSum)
-  if (Math.abs(diff) > 0 && adjustedItems.length > 0) {
-    const lastIndex = adjustedItems.length - 1
-    const lastItem = adjustedItems[lastIndex]
-    const lastItemNet = normalizeInventoryCost(Number(lastItem.netLineTotal ?? 0) + diff)
-    adjustedItems[lastIndex] = {
-      ...lastItem,
-      netLineTotal: lastItemNet,
-      netUnitPrice: Number(lastItem.quantity ?? 0) > 0 ? normalizeInventoryCost(lastItemNet / Number(lastItem.quantity)) : 0,
-    }
-  }
-
-  return adjustedItems.map((item) => ({
-    ...item,
-    netLineTotal: normalizeInventoryCost(Number(item.netLineTotal ?? 0)),
-    netUnitPrice: Number(item.quantity ?? 0) > 0 ? normalizeInventoryCost(Number(item.netLineTotal ?? 0) / Number(item.quantity)) : 0,
-    __index: undefined,
-  }))
 }
 
 function toInvoiceItemPayload(items) {
@@ -1327,18 +1358,22 @@ function toInvoiceItemPayload(items) {
     }
 
     const unitPrice = Number(item.unitPrice)
-    if (Number.isNaN(unitPrice) || unitPrice < 0) {
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
       throw new Error('لا يمكن إدخال قيمة سالبة.')
+    }
+    const normalizedUnitPrice = normalizeMoney(unitPrice)
+    const lineTotal = normalizeMoney(quantity * normalizedUnitPrice)
+    if (!Number.isFinite(lineTotal)) {
+      throw new Error('إجمالي سطر الفاتورة غير صالح.')
     }
 
     return {
       id: item.id ?? `pii-${crypto.randomUUID()}`,
       materialId,
       quantity,
-      unitPrice,
-      lineTotal: quantity * unitPrice,
+      unitPrice: normalizedUnitPrice,
+      lineTotal,
       unit: typeof item.unit === 'string' ? item.unit : '',
-      notes: typeof item.notes === 'string' ? item.notes.trim() : '',
       order: index,
     }
   })
@@ -1377,7 +1412,10 @@ function validatePurchaseInvoiceCore(db, payload) {
       throw new Error('إحدى المواد غير موجودة أو غير صالحة للشراء. تأكد من دليل المواد.')
     }
 
-    subtotal += item.lineTotal
+    subtotal = normalizeMoney(subtotal + item.lineTotal)
+    if (!Number.isFinite(subtotal)) {
+      throw new Error('إجمالي الفاتورة غير صالح.')
+    }
     return {
       ...item,
       unit: material.unit,
@@ -1386,7 +1424,16 @@ function validatePurchaseInvoiceCore(db, payload) {
 
   const discount = normalizeDiscount(payload.discountType, payload.discountValue, subtotal)
   const expenses = normalizeAdditionalFeeValue(payload.expenses, 'مصاريف الفاتورة')
-  const costAdjustedItems = buildPurchaseNetItemCosts(validatedItems, discount.discountType, discount.discountValue, subtotal, expenses)
+  const costAdjustedItems = buildPurchaseNetItemCosts(
+    validatedItems,
+    subtotal,
+    discount.discountAmount,
+    expenses,
+  )
+  const netTotal = normalizeMoney(Math.max(subtotal - discount.discountAmount, 0))
+  if (!Number.isFinite(netTotal)) {
+    throw new Error('صافي الفاتورة غير صالح.')
+  }
 
   return {
     supplier,
@@ -1396,14 +1443,14 @@ function validatePurchaseInvoiceCore(db, payload) {
       const adjusted = costAdjustedItems.find((candidate) => candidate.id === item.id)
       return {
         ...item,
-        netLineTotal: adjusted ? adjusted.netLineTotal : normalizeMoney(Number(item.lineTotal ?? 0)),
-        netUnitPrice: adjusted ? adjusted.netUnitPrice : normalizeMoney(Number(item.lineTotal ?? 0) / Number(item.quantity || 1)),
+        netLineTotal: adjusted ? adjusted.netLineTotal : Number(item.lineTotal ?? 0),
+        netUnitPrice: adjusted ? adjusted.netUnitPrice : Number(item.lineTotal ?? 0) / Number(item.quantity || 1),
       }
     }),
     subtotal,
     ...discount,
     expenses,
-    netTotal: normalizeMoney(subtotal - discount.discountAmount + expenses),
+    netTotal,
     supplierInvoiceNumber: String(payload.supplierInvoiceNumber ?? '').trim(),
     notes: String(payload.notes ?? '').trim(),
   }
@@ -1452,8 +1499,7 @@ function buildPurchaseInvoiceDetails(db, invoiceId) {
        pii.quantity,
        pii.unit,
        pii.unit_price,
-       pii.line_total,
-       pii.notes
+       pii.line_total
      FROM purchase_invoice_items pii
      LEFT JOIN materials m ON m.id = pii.material_id
      WHERE pii.invoice_id = ?
@@ -1489,29 +1535,38 @@ function buildPurchaseInvoiceDetails(db, invoiceId) {
     warehouseCode: header[8] ?? '',
     warehouseName: header[9] ?? '',
     status: header[10],
-    subtotal: Number(header[11] ?? 0),
+    subtotal: normalizeMoney(Number(header[11] ?? 0)),
     discountType: header[12],
-    discountValue: Number(header[13] ?? 0),
-    discountAmount: Number(header[14] ?? 0),
-    netTotal: Number(header[15] ?? 0),
-    expenses: Number(header[16] ?? 0),
+    discountValue: roundByDecimals(Number(header[13] ?? 0), 6),
+    discountAmount: normalizeMoney(Number(header[14] ?? 0)),
+    netTotal: normalizeMoney(Number(header[15] ?? 0)),
+    expenses: normalizeMoney(Number(header[16] ?? 0)),
     paidAmount: paymentSummary.paidAmount,
     remainingAmount: paymentSummary.remainingAmount,
     paymentStatus: paymentSummary.paymentStatus,
     notes: header[17] ?? '',
     createdAt: header[18],
     updatedAt: header[19],
-    items: itemsRows.map((row) => ({
-      id: row[0],
-      materialId: row[1],
-      materialNumber: row[2] ?? '',
-      materialName: row[3] ?? '',
-      quantity: Number(row[4] ?? 0),
-      unit: row[5] ?? '',
-      unitPrice: Number(row[6] ?? 0),
-      lineTotal: Number(row[7] ?? 0),
-      notes: row[8] ?? '',
-    })),
+    items: itemsRows.map((row) => {
+      const quantity = Number(row[4] ?? 0)
+      const lineTotal = normalizeMoney(Number(row[7] ?? 0))
+      return {
+        id: row[0],
+        materialId: row[1],
+        materialNumber: row[2] ?? '',
+        materialName: row[3] ?? '',
+        quantity,
+        unit: row[5] ?? '',
+        unitPrice: normalizeMoney(Number(row[6] ?? 0)),
+        lineTotal,
+        ...calculateNetInvoiceItemAmounts(
+          quantity,
+          lineTotal,
+          Number(header[11] ?? 0),
+          Number(header[14] ?? 0),
+        ),
+      }
+    }),
     payments: paymentsRows.map((row) => ({
       id: row[0],
       invoiceId: row[1],
@@ -1533,8 +1588,31 @@ function normalizeMoney(value) {
   return roundByDecimals(value, numberFormatSettings.priceDecimals)
 }
 
-function normalizeInventoryCost(value) {
-  return roundByDecimals(value, numberFormatSettings.averageDecimals)
+function calculateNetInvoiceItemAmounts(quantity, lineTotal, invoiceSubtotal, discountAmount) {
+  const discountShare = invoiceSubtotal > 0
+    ? (lineTotal / invoiceSubtotal) * discountAmount
+    : 0
+  const netTotal = normalizeMoney(Math.max(lineTotal - discountShare, 0))
+  return {
+    netUnitPrice: quantity > 0 ? normalizeMoney(netTotal / quantity) : 0,
+    netTotal,
+  }
+}
+
+function calculateProratedReturnLineTotal(quantity, invoiceQuantity, invoiceItemNetTotal, previouslyReturnedQuantity, previouslyReturnedTotal) {
+  if (quantity <= 0 || invoiceQuantity <= 0) return 0
+
+  const cumulativeQuantity = Math.min(previouslyReturnedQuantity + quantity, invoiceQuantity)
+  const cumulativeTotal = cumulativeQuantity >= invoiceQuantity
+    ? invoiceItemNetTotal
+    : normalizeMoney((invoiceItemNetTotal * cumulativeQuantity) / invoiceQuantity)
+
+  return Math.max(normalizeMoney(cumulativeTotal - previouslyReturnedTotal), 0)
+}
+
+function normalizeRemainingMoney(value) {
+  const numericValue = Number(value ?? 0)
+  return Math.abs(numericValue) < 0.000001 ? 0 : normalizeMoney(numericValue)
 }
 
 function normalizeQuantity(value) {
@@ -1548,7 +1626,10 @@ function roundByDecimals(value, decimals) {
   }
 
   const factor = 10 ** decimals
-  return Number(Math.round((numericValue + Number.EPSILON) * factor) / factor)
+  const rounded = Math.sign(numericValue)
+    * Math.round((Math.abs(numericValue) + Number.EPSILON) * factor)
+    / factor
+  return rounded === 0 ? 0 : rounded
 }
 
 function normalizeDocumentNote(value) {
@@ -1566,7 +1647,7 @@ function getPurchasePaymentSummary(db, invoiceId, netTotal) {
     )[0]?.values?.[0]?.[0] ?? 0
   )
 
-  const remainingAmount = normalizeMoney(Number(netTotal ?? 0) - paidAmount)
+  const remainingAmount = normalizeRemainingMoney(Number(netTotal ?? 0) - paidAmount)
   let paymentStatus = 'unpaid'
   if (paidAmount > 0 && paidAmount < Number(netTotal ?? 0)) {
     paymentStatus = 'partial'
@@ -1642,10 +1723,10 @@ function buildPurchaseInvoiceList(filter = {}) {
   )[0]?.values ?? []
 
   return rows.map((row) => {
-    const netTotal = Number(row[10] ?? 0)
-    const expenses = Number(row[11] ?? 0)
+    const netTotal = normalizeMoney(Number(row[10] ?? 0))
+    const expenses = normalizeMoney(Number(row[11] ?? 0))
     const paidAmount = normalizeMoney(Number(row[13] ?? 0))
-    const remainingAmount = normalizeMoney(netTotal - paidAmount)
+    const remainingAmount = normalizeRemainingMoney(netTotal - paidAmount)
     const paymentStatus = paidAmount <= 0 ? 'unpaid' : paidAmount < netTotal ? 'partial' : 'paid'
 
     return {
@@ -1657,8 +1738,8 @@ function buildPurchaseInvoiceList(filter = {}) {
       supplierName: row[5] ?? '-',
       warehouseId: row[6],
       warehouseName: row[7] ?? '-',
-      subtotal: Number(row[8] ?? 0),
-      discountAmount: Number(row[9] ?? 0),
+      subtotal: normalizeMoney(Number(row[8] ?? 0)),
+      discountAmount: normalizeMoney(Number(row[9] ?? 0)),
       netTotal,
       expenses,
       paidAmount,
@@ -1967,8 +2048,8 @@ function validateSalesInvoiceCore(db, payload) {
       throw new Error('إحدى المواد غير موجودة أو غير صالحة للبيع.')
     }
 
-    const quantity = Number(item.quantity)
-    if (Number.isNaN(quantity) || quantity <= 0) {
+    const quantity = normalizeQuantity(Number(item.quantity))
+    if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new Error('يجب أن تكون كمية المادة أكبر من صفر.')
     }
 
@@ -1977,14 +2058,15 @@ function validateSalesInvoiceCore(db, payload) {
       throw new Error('الرصيد المتوفر في المخزن غير كافٍ لإتمام العملية.')
     }
 
-    const unitPrice = Number(item.unitPrice)
-    if (Number.isNaN(unitPrice) || unitPrice < 0) {
+    const rawUnitPrice = Number(item.unitPrice)
+    if (!Number.isFinite(rawUnitPrice) || rawUnitPrice < 0) {
       throw new Error('لا يمكن إدخال قيمة سالبة.')
     }
+    const unitPrice = normalizeMoney(rawUnitPrice)
 
     const unit = typeof item.unit === 'string' && item.unit.trim() ? item.unit.trim() : material.unit
-    const lineTotal = quantity * unitPrice
-    subtotal += lineTotal
+    const lineTotal = normalizeMoney(quantity * unitPrice)
+    subtotal = normalizeMoney(subtotal + lineTotal)
 
     return {
       id: item.id ?? `sii-${crypto.randomUUID()}`,
@@ -1993,7 +2075,6 @@ function validateSalesInvoiceCore(db, payload) {
       unitPrice,
       lineTotal,
       unit,
-      notes: typeof item.notes === 'string' ? item.notes.trim() : '',
       order: index,
     }
   })
@@ -2033,7 +2114,7 @@ function getSalesInvoiceFinancialSummary(db, invoiceId, netTotal) {
   )
   const salesReturnTotal = getSalesReturnTotal(db, invoiceId)
   const netAfterReturns = normalizeMoney(Math.max(Number(netTotal ?? 0) - salesReturnTotal, 0))
-  const remainingAmount = normalizeMoney(Math.max(netAfterReturns - paidAmount, 0))
+  const remainingAmount = normalizeRemainingMoney(Math.max(netAfterReturns - paidAmount, 0))
   const customerCredit = normalizeMoney(Math.max(paidAmount - netAfterReturns, 0))
 
   let paymentStatus = 'unpaid'
@@ -2099,8 +2180,7 @@ function buildSalesInvoiceDetails(db, invoiceId) {
        sii.quantity,
        sii.unit,
        sii.unit_price,
-       sii.line_total,
-       sii.notes
+       sii.line_total
      FROM sales_invoice_items sii
      LEFT JOIN materials m ON m.id = sii.material_id
      WHERE sii.invoice_id = ?
@@ -2142,12 +2222,12 @@ function buildSalesInvoiceDetails(db, invoiceId) {
     warehouseCode: header[7] ?? '',
     warehouseName: header[8] ?? '',
     status: header[9],
-    subtotal: Number(header[10] ?? 0),
+    subtotal: normalizeMoney(Number(header[10] ?? 0)),
     discountType: header[11],
-    discountValue: Number(header[12] ?? 0),
-    discountAmount: Number(header[13] ?? 0),
-    netTotal: Number(header[14] ?? 0),
-    customerAdditionalFees: Number(header[15] ?? 0),
+    discountValue: roundByDecimals(Number(header[12] ?? 0), 6),
+    discountAmount: normalizeMoney(Number(header[13] ?? 0)),
+    netTotal: normalizeMoney(Number(header[14] ?? 0)),
+    customerAdditionalFees: normalizeMoney(Number(header[15] ?? 0)),
     salesReturnTotal: paymentSummary.salesReturnTotal,
     netAfterReturns: paymentSummary.netAfterReturns,
     paidAmount: paymentSummary.paidAmount,
@@ -2161,19 +2241,28 @@ function buildSalesInvoiceDetails(db, invoiceId) {
       id: row[0],
       returnNumber: row[1],
       date: row[2],
-      netTotal: Number(row[3] ?? 0),
+      netTotal: normalizeMoney(Number(row[3] ?? 0)),
     })),
-    items: itemsRows.map((row) => ({
-      id: row[0],
-      materialId: row[1],
-      materialNumber: row[2] ?? '',
-      materialName: row[3] ?? '',
-      quantity: Number(row[4] ?? 0),
-      unit: row[5] ?? '',
-      unitPrice: Number(row[6] ?? 0),
-      lineTotal: Number(row[7] ?? 0),
-      notes: row[8] ?? '',
-    })),
+    items: itemsRows.map((row) => {
+      const quantity = Number(row[4] ?? 0)
+      const lineTotal = normalizeMoney(Number(row[7] ?? 0))
+      return {
+        id: row[0],
+        materialId: row[1],
+        materialNumber: row[2] ?? '',
+        materialName: row[3] ?? '',
+        quantity,
+        unit: row[5] ?? '',
+        unitPrice: normalizeMoney(Number(row[6] ?? 0)),
+        lineTotal,
+        ...calculateNetInvoiceItemAmounts(
+          quantity,
+          lineTotal,
+          Number(header[10] ?? 0),
+          Number(header[13] ?? 0),
+        ),
+      }
+    }),
     payments: paymentsRows.map((row) => ({
       id: row[0],
       invoiceId: row[1],
@@ -2252,8 +2341,8 @@ function buildSalesInvoiceList(filter = {}) {
   )[0]?.values ?? []
 
   return rows.map((row) => {
-    const netTotal = Number(row[9] ?? 0)
-    const customerAdditionalFees = Number(row[10] ?? 0)
+    const netTotal = normalizeMoney(Number(row[9] ?? 0))
+    const customerAdditionalFees = normalizeMoney(Number(row[10] ?? 0))
     const financialSummary = getSalesInvoiceFinancialSummary(db, row[0], netTotal)
 
     return {
@@ -2264,8 +2353,8 @@ function buildSalesInvoiceList(filter = {}) {
       customerName: row[4] ?? '-',
       warehouseId: row[5],
       warehouseName: row[6] ?? '-',
-      subtotal: Number(row[7] ?? 0),
-      discountAmount: Number(row[8] ?? 0),
+      subtotal: normalizeMoney(Number(row[7] ?? 0)),
+      discountAmount: normalizeMoney(Number(row[8] ?? 0)),
       netTotal,
       customerAdditionalFees,
       salesReturnTotal: financialSummary.salesReturnTotal,
@@ -2453,7 +2542,7 @@ export function listAccountPayments(entityType, entityId) {
   if (!getAccountEntity(db, entityType, entityId)) throw new Error('الحساب غير موجود.')
 
   const rows = db.exec(
-    `SELECT id, entity_id, date, amount, notes, payment_method, reference_type, reference_id, reference_number
+    `SELECT id, entity_id, date, amount, notes, payment_method, payment_direction, reference_type, reference_id, reference_number
      FROM account_payments
      WHERE entity_type = ? AND entity_id = ?
      ORDER BY date DESC, rowid DESC`,
@@ -2467,9 +2556,10 @@ export function listAccountPayments(entityType, entityId) {
     amount: normalizeMoney(Number(row[3] ?? 0)),
     notes: row[4] ?? '',
     paymentMethod: row[5] ?? '',
-    referenceType: row[6] ?? '',
-    referenceId: row[7] ?? '',
-    referenceNumber: row[8] ?? '',
+    paymentDirection: row[6] ?? '',
+    referenceType: row[7] ?? '',
+    referenceId: row[8] ?? '',
+    referenceNumber: row[9] ?? '',
   }))
 }
 
@@ -2491,9 +2581,9 @@ export function createAccountPayment(entityType, payload = {}) {
   const paymentId = `ap-${crypto.randomUUID()}`
   const createdAt = new Date().toISOString()
   db.run(
-    `INSERT INTO account_payments (id, entity_type, entity_id, date, amount, notes, payment_method, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [paymentId, entityType, entityId, date, normalizeMoney(amount), notes || null, paymentMethod, createdAt],
+    `INSERT INTO account_payments (id, entity_type, entity_id, date, amount, notes, payment_method, payment_direction, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [paymentId, entityType, entityId, date, normalizeMoney(amount), notes || null, paymentMethod, entityType === 'supplier' ? 'out' : 'in', createdAt],
   )
   persistDatabase(db)
 
@@ -2504,13 +2594,14 @@ export function createAccountPayment(entityType, payload = {}) {
     amount: normalizeMoney(amount),
     notes,
     paymentMethod,
+    paymentDirection: entityType === 'supplier' ? 'out' : 'in',
   }
 }
 
 export function deleteAccountPayment(entityType, paymentId) {
   const db = getDatabase()
   const row = db.exec(
-    `SELECT id, entity_id, date, amount, notes, payment_method
+    `SELECT id, entity_id, date, amount, notes, payment_method, payment_direction
      FROM account_payments
      WHERE entity_type = ? AND id = ?`,
     [entityType, paymentId],
@@ -2527,6 +2618,7 @@ export function deleteAccountPayment(entityType, paymentId) {
     amount: normalizeMoney(Number(row[3] ?? 0)),
     notes: row[4] ?? '',
     paymentMethod: row[5] ?? '',
+    paymentDirection: row[6] ?? '',
   }
 }
 
@@ -2559,10 +2651,11 @@ function mapReturnPayment(row) {
     amount: normalizeMoney(Number(row[3] ?? 0)),
     notes: row[4] ?? '',
     paymentMethod: row[5] ?? '',
-    referenceType: row[6] ?? '',
-    referenceId: row[7] ?? '',
-    referenceNumber: row[8] ?? '',
-    createdAt: row[9] ?? '',
+    paymentDirection: row[6] ?? '',
+    referenceType: row[7] ?? '',
+    referenceId: row[8] ?? '',
+    referenceNumber: row[9] ?? '',
+    createdAt: row[10] ?? '',
   }
 }
 
@@ -2570,7 +2663,7 @@ export function listReturnPayments(returnType, returnId) {
   const db = getDatabase()
   getReturnPaymentContext(db, returnType, returnId)
   const rows = db.exec(
-    `SELECT id, entity_id, date, amount, notes, payment_method, reference_type, reference_id, reference_number, created_at
+    `SELECT id, entity_id, date, amount, notes, payment_method, payment_direction, reference_type, reference_id, reference_number, created_at
      FROM account_payments
      WHERE reference_type = ? AND reference_id = ?
      ORDER BY date ASC, rowid ASC`,
@@ -2607,9 +2700,9 @@ export function createReturnPayment(returnType, returnId, payload = {}) {
   const createdAt = new Date().toISOString()
   db.run(
     `INSERT INTO account_payments (
-      id, entity_type, entity_id, date, amount, notes, payment_method,
+      id, entity_type, entity_id, date, amount, notes, payment_method, payment_direction,
       reference_type, reference_id, reference_number, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       paymentId,
       context.entityType,
@@ -2618,6 +2711,7 @@ export function createReturnPayment(returnType, returnId, payload = {}) {
       normalizeMoney(amount),
       notes || null,
       paymentMethod,
+      returnType === 'purchase-return' ? 'in' : 'out',
       context.referenceType,
       returnId,
       context.returnNumber,
@@ -2633,6 +2727,7 @@ export function createReturnPayment(returnType, returnId, payload = {}) {
     normalizeMoney(amount),
     notes,
     paymentMethod,
+    returnType === 'purchase-return' ? 'in' : 'out',
     context.referenceType,
     returnId,
     context.returnNumber,
@@ -2643,7 +2738,7 @@ export function createReturnPayment(returnType, returnId, payload = {}) {
 export function deleteReturnPayment(returnType, paymentId) {
   const db = getDatabase()
   const row = db.exec(
-    `SELECT id, entity_id, date, amount, notes, payment_method, reference_type, reference_id, reference_number, created_at
+    `SELECT id, entity_id, date, amount, notes, payment_method, payment_direction, reference_type, reference_id, reference_number, created_at
      FROM account_payments
      WHERE reference_type = ? AND id = ?`,
     [returnType, paymentId],
@@ -2825,7 +2920,7 @@ export function createSalesInvoiceDraft(payload) {
           item.unit,
           item.unitPrice,
           item.lineTotal,
-          item.notes || null,
+          null,
         ]
       )
     }
@@ -2896,7 +2991,7 @@ export function updateSalesInvoiceDraft(invoiceId, payload) {
       db.run(
         `INSERT INTO sales_invoice_items (id, invoice_id, material_id, quantity, unit, unit_price, line_total, notes)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)` ,
-        [item.id, invoiceId, item.materialId, item.quantity, item.unit, item.unitPrice, item.lineTotal, item.notes || null]
+        [item.id, invoiceId, item.materialId, item.quantity, item.unit, item.unitPrice, item.lineTotal, null]
       )
     }
 
@@ -2933,7 +3028,7 @@ export function updateApprovedSalesInvoice(invoiceId, payload) {
     const invoiceNumber = String(header[1])
     const previousWarehouseId = String(header[4] ?? '').trim()
     const previousItems = db.exec(
-      `SELECT material_id, quantity, unit_price, unit, notes
+      `SELECT material_id, quantity, unit_price, unit
        FROM sales_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
       [invoiceId]
     )[0]?.values ?? []
@@ -3015,7 +3110,7 @@ export function updateApprovedSalesInvoice(invoiceId, payload) {
       db.run(
         `INSERT INTO sales_invoice_items (id, invoice_id, material_id, quantity, unit, unit_price, line_total, notes)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [item.id, invoiceId, item.materialId, item.quantity, item.unit, item.unitPrice, item.lineTotal, item.notes || null]
+        [item.id, invoiceId, item.materialId, item.quantity, item.unit, item.unitPrice, item.lineTotal, null]
       )
     }
 
@@ -3041,7 +3136,7 @@ export function updateApprovedSalesInvoice(invoiceId, payload) {
           item.quantity,
           item.unit,
           item.unitPrice,
-          item.notes || null,
+          null,
           now,
           'sales-module',
         ]
@@ -3106,7 +3201,7 @@ export function deleteSalesInvoice(invoiceId) {
     const invoiceNumber = String(header[1])
     const warehouseId = String(header[2])
     const items = db.exec(
-      `SELECT material_id, quantity, unit_price, unit, notes
+      `SELECT material_id, quantity, unit_price, unit
        FROM sales_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
       [invoiceId]
     )[0]?.values ?? []
@@ -3168,7 +3263,7 @@ export function completeSalesInvoice(invoiceId) {
       customerAdditionalFees: 0,
       notes: header[9] ?? null,
       items: db.exec(
-        `SELECT material_id, quantity, unit_price, unit, notes
+        `SELECT material_id, quantity, unit_price, unit
          FROM sales_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
         [invoiceId]
       )[0]?.values?.map((row) => ({
@@ -3176,7 +3271,6 @@ export function completeSalesInvoice(invoiceId) {
         quantity: Number(row[1]),
         unitPrice: Number(row[2]),
         unit: row[3] ?? '',
-        notes: row[4] ?? '',
       })) ?? [],
     }
 
@@ -3211,7 +3305,7 @@ export function completeSalesInvoice(invoiceId) {
           item.quantity,
           item.unit,
           item.unitPrice,
-          item.notes || null,
+          null,
           now,
           'sales-module',
         ]
@@ -3269,14 +3363,14 @@ export function cancelSalesInvoice(invoiceId) {
     const invoiceNumber = String(header[1])
     const warehouseId = String(header[2])
     const items = db.exec(
-      `SELECT material_id, quantity, unit_price, unit, notes
+      `SELECT material_id, quantity, unit_price, unit
        FROM sales_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
       [invoiceId]
     )[0]?.values ?? []
 
     db.run(
       `UPDATE stock_movement_documents
-       SET status = 'cancelled', notes = COALESCE(notes, '') || ' | إلغاء الفاتورة'
+       SET status = 'cancelled'
        WHERE reference = ?`,
       [invoiceNumber]
     )
@@ -3457,7 +3551,7 @@ export function createPurchaseInvoiceDraft(payload) {
           item.unit,
           item.unitPrice,
           item.lineTotal,
-          item.notes || null,
+          null,
         ]
       )
     }
@@ -3543,7 +3637,7 @@ export function updatePurchaseInvoiceDraft(invoiceId, payload) {
           item.unit,
           item.unitPrice,
           item.lineTotal,
-          item.notes || null,
+          null,
         ]
       )
     }
@@ -3584,7 +3678,7 @@ export function updateApprovedPurchaseInvoice(invoiceId, payload) {
 
     const invoiceNumber = String(header[1])
     const previousItems = db.exec(
-      `SELECT material_id, quantity, unit_price, unit, notes
+      `SELECT material_id, quantity, unit_price, unit
        FROM purchase_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
       [invoiceId]
     )[0]?.values ?? []
@@ -3636,7 +3730,7 @@ export function updateApprovedPurchaseInvoice(invoiceId, payload) {
       db.run(
         `INSERT INTO purchase_invoice_items (id, invoice_id, material_id, quantity, unit, unit_price, line_total, notes)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [item.id, invoiceId, item.materialId, item.quantity, item.unit, item.unitPrice, item.lineTotal, item.notes || null]
+        [item.id, invoiceId, item.materialId, item.quantity, item.unit, item.unitPrice, item.lineTotal, null]
       )
     }
 
@@ -3661,7 +3755,7 @@ export function updateApprovedPurchaseInvoice(invoiceId, payload) {
           item.quantity,
           item.unit,
           netUnitPrice,
-          item.notes || null,
+          null,
           now,
           'purchases-module',
         ]
@@ -3738,7 +3832,7 @@ export function deletePurchaseInvoice(invoiceId) {
     const invoiceNumber = String(header[1])
     const warehouseId = String(header[2])
     const items = db.exec(
-      `SELECT material_id, quantity, unit_price, unit, notes
+      `SELECT material_id, quantity, unit_price, unit
        FROM purchase_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
       [invoiceId]
     )[0]?.values ?? []
@@ -3814,7 +3908,7 @@ export function completePurchaseInvoice(invoiceId) {
       supplierInvoiceNumber: null,
       notes: header[9] ?? null,
       items: db.exec(
-        `SELECT material_id, quantity, unit_price, unit, notes
+        `SELECT material_id, quantity, unit_price, unit
          FROM purchase_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
         [invoiceId]
       )[0]?.values?.map((row) => ({
@@ -3822,7 +3916,6 @@ export function completePurchaseInvoice(invoiceId) {
         quantity: Number(row[1]),
         unitPrice: Number(row[2]),
         unit: row[3] ?? '',
-        notes: row[4] ?? '',
       })) ?? [],
     }
 
@@ -3860,7 +3953,7 @@ export function completePurchaseInvoice(invoiceId) {
           item.quantity,
           item.unit,
           netUnitPrice,
-          item.notes || null,
+          null,
           now,
           'purchases-module',
         ]
@@ -3934,7 +4027,7 @@ export function cancelPurchaseInvoice(invoiceId) {
     const invoiceNumber = String(header[1])
     const warehouseId = String(header[2])
     const items = db.exec(
-      `SELECT material_id, quantity, unit_price, unit, notes
+      `SELECT material_id, quantity, unit_price, unit
        FROM purchase_invoice_items WHERE invoice_id = ? ORDER BY rowid`,
       [invoiceId]
     )[0]?.values ?? []
@@ -3954,7 +4047,7 @@ export function cancelPurchaseInvoice(invoiceId) {
 
     db.run(
       `UPDATE stock_movement_documents
-       SET status = 'cancelled', notes = COALESCE(notes, '') || ' | إلغاء الفاتورة'
+       SET status = 'cancelled'
        WHERE reference = ?`,
       [invoiceNumber]
     )
@@ -4119,32 +4212,36 @@ function recalculateStockLevel(db, warehouseId, materialId) {
   let averageCost = 0
 
   for (const row of rows) {
-    const quantityIn = normalizeQuantity(Number(row[0] ?? 0))
-    const quantityOut = normalizeQuantity(Number(row[1] ?? 0))
+    const quantityIn = Number(row[0] ?? 0)
+    const quantityOut = Number(row[1] ?? 0)
     const cost = row[2] === null || row[2] === undefined ? null : Number(row[2])
 
     if (quantityIn > 0) {
-      const incomingCost = cost !== null && !Number.isNaN(cost) ? cost : averageCost
-      const newQuantity = normalizeQuantity(quantity + quantityIn)
+      const incomingCost = cost !== null && Number.isFinite(cost) ? cost : averageCost
+      const newQuantity = quantity + quantityIn
       averageCost = newQuantity > 0
-        ? normalizeInventoryCost((quantity * averageCost + quantityIn * incomingCost) / newQuantity)
+        ? (quantity * averageCost + quantityIn * incomingCost) / newQuantity
         : 0
       quantity = newQuantity
     }
 
     if (quantityOut > 0) {
-      quantity = normalizeQuantity(quantity - quantityOut)
+      quantity -= quantityOut
     }
   }
 
+  const storedAverageCost = roundByDecimals(
+    averageCost,
+    numberFormatSettings.averageDecimals,
+  )
   db.run(
     `INSERT INTO stock_levels (warehouse_id, material_id, quantity, average_cost, reserved, last_updated_at)
      VALUES (?, ?, ?, ?, 0, ?)
      ON CONFLICT(warehouse_id, material_id) DO UPDATE SET quantity = excluded.quantity, average_cost = excluded.average_cost, last_updated_at = excluded.last_updated_at`,
-    [warehouseId, materialId, normalizeQuantity(quantity), averageCost, now]
+    [warehouseId, materialId, quantity, storedAverageCost, now]
   )
 
-  return { quantity, averageCost }
+  return { quantity, averageCost: storedAverageCost }
 }
 
 function recalculateAllStockLevels(db) {
@@ -4487,7 +4584,7 @@ export function createPurchaseReturn(payload = {}) {
     }
 
     const invoice = db.exec(
-      `SELECT id, invoice_number, warehouse_id, supplier_id, status FROM purchase_invoices WHERE id = ?`,
+      `SELECT id, invoice_number, warehouse_id, supplier_id, status, subtotal, discount_amount FROM purchase_invoices WHERE id = ?`,
       [purchaseInvoiceId]
     )[0]?.values?.[0]
     if (!invoice) throw new Error('فاتورة الشراء الأصلية غير موجودة.')
@@ -4506,23 +4603,40 @@ export function createPurchaseReturn(payload = {}) {
       if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('كميات المرتجع يجب أن تكون أكبر من صفر.')
 
       const invoiceItemRow = db.exec(
-        `SELECT quantity, unit, unit_price FROM purchase_invoice_items WHERE invoice_id = ? AND material_id = ?`,
+        `SELECT quantity, unit, unit_price, line_total FROM purchase_invoice_items WHERE invoice_id = ? AND material_id = ?`,
         [purchaseInvoiceId, materialId]
       )[0]?.values?.[0]
       if (!invoiceItemRow) throw new Error('المادة غير موجودة في الفاتورة الأصلية.')
 
       const invoicedQty = Number(invoiceItemRow[0] ?? 0)
-      const returnedQty = Number(db.exec(
-        `SELECT COALESCE(SUM(pri.quantity), 0) FROM purchase_return_items pri JOIN purchase_returns pr ON pr.id = pri.return_id WHERE pr.purchase_invoice_id = ? AND pri.material_id = ?`,
+      const previousReturn = db.exec(
+        `SELECT COALESCE(SUM(pri.quantity), 0), COALESCE(SUM(pri.line_total), 0)
+         FROM purchase_return_items pri
+         JOIN purchase_returns pr ON pr.id = pri.return_id
+         WHERE pr.purchase_invoice_id = ? AND pri.material_id = ?`,
         [purchaseInvoiceId, materialId]
-      )[0]?.values?.[0]?.[0] ?? 0)
+      )[0]?.values?.[0] ?? [0, 0]
+      const returnedQty = Number(previousReturn[0] ?? 0)
       const remainingQty = invoicedQty - returnedQty
       if (quantity > remainingQty + 0.000001) {
         throw new Error(`لا يمكن إرجاع أكثر من ${remainingQty} وحدة من المادة ${materialId}.`)
       }
 
-      const unitPrice = Number(item.unitPrice ?? getPurchaseInvoiceLineCost(db, purchaseInvoiceId, materialId) ?? Number(invoiceItemRow[2] ?? 0))
-      const lineTotal = normalizeMoney(quantity * unitPrice)
+      const netAmounts = calculateNetInvoiceItemAmounts(
+        invoicedQty,
+        Number(invoiceItemRow[3] ?? 0),
+        Number(invoice[5] ?? 0),
+        Number(invoice[6] ?? 0),
+      )
+      const unitPrice = netAmounts.netUnitPrice
+      const inventoryCost = getPurchaseInvoiceLineCost(db, purchaseInvoiceId, materialId) || unitPrice
+      const lineTotal = calculateProratedReturnLineTotal(
+        quantity,
+        invoicedQty,
+        netAmounts.netTotal,
+        returnedQty,
+        Number(previousReturn[1] ?? 0),
+      )
       subtotal += lineTotal
 
       return {
@@ -4531,6 +4645,7 @@ export function createPurchaseReturn(payload = {}) {
         unit: String(item.unit ?? invoiceItemRow[1] ?? '').trim(),
         unitPrice,
         lineTotal,
+        inventoryCost,
         notes: String(item.notes ?? '').trim(),
       }
     })
@@ -4568,7 +4683,7 @@ export function createPurchaseReturn(payload = {}) {
       db.run(
         `INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by)
          VALUES (?, ?, 'purchase_return', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
-        [`${returnNumber}-${item.materialId}`, returnNumber, returnNumber, warehouseId, item.materialId, item.quantity, item.unit || null, normalizeMoney(item.unitPrice), item.notes || null, now, 'purchases-module']
+        [`${returnNumber}-${item.materialId}`, returnNumber, returnNumber, warehouseId, item.materialId, item.quantity, item.unit || null, normalizeMoney(item.inventoryCost), item.notes || null, now, 'purchases-module']
       )
 
       affectedMaterials.add(item.materialId)
@@ -4615,7 +4730,7 @@ export function updatePurchaseReturn(returnId, payload = {}) {
   }
 
   const invoice = db.exec(
-    `SELECT id, invoice_number, warehouse_id, supplier_id, status FROM purchase_invoices WHERE id = ?`,
+    `SELECT id, invoice_number, warehouse_id, supplier_id, status, subtotal, discount_amount FROM purchase_invoices WHERE id = ?`,
     [allowedInvoiceId]
   )[0]?.values?.[0]
   if (!invoice) throw new Error('فاتورة الشراء الأصلية غير موجودة.')
@@ -4640,24 +4755,41 @@ export function updatePurchaseReturn(returnId, payload = {}) {
     if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('كميات المرتجع يجب أن تكون أكبر من صفر.')
 
     const invoiceItemRow = db.exec(
-      `SELECT quantity, unit, unit_price FROM purchase_invoice_items WHERE invoice_id = ? AND material_id = ?`,
+      `SELECT quantity, unit, unit_price, line_total FROM purchase_invoice_items WHERE invoice_id = ? AND material_id = ?`,
       [allowedInvoiceId, materialId]
     )[0]?.values?.[0]
     if (!invoiceItemRow) throw new Error('المادة غير موجودة في الفاتورة الأصلية.')
 
     const invoicedQty = Number(invoiceItemRow[0] ?? 0)
-    const otherReturnsQty = Number(db.exec(
-      `SELECT COALESCE(SUM(pri.quantity), 0) FROM purchase_return_items pri JOIN purchase_returns pr ON pr.id = pri.return_id WHERE pr.purchase_invoice_id = ? AND pri.material_id = ? AND pr.id != ?`,
+    const previousReturns = db.exec(
+      `SELECT COALESCE(SUM(pri.quantity), 0), COALESCE(SUM(pri.line_total), 0)
+       FROM purchase_return_items pri
+       JOIN purchase_returns pr ON pr.id = pri.return_id
+       WHERE pr.purchase_invoice_id = ? AND pri.material_id = ? AND pr.id != ?`,
       [allowedInvoiceId, materialId, returnId]
-    )[0]?.values?.[0]?.[0] ?? 0)
+    )[0]?.values?.[0] ?? [0, 0]
+    const otherReturnsQty = Number(previousReturns[0] ?? 0)
     const currentQty = previousQuantities.get(materialId) ?? 0
     const remainingQty = invoicedQty - otherReturnsQty
     if (quantity > remainingQty + currentQty + 0.000001) {
       throw new Error(`لا يمكن إرجاع أكثر من ${remainingQty + currentQty} وحدة من المادة ${materialId}.`)
     }
 
-    const unitPrice = Number(item.unitPrice ?? getPurchaseInvoiceLineCost(db, allowedInvoiceId, materialId) ?? Number(invoiceItemRow[2] ?? 0))
-    const lineTotal = normalizeMoney(quantity * unitPrice)
+    const netAmounts = calculateNetInvoiceItemAmounts(
+      invoicedQty,
+      Number(invoiceItemRow[3] ?? 0),
+      Number(invoice[5] ?? 0),
+      Number(invoice[6] ?? 0),
+    )
+    const unitPrice = netAmounts.netUnitPrice
+    const inventoryCost = getPurchaseInvoiceLineCost(db, allowedInvoiceId, materialId) || unitPrice
+    const lineTotal = calculateProratedReturnLineTotal(
+      quantity,
+      invoicedQty,
+      netAmounts.netTotal,
+      otherReturnsQty,
+      Number(previousReturns[1] ?? 0),
+    )
     subtotal += lineTotal
 
     return {
@@ -4666,6 +4798,7 @@ export function updatePurchaseReturn(returnId, payload = {}) {
       unit: String(item.unit ?? invoiceItemRow[1] ?? '').trim(),
       unitPrice,
       lineTotal,
+      inventoryCost,
       notes: String(item.notes ?? '').trim(),
     }
   })
@@ -4692,7 +4825,7 @@ export function updatePurchaseReturn(returnId, payload = {}) {
       db.run(
         `INSERT INTO stock_movements (id, document_reference, type, reference, warehouse_id, material_id, quantity_in, quantity_out, unit, cost, notes, created_at, created_by)
          VALUES (?, ?, 'purchase_return', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)` ,
-        [`${originalReturnNumber}-${item.materialId}`, originalReturnNumber, originalReturnNumber, allowedWarehouseId, item.materialId, item.quantity, item.unit || null, normalizeMoney(item.unitPrice), item.notes || null, now, 'purchases-module']
+        [`${originalReturnNumber}-${item.materialId}`, originalReturnNumber, originalReturnNumber, allowedWarehouseId, item.materialId, item.quantity, item.unit || null, normalizeMoney(item.inventoryCost), item.notes || null, now, 'purchases-module']
       )
 
       affectedMaterials.add(item.materialId)
@@ -4891,7 +5024,7 @@ export function createSalesReturn(payload = {}) {
     if (items.length === 0) throw new Error('يجب إدخال مادة واحدة على الأقل في المرتجع.')
 
     const invoice = db.exec(
-      `SELECT id, invoice_number, warehouse_id, customer_id, status, subtotal, discount_type, discount_value, net_total FROM sales_invoices WHERE id = ?`,
+      `SELECT id, invoice_number, warehouse_id, customer_id, status, subtotal, discount_type, discount_value, discount_amount, net_total FROM sales_invoices WHERE id = ?`,
       [salesInvoiceId]
     )[0]?.values?.[0]
     if (!invoice) throw new Error('فاتورة البيع الأصلية غير موجودة.')
@@ -4916,35 +5049,36 @@ export function createSalesReturn(payload = {}) {
       if (!invoiceItemRow) throw new Error('المادة غير موجودة في الفاتورة الأصلية.')
 
       const invoicedQty = Number(invoiceItemRow[0] ?? 0)
-      const returnedQty = Number(db.exec(
-        `SELECT COALESCE(SUM(sri.quantity), 0) FROM sales_return_items sri JOIN sales_returns sr ON sr.id = sri.return_id WHERE sr.sales_invoice_id = ? AND sri.material_id = ?`,
+      const previousReturn = db.exec(
+        `SELECT COALESCE(SUM(sri.quantity), 0), COALESCE(SUM(sri.line_total), 0)
+         FROM sales_return_items sri
+         JOIN sales_returns sr ON sr.id = sri.return_id
+         WHERE sr.sales_invoice_id = ? AND sri.material_id = ?`,
         [salesInvoiceId, materialId]
-      )[0]?.values?.[0]?.[0] ?? 0)
+      )[0]?.values?.[0] ?? [0, 0]
+      const returnedQty = Number(previousReturn[0] ?? 0)
       const remainingQty = invoicedQty - returnedQty
       if (quantity > remainingQty + 0.000001) {
         throw new Error(`لا يمكن إرجاع أكثر من ${remainingQty} وحدة من المادة ${materialId}.`)
       }
 
-      const originalLineGross = Number(invoiceItemRow[3] ?? 0)
-      const originalQuantity = Number(invoiceItemRow[0] ?? 0)
       const defaultUnitPrice = Number(invoiceItemRow[2] ?? 0)
-      const invoiceDiscountType = String(invoice[6] ?? 'none')
-      const invoiceDiscountValue = Number(invoice[7] ?? 0)
       const invoiceSubtotal = Number(invoice[5] ?? 0)
-
-      let financialUnitPrice = defaultUnitPrice
-      if (invoiceDiscountType === 'percentage' && invoiceDiscountValue > 0) {
-        financialUnitPrice = normalizeMoney(defaultUnitPrice * (1 - invoiceDiscountValue / 100))
-      } else if (invoiceDiscountType === 'fixed' && invoiceDiscountValue > 0) {
-        const baseGross = Number(originalLineGross ?? 0)
-        const baseSubtotal = Number(invoiceSubtotal ?? 0)
-        const lineDiscount = baseSubtotal > 0 ? normalizeMoney((invoiceDiscountValue * baseGross) / baseSubtotal) : 0
-        const lineNet = normalizeMoney(baseGross - lineDiscount)
-        financialUnitPrice = originalQuantity > 0 ? normalizeMoney(lineNet / originalQuantity) : defaultUnitPrice
-      }
-
-      const inventoryCost = Number(item.unitPrice ?? getSalesInvoiceLineCost(db, salesInvoiceId, materialId) ?? defaultUnitPrice)
-      const lineTotal = normalizeMoney(quantity * financialUnitPrice)
+      const netAmounts = calculateNetInvoiceItemAmounts(
+        invoicedQty,
+        Number(invoiceItemRow[3] ?? 0),
+        invoiceSubtotal,
+        Number(invoice[8] ?? 0),
+      )
+      const financialUnitPrice = netAmounts.netUnitPrice
+      const inventoryCost = getSalesInvoiceLineCost(db, salesInvoiceId, materialId) || defaultUnitPrice
+      const lineTotal = calculateProratedReturnLineTotal(
+        quantity,
+        invoicedQty,
+        netAmounts.netTotal,
+        returnedQty,
+        Number(previousReturn[1] ?? 0),
+      )
       subtotal += lineTotal
 
       return {
@@ -5066,7 +5200,7 @@ export function updateSalesReturn(returnId, payload = {}) {
   }
 
   const invoice = db.exec(
-    `SELECT id, invoice_number, warehouse_id, customer_id, status, subtotal, discount_type, discount_value FROM sales_invoices WHERE id = ?`,
+    `SELECT id, invoice_number, warehouse_id, customer_id, status, subtotal, discount_type, discount_value, discount_amount FROM sales_invoices WHERE id = ?`,
     [allowedInvoiceId]
   )[0]?.values?.[0]
   if (!invoice) throw new Error('فاتورة البيع الأصلية غير موجودة.')
@@ -5097,36 +5231,37 @@ export function updateSalesReturn(returnId, payload = {}) {
     if (!invoiceItemRow) throw new Error('المادة غير موجودة في الفاتورة الأصلية.')
 
     const invoicedQty = Number(invoiceItemRow[0] ?? 0)
-    const otherReturnsQty = Number(db.exec(
-      `SELECT COALESCE(SUM(sri.quantity), 0) FROM sales_return_items sri JOIN sales_returns sr ON sr.id = sri.return_id WHERE sr.sales_invoice_id = ? AND sri.material_id = ? AND sr.id != ?`,
+    const previousReturns = db.exec(
+      `SELECT COALESCE(SUM(sri.quantity), 0), COALESCE(SUM(sri.line_total), 0)
+       FROM sales_return_items sri
+       JOIN sales_returns sr ON sr.id = sri.return_id
+       WHERE sr.sales_invoice_id = ? AND sri.material_id = ? AND sr.id != ?`,
       [allowedInvoiceId, materialId, returnId]
-    )[0]?.values?.[0]?.[0] ?? 0)
+    )[0]?.values?.[0] ?? [0, 0]
+    const otherReturnsQty = Number(previousReturns[0] ?? 0)
     const currentQty = previousQuantities.get(materialId) ?? 0
     const remainingQty = invoicedQty - otherReturnsQty
     if (quantity > remainingQty + currentQty + 0.000001) {
       throw new Error(`لا يمكن إرجاع أكثر من ${remainingQty + currentQty} وحدة من المادة ${materialId}.`)
     }
 
-    const originalLineGross = Number(invoiceItemRow[3] ?? 0)
-    const originalQuantity = Number(invoiceItemRow[0] ?? 0)
     const defaultUnitPrice = Number(invoiceItemRow[2] ?? 0)
-    const invoiceDiscountType = String(invoice[6] ?? 'none')
-    const invoiceDiscountValue = Number(invoice[7] ?? 0)
     const invoiceSubtotal = Number(invoice[5] ?? 0)
-
-    let financialUnitPrice = defaultUnitPrice
-    if (invoiceDiscountType === 'percentage' && invoiceDiscountValue > 0) {
-      financialUnitPrice = normalizeMoney(defaultUnitPrice * (1 - invoiceDiscountValue / 100))
-    } else if (invoiceDiscountType === 'fixed' && invoiceDiscountValue > 0) {
-      const baseGross = Number(originalLineGross ?? 0)
-      const baseSubtotal = Number(invoiceSubtotal ?? 0)
-      const lineDiscount = baseSubtotal > 0 ? normalizeMoney((invoiceDiscountValue * baseGross) / baseSubtotal) : 0
-      const lineNet = normalizeMoney(baseGross - lineDiscount)
-      financialUnitPrice = originalQuantity > 0 ? normalizeMoney(lineNet / originalQuantity) : defaultUnitPrice
-    }
-
-    const inventoryCost = Number(item.unitPrice ?? getSalesInvoiceLineCost(db, allowedInvoiceId, materialId) ?? defaultUnitPrice)
-    const lineTotal = normalizeMoney(quantity * financialUnitPrice)
+    const netAmounts = calculateNetInvoiceItemAmounts(
+      invoicedQty,
+      Number(invoiceItemRow[3] ?? 0),
+      invoiceSubtotal,
+      Number(invoice[8] ?? 0),
+    )
+    const financialUnitPrice = netAmounts.netUnitPrice
+    const inventoryCost = getSalesInvoiceLineCost(db, allowedInvoiceId, materialId) || defaultUnitPrice
+    const lineTotal = calculateProratedReturnLineTotal(
+      quantity,
+      invoicedQty,
+      netAmounts.netTotal,
+      otherReturnsQty,
+      Number(previousReturns[1] ?? 0),
+    )
     subtotal += lineTotal
 
     return {
@@ -8234,9 +8369,13 @@ export function getReportData(db, reportType, filters = {}) {
     const total = readNumber(db, `SELECT COUNT(*) FROM purchase_invoices pi ${where}`, params)
     const rows = db.exec(
       `SELECT pi.id, pi.invoice_number, pi.date, s.name AS supplier_name, w.name AS warehouse_name,
-              pi.net_total, COALESCE(pi.expenses, 0) AS expenses,
+              pi.net_total,
+              COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0) AS return_total,
+              COALESCE(pi.expenses, 0) AS expenses,
               COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
-              COALESCE(pi.net_total - (SELECT COALESCE(SUM(pp.amount), 0) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS remaining_amount,
+              MAX(pi.net_total
+                - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0)
+                - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0), 0) AS remaining_amount,
               pi.status
        FROM purchase_invoices pi
        LEFT JOIN suppliers s ON s.id = pi.supplier_id
@@ -8247,8 +8386,12 @@ export function getReportData(db, reportType, filters = {}) {
       [...params, pageSize, page * pageSize]
     )[0]?.values ?? []
 
+    const summaryGross = readNumber(db, `SELECT COALESCE(SUM(pi.net_total), 0) FROM purchase_invoices pi ${where}`, params)
+    const summaryReturns = readNumber(db, `SELECT COALESCE(SUM((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id)), 0) FROM purchase_invoices pi ${where}`, params)
+    const summaryNet = normalizeNumber(Math.max(summaryGross - summaryReturns, 0))
     const chartSeries = [
-      { key: 'total', label: 'إجمالي المشتريات' },
+      { key: 'total', label: 'صافي المشتريات' },
+      { key: 'returns', label: 'مرتجعات المشتريات' },
       { key: 'expenses', label: 'المصاريف الإضافية' },
       { key: 'paid', label: 'المدفوع' },
       { key: 'remaining', label: 'المتبقي' },
@@ -8256,13 +8399,18 @@ export function getReportData(db, reportType, filters = {}) {
     const bucketExpression = getDateBucketExpression('pi.date', chartGranularity)
     const chartDataRows = db.exec(
       `SELECT ${bucketExpression} AS label,
-              SUM(COALESCE(pi.net_total, 0)) AS total_value,
+              SUM(MAX(COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0), 0)) AS total_value,
+              SUM(COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0)) AS returns_value,
               SUM(COALESCE(pi.expenses, 0)) AS expenses_value,
               SUM(COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)) AS paid_value,
               SUM(
                 CASE
-                  WHEN COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) > 0
-                    THEN COALESCE(pi.net_total, 0) - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)
+                  WHEN COALESCE(pi.net_total, 0)
+                    - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0)
+                    - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) > 0
+                    THEN COALESCE(pi.net_total, 0)
+                      - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0)
+                      - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)
                   ELSE 0
                 END
               ) AS remaining_value
@@ -8273,14 +8421,15 @@ export function getReportData(db, reportType, filters = {}) {
       params
     )[0]?.values ?? []
 
-    const summaryNet = readNumber(db, `SELECT COALESCE(SUM(pi.net_total), 0) FROM purchase_invoices pi ${where}`, params)
     const summaryExpenses = readNumber(db, `SELECT COALESCE(SUM(pi.expenses), 0) FROM purchase_invoices pi ${where}`, params)
     const summaryPaid = readNumber(db, `SELECT COALESCE(SUM(COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0)), 0) FROM purchase_invoices pi ${where}`, params)
     return {
       reportType,
       summary: [
         { label: 'عدد الفواتير', value: total },
-        { label: 'إجمالي المشتريات', value: summaryNet },
+        { label: 'إجمالي المشتريات', value: summaryGross },
+        { label: 'مرتجعات المشتريات', value: summaryReturns },
+        { label: 'صافي المشتريات', value: summaryNet },
         { label: 'المصاريف الإضافية', value: summaryExpenses },
         { label: 'المبالغ المدفوعة', value: summaryPaid },
       ],
@@ -8290,11 +8439,13 @@ export function getReportData(db, reportType, filters = {}) {
         date: row[2] ?? '',
         supplierName: row[3] ?? '',
         warehouseName: row[4] ?? '',
-        netTotal: normalizeNumber(row[5]),
-        expenses: normalizeNumber(row[6]),
-        paidAmount: normalizeNumber(row[7]),
-        remainingAmount: normalizeNumber(row[8]),
-        status: row[9] ?? '',
+        grossTotal: normalizeNumber(row[5]),
+        returnTotal: normalizeNumber(row[6]),
+        netTotal: normalizeNumber(Math.max(Number(row[5] ?? 0) - Number(row[6] ?? 0), 0)),
+        expenses: normalizeNumber(row[7]),
+        paidAmount: normalizeNumber(row[8]),
+        remainingAmount: normalizeNumber(row[9]),
+        status: row[10] ?? '',
       })),
       chartSeries,
       chartData: buildChartData(chartDataRows, chartSeries, fromDate, toDate, chartGranularity),
@@ -8328,7 +8479,8 @@ export function getReportData(db, reportType, filters = {}) {
     )[0]?.values ?? []
 
     const chartSeries = [
-      { key: 'total', label: 'إجمالي المبيعات' },
+      { key: 'total', label: 'صافي المبيعات' },
+      { key: 'returns', label: 'مرتجعات المبيعات' },
       { key: 'fees', label: 'رسوم إضافية على العميل' },
       { key: 'paid', label: 'المستلم' },
       { key: 'remaining', label: 'المتبقي' },
@@ -8336,13 +8488,18 @@ export function getReportData(db, reportType, filters = {}) {
     const bucketExpression = getDateBucketExpression('si.date', chartGranularity)
     const chartDataRows = db.exec(
       `SELECT ${bucketExpression} AS label,
-              SUM(COALESCE(si.net_total, 0)) AS total_value,
+              SUM(MAX(COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0), 0)) AS total_value,
+              SUM(COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0)) AS returns_value,
               SUM(COALESCE(si.customer_additional_fees, 0)) AS fees_value,
               SUM(COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)) AS paid_value,
               SUM(
                 CASE
-                  WHEN COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) > 0
-                    THEN COALESCE(si.net_total, 0) - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)
+                  WHEN COALESCE(si.net_total, 0)
+                    - COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0)
+                    - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0) > 0
+                    THEN COALESCE(si.net_total, 0)
+                      - COALESCE((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id), 0)
+                      - COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)
                   ELSE 0
                 END
               ) AS remaining_value
@@ -8353,19 +8510,25 @@ export function getReportData(db, reportType, filters = {}) {
       params
     )[0]?.values ?? []
 
-    const summaryNet = readNumber(db, `SELECT COALESCE(SUM(si.net_total), 0) FROM sales_invoices si ${where}`, params)
+    const summaryGross = readNumber(db, `SELECT COALESCE(SUM(si.net_total), 0) FROM sales_invoices si ${where}`, params)
+    const summaryReturns = readNumber(db, `SELECT COALESCE(SUM((SELECT SUM(sr.net_total) FROM sales_returns sr WHERE sr.sales_invoice_id = si.id)), 0) FROM sales_invoices si ${where}`, params)
+    const summaryNet = normalizeNumber(Math.max(summaryGross - summaryReturns, 0))
     const summaryFees = readNumber(db, `SELECT COALESCE(SUM(si.customer_additional_fees), 0) FROM sales_invoices si ${where}`, params)
     const summaryPaid = readNumber(db, `SELECT COALESCE(SUM(COALESCE((SELECT SUM(sp.amount) FROM sales_payments sp WHERE sp.invoice_id = si.id), 0)), 0) FROM sales_invoices si ${where}`, params)
     return {
       reportType,
       summary: [
         { label: 'عدد الفواتير', value: total },
-        { label: 'إجمالي المبيعات', value: summaryNet },
+        { label: 'إجمالي المبيعات', value: summaryGross },
+        { label: 'مرتجعات المبيعات', value: summaryReturns },
+        { label: 'صافي المبيعات', value: summaryNet },
         { label: 'رسوم إضافية على العميل', value: summaryFees },
         { label: 'المبالغ المستلمة', value: summaryPaid },
       ],
       rows: rows.map((row) => {
-        const netTotal = normalizeNumber(row[5])
+        const grossTotal = normalizeNumber(row[5])
+        const returnTotal = normalizeNumber(row[7])
+        const netTotal = normalizeNumber(Math.max(grossTotal - returnTotal, 0))
         const paidAmount = normalizeNumber(row[8])
 
         return {
@@ -8374,10 +8537,12 @@ export function getReportData(db, reportType, filters = {}) {
           date: row[2] ?? '',
           customerName: row[3] ?? '',
           warehouseName: row[4] ?? '',
+          grossTotal,
+          returnTotal,
           netTotal,
           customerAdditionalFees: normalizeNumber(row[6]),
           paidAmount,
-          remainingAmount: Math.max(netTotal - paidAmount, 0),
+          remainingAmount: normalizeRemainingMoney(Math.max(netTotal - paidAmount, 0)),
           status: row[9] ?? '',
         }
       }),
@@ -8722,9 +8887,13 @@ export function getReportExportRows(db, reportType, filters = {}) {
 
     const rows = db.exec(
       `SELECT pi.id, pi.invoice_number, pi.date, s.name AS supplier_name, w.name AS warehouse_name,
-              pi.net_total, COALESCE(pi.expenses, 0) AS expenses,
+              pi.net_total,
+              COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0) AS return_total,
+              COALESCE(pi.expenses, 0) AS expenses,
               COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS paid_amount,
-              COALESCE(pi.net_total - (SELECT COALESCE(SUM(pp.amount), 0) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0) AS remaining_amount,
+              MAX(pi.net_total
+                - COALESCE((SELECT SUM(pr.net_total) FROM purchase_returns pr WHERE pr.purchase_invoice_id = pi.id), 0)
+                - COALESCE((SELECT SUM(pp.amount) FROM purchase_payments pp WHERE pp.invoice_id = pi.id), 0), 0) AS remaining_amount,
               pi.status
        FROM purchase_invoices pi
        LEFT JOIN suppliers s ON s.id = pi.supplier_id
@@ -8740,11 +8909,13 @@ export function getReportExportRows(db, reportType, filters = {}) {
       date: row[2] ?? '',
       supplierName: row[3] ?? '',
       warehouseName: row[4] ?? '',
-      netTotal: normalizeNumber(row[5]),
-      expenses: normalizeNumber(row[6]),
-      paidAmount: normalizeNumber(row[7]),
-      remainingAmount: normalizeNumber(row[8]),
-      status: row[9] ?? '',
+      grossTotal: normalizeNumber(row[5]),
+      returnTotal: normalizeNumber(row[6]),
+      netTotal: normalizeNumber(Math.max(Number(row[5] ?? 0) - Number(row[6] ?? 0), 0)),
+      expenses: normalizeNumber(row[7]),
+      paidAmount: normalizeNumber(row[8]),
+      remainingAmount: normalizeNumber(row[9]),
+      status: row[10] ?? '',
     }))
   }
 
@@ -8772,8 +8943,10 @@ export function getReportExportRows(db, reportType, filters = {}) {
 
     return rows.map((row) => {
       const netTotal = normalizeNumber(row[5])
+      const returnTotal = normalizeNumber(row[7])
       const customerAdditionalFees = normalizeNumber(row[6])
       const paidAmount = normalizeNumber(row[8])
+      const netAfterReturns = normalizeNumber(Math.max(netTotal - returnTotal, 0))
 
       return {
         id: row[0] ?? '',
@@ -8781,10 +8954,12 @@ export function getReportExportRows(db, reportType, filters = {}) {
         date: row[2] ?? '',
         customerName: row[3] ?? '',
         warehouseName: row[4] ?? '',
-        netTotal,
+        grossTotal: netTotal,
+        returnTotal,
+        netTotal: netAfterReturns,
         customerAdditionalFees,
         paidAmount,
-        remainingAmount: Math.max(netTotal - paidAmount, 0),
+        remainingAmount: normalizeRemainingMoney(Math.max(netAfterReturns - paidAmount, 0)),
         status: row[9] ?? '',
       }
     })

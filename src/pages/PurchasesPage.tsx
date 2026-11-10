@@ -42,8 +42,9 @@ import {
 import type { InvoicePrintData } from '../types/invoicePrint'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatCurrencyValue, formatDateDMY, getLocalDateTimeString, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, getLocalDateTimeString, formatNumberBySettings, normalizeRemainingAmount, roundNumber, toInternalDate } from '../utils/displayFormatting'
 import { loadSettings } from '../services/settingsService'
+import { calculateNetInvoiceItemAmounts } from '../utils/invoiceCalculations'
 import { useNotifications } from '../contexts/useNotifications'
 
 function getLocalTodayISO(): string {
@@ -239,7 +240,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
       '& input[type="date"], & input[type="datetime-local"]': {
         colorScheme: 'dark',
       },
@@ -253,6 +254,15 @@ const craftDialogSlotProps = {
       },
       '& .MuiDialogContent-root': {
         color: 'rgba(255, 255, 255, 0.88)',
+        minWidth: 0,
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+        overflowX: 'hidden',
+        gridTemplateColumns: 'minmax(0, 1fr)',
+      },
+      '& .MuiDialogContent-root > *': {
+        minWidth: 0,
+        maxWidth: '100%',
       },
       '& .MuiTypography-root': {
         color: 'rgba(255, 255, 255, 0.88)',
@@ -361,6 +371,14 @@ const craftDialogSlotProps = {
   },
 }
 
+const tableScrollSx = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  overflowX: 'auto',
+  display: 'block',
+}
+
 const craftInvoiceDialogSlotProps = craftDialogSlotProps
 
 const craftErrorAlertSx = {
@@ -383,7 +401,6 @@ type InvoiceLine = {
   materialId: string
   quantity: number | ''
   unitPrice: number | ''
-  notes: string
 }
 
 type InvoicePrintDataWithDiscount = InvoicePrintData & {
@@ -420,7 +437,7 @@ type StatementReturn = {
   date: string
   amount: number
   notes?: string
-  payments: Array<{ id: string; date: string; amount: number; paymentMethod?: string; notes?: string }>
+  payments: Array<{ id: string; date: string; amount: number; paymentMethod?: string; notes?: string; paymentDirection?: 'in' | 'out' }>
 }
 
 type InvoicePaymentForm = {
@@ -558,7 +575,6 @@ function createEmptyLine(): InvoiceLine {
     materialId: '',
     quantity: '',
     unitPrice: '',
-    notes: '',
   }
 }
 
@@ -604,7 +620,7 @@ export function PurchasesPage() {
   const [statementLoading, setStatementLoading] = useState(false)
   const [supplierStatementEntity, setSupplierStatementEntity] = useState<SupplierRecord | null>(null)
   const [supplierStatementInvoices, setSupplierStatementInvoices] = useState<Array<{ id: string; invoiceNumber: string; date: string; amount: number; notes?: string }>>([])
-  const [supplierStatementPayments, setSupplierStatementPayments] = useState<Array<{ id: string; invoiceNumber?: string; date: string; amount: number; paymentMethod?: string; notes?: string; source?: 'invoice' | 'account' }>>([])
+  const [supplierStatementPayments, setSupplierStatementPayments] = useState<Array<{ id: string; invoiceNumber?: string; date: string; amount: number; paymentMethod?: string; notes?: string; paymentDirection?: 'in' | 'out'; source?: 'invoice' | 'account' }>>([])
     const [supplierStatementReturns, setSupplierStatementReturns] = useState<StatementReturn[]>([])
   const [statementPaymentDialogOpen, setStatementPaymentDialogOpen] = useState(false)
   const [statementPaymentError, setStatementPaymentError] = useState('')
@@ -624,7 +640,7 @@ export function PurchasesPage() {
   const [invoiceDate, setInvoiceDate] = useState('')
   const [invoiceSupplierId, setInvoiceSupplierId] = useState('')
   const [invoiceWarehouseId, setInvoiceWarehouseId] = useState('')
-  const [discountType, setDiscountType] = useState<DiscountType>('none')
+  const [discountType, setDiscountType] = useState<DiscountType>('fixed')
   const [discountValue, setDiscountValue] = useState<number | ''>(0)
   const [invoiceExpenses, setInvoiceExpenses] = useState<number | ''>(0)
   const [invoiceNotes, setInvoiceNotes] = useState('')
@@ -679,27 +695,31 @@ export function PurchasesPage() {
     scrollInvoiceDialogToTop()
   }, [invoiceDialogOpen, invoiceFormError, scrollInvoiceDialogToTop])
 
-  const subtotal = useMemo(() => {
-    return invoiceLines.reduce((sum, line) => {
-      const quantity = typeof line.quantity === 'number' ? line.quantity : 0
-      const unitPrice = typeof line.unitPrice === 'number' ? line.unitPrice : 0
-      return sum + quantity * unitPrice
-    }, 0)
-  }, [invoiceLines])
+  const priceDecimals = loadSettings().priceDecimals
+  const quantityDecimals = loadSettings().quantityDecimals
+  const lineTotalFor = useCallback((line: InvoiceLine) => roundNumber(
+    (typeof line.quantity === 'number' ? line.quantity : 0)
+      * (typeof line.unitPrice === 'number' ? line.unitPrice : 0),
+    priceDecimals,
+  ), [priceDecimals])
+  const subtotal = useMemo(
+    () => roundNumber(invoiceLines.reduce((sum, line) => sum + lineTotalFor(line), 0), priceDecimals),
+    [invoiceLines, lineTotalFor, priceDecimals]
+  )
 
   const discountAmount = useMemo(() => {
     const value = typeof discountValue === 'number' ? discountValue : 0
     if (discountType === 'percentage') {
-      return (subtotal * value) / 100
+      return roundNumber((subtotal * value) / 100, priceDecimals)
     }
     if (discountType === 'fixed') {
-      return value
+      return roundNumber(value, priceDecimals)
     }
     return 0
-  }, [discountType, discountValue, subtotal])
+  }, [discountType, discountValue, subtotal, priceDecimals])
 
-  const invoiceExpensesAmount = useMemo(() => (typeof invoiceExpenses === 'number' ? invoiceExpenses : 0), [invoiceExpenses])
-  const netTotal = useMemo(() => Math.max(subtotal - discountAmount, 0), [subtotal, discountAmount])
+  const invoiceExpensesAmount = useMemo(() => roundNumber(typeof invoiceExpenses === 'number' ? invoiceExpenses : 0, priceDecimals), [invoiceExpenses, priceDecimals])
+  const netTotal = useMemo(() => roundNumber(Math.max(subtotal - discountAmount, 0), priceDecimals), [subtotal, discountAmount, priceDecimals])
 
   const totalDirectPayments = useMemo(() => invoicePayments.reduce((sum, p) => sum + (typeof p.amount === 'number' ? p.amount : 0), 0), [invoicePayments])
 
@@ -777,31 +797,34 @@ export function PurchasesPage() {
       id: `inv-${inv.id}`,
       type: 'invoice',
       debit: 0,
-      credit: inv.amount, 
+      credit: roundNumber(inv.amount, priceDecimals),
       paymentMethod: '',
       invoiceNumber: inv.invoiceNumber,
       notes: inv.notes || '',
       date: inv.date,
     }))
 
-    const allPayments: LedgerEntry[] = supplierStatementPayments.map((p) => ({
-      id: `pay-${p.id}`,
-      type: 'payment',
-      paymentId: p.id,
-      paymentSource: p.source ?? (p.invoiceNumber ? 'invoice' : 'account'),
-      debit: p.amount,
-      credit: 0,
-      paymentMethod: p.paymentMethod || '',
-      invoiceNumber: p.invoiceNumber || '',
-      notes: p.notes || '',
-      date: p.date,
-    }))
+    const allPayments: LedgerEntry[] = supplierStatementPayments.map((p) => {
+      const direction = p.paymentDirection ?? 'out'
+      return {
+        id: `pay-${p.id}`,
+        type: 'payment',
+        paymentId: p.id,
+        paymentSource: p.source ?? (p.invoiceNumber ? 'invoice' : 'account'),
+        debit: direction === 'out' ? roundNumber(p.amount, priceDecimals) : 0,
+        credit: direction === 'in' ? roundNumber(p.amount, priceDecimals) : 0,
+        paymentMethod: p.paymentMethod || '',
+        invoiceNumber: p.invoiceNumber || '',
+        notes: p.notes || '',
+        date: p.date,
+      }
+    })
 
     const returnEntries: LedgerEntry[] = supplierStatementReturns.flatMap((returnRecord) => [
       {
         id: `return-${returnRecord.id}`,
         type: 'return',
-        debit: returnRecord.amount,
+        debit: roundNumber(returnRecord.amount, priceDecimals),
         credit: 0,
         paymentMethod: '',
         invoiceNumber: returnRecord.returnNumber,
@@ -813,8 +836,8 @@ export function PurchasesPage() {
         type: 'payment' as const,
         paymentId: payment.id,
         paymentSource: 'return' as const,
-        debit: 0,
-        credit: payment.amount,
+        debit: payment.paymentDirection === 'out' ? roundNumber(payment.amount, priceDecimals) : 0,
+        credit: payment.paymentDirection === 'in' || !payment.paymentDirection ? roundNumber(payment.amount, priceDecimals) : 0,
         paymentMethod: payment.paymentMethod || '',
         invoiceNumber: returnRecord.returnNumber,
         notes: payment.notes || '',
@@ -823,7 +846,10 @@ export function PurchasesPage() {
     ])
 
     const all = [...allInvoices, ...allPayments, ...returnEntries].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+      (a, b) =>
+        new Date(a.date).getTime() - new Date(b.date).getTime()
+        || ['invoice', 'return', 'payment'].indexOf(a.type) - ['invoice', 'return', 'payment'].indexOf(b.type)
+        || a.id.localeCompare(b.id),
     )
 
     let carryOverBalance = 0
@@ -833,7 +859,10 @@ export function PurchasesPage() {
       const startMs = new Date(startDateFilter).getTime()
 
       const priorEntries = all.filter((entry) => new Date(entry.date).getTime() < startMs)
-      carryOverBalance = priorEntries.reduce((sum, item) => sum + (item.credit - item.debit), 0)
+      carryOverBalance = priorEntries.reduce(
+        (sum, item) => sum + item.credit - item.debit,
+        0,
+      )
 
       filteredEntries = all.filter((entry) => {
         const entryMs = new Date(entry.date).getTime()
@@ -869,16 +898,34 @@ export function PurchasesPage() {
       })
     }
 
-    const calcCredit = finalEntries.reduce((sum, inv) => sum + inv.credit, 0)
-    const calcDebit = finalEntries.reduce((sum, p) => sum + p.debit, 0)
+    const calcCredit = roundNumber(finalEntries.reduce((sum, inv) => sum + inv.credit, 0), priceDecimals)
+    const calcDebit = roundNumber(finalEntries.reduce((sum, p) => sum + p.debit, 0), priceDecimals)
+    const calcBalance = roundNumber(finalEntries.reduce(
+      (sum, entry) => sum + entry.credit - entry.debit,
+      0,
+    ), priceDecimals)
 
     return {
       ledgerEntries: finalEntries,
       totalCredit: calcCredit,
       totalDebit: calcDebit,
-      remainingBalance: calcCredit - calcDebit,
+      remainingBalance: normalizeRemainingAmount(calcBalance, priceDecimals),
     }
-  }, [supplierStatementInvoices, supplierStatementPayments, supplierStatementReturns, startDateFilter, endDateFilter])
+  }, [supplierStatementInvoices, supplierStatementPayments, supplierStatementReturns, startDateFilter, endDateFilter, priceDecimals])
+
+  const grossPurchases = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'invoice' && entry.id !== 'carried-forward-balance' ? sum + entry.credit : sum,
+    0,
+  ), priceDecimals)
+  const purchaseReturnsTotal = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'return' ? sum + entry.debit : sum,
+    0,
+  ), priceDecimals)
+  const netPurchases = roundNumber(Math.max(grossPurchases - purchaseReturnsTotal, 0), priceDecimals)
+  const cashPayments = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'payment' ? sum + entry.debit - entry.credit : sum,
+    0,
+  ), priceDecimals)
 
   const openSupplierStatement = useCallback(async (supplier: SupplierRecord) => {
     setSupplierStatementEntity(supplier)
@@ -896,7 +943,7 @@ export function PurchasesPage() {
         id: invoice.id,
         invoiceNumber: invoice.invoiceNumber,
         date: invoice.date,
-        amount: Math.max(Number(invoice.subtotal ?? 0) - Number(invoice.discountAmount ?? 0), 0),
+        amount: normalizeRemainingAmount(Number(invoice.netTotal ?? 0), priceDecimals),
         notes: invoice.notes,
       }))
 
@@ -927,7 +974,7 @@ export function PurchasesPage() {
     } finally {
       setStatementLoading(false)
     }
-  }, [notify])
+  }, [notify, priceDecimals])
 
   const submitStatementPayment = useCallback(async () => {
     if (!supplierStatementEntity) return
@@ -951,7 +998,7 @@ export function PurchasesPage() {
       await suppliersService.createPayment({
         supplierId: supplierStatementEntity.id,
         date: toInternalDate(statementPaymentForm.date) || statementPaymentForm.date,
-        amount,
+        amount: roundNumber(amount, priceDecimals),
         paymentMethod: statementPaymentForm.paymentMethod,
         notes: statementPaymentForm.notes.trim(),
       })
@@ -964,7 +1011,7 @@ export function PurchasesPage() {
       setStatementPaymentError(message)
       notify.error(message)
     }
-  }, [notify, openSupplierStatement, statementPaymentForm, supplierStatementEntity])
+  }, [notify, openSupplierStatement, statementPaymentForm, supplierStatementEntity, priceDecimals])
 
   const handleDeleteSupplierPayment = useCallback(async () => {
     if (!supplierStatementEntity || !paymentToDelete) return
@@ -1037,12 +1084,12 @@ export function PurchasesPage() {
     if (!selectedInvoice) return null
     const paymentMethodOrder = loadSettings().paymentMethods
     const normalizedPaymentMethod = (selectedInvoice.payments ?? []).length === 0
-      ? '—'
+      ? ''
       : (selectedInvoice.payments ?? [])
           .map((payment, originalIndex) => ({
             payment,
             originalIndex,
-            method: String(payment.paymentMethod ?? '').trim() || '—',
+            method: String(payment.paymentMethod ?? '').trim() || '',
           }))
           .sort((first, second) => {
             const firstIndex = paymentMethodOrder.indexOf(first.method)
@@ -1069,7 +1116,7 @@ export function PurchasesPage() {
       partyNumber: selectedInvoice.supplierCode,
       warehouseName: selectedInvoice.warehouseName,
       referenceLabel: 'رقم فاتورة المورد',
-      referenceValue: selectedInvoice.supplierInvoiceNumber || '—',
+      referenceValue: selectedInvoice.supplierInvoiceNumber || '',
       notes: selectedInvoice.notes,
       items: selectedInvoice.items.map((item) => ({
           id: item.id,
@@ -1084,8 +1131,8 @@ export function PurchasesPage() {
       discount: selectedInvoice.discountAmount,
       discountType: selectedInvoice.discountType,
       discountValue: selectedInvoice.discountValue,
-      additionalFees: 0,
-      total: Math.max(Number(selectedInvoice.subtotal ?? 0) - Number(selectedInvoice.discountAmount ?? 0), 0),
+      additionalFees: Number(selectedInvoice.expenses ?? 0),
+      total: Number(selectedInvoice.netTotal ?? Math.max(Number(selectedInvoice.subtotal ?? 0) - Number(selectedInvoice.discountAmount ?? 0), 0)),
       paymentMethod: normalizedPaymentMethod,
       paymentStatus: paymentStatusLabel[selectedInvoice.paymentStatus],
       paidAmount: selectedInvoice.paidAmount,
@@ -1159,26 +1206,46 @@ export function PurchasesPage() {
       supplierId: invoiceSupplierId,
       warehouseId: invoiceWarehouseId,
       discountType,
-      discountValue: typeof discountValue === 'number' ? discountValue : 0,
-      expenses: typeof invoiceExpenses === 'number' ? invoiceExpenses : 0,
+      discountValue: typeof discountValue === 'number' ? roundNumber(discountValue, discountType === 'fixed' ? priceDecimals : 6) : 0,
+      subtotal,
+      discountAmount,
+      netTotal,
+      expenses: invoiceExpensesAmount,
       notes: invoiceNotes,
       items: invoiceLines.map((line) => ({
+        ...calculateNetInvoiceItemAmounts(
+          roundNumber(Number(line.quantity), quantityDecimals),
+          lineTotalFor(line),
+          subtotal,
+          discountAmount,
+          priceDecimals,
+        ),
         materialId: line.materialId,
-        quantity: Number(line.quantity),
-        unitPrice: Number(line.unitPrice),
-        notes: line.notes,
+        quantity: roundNumber(Number(line.quantity), quantityDecimals),
+        unitPrice: roundNumber(Number(line.unitPrice), priceDecimals),
+        lineTotal: lineTotalFor(line),
       })),
     }
-  }, [invoiceNumber, supplierInvoiceNumber, invoiceDate, invoiceSupplierId, invoiceWarehouseId, discountType, discountValue, invoiceNotes, invoiceLines, invoiceExpenses])
+  }, [invoiceNumber, supplierInvoiceNumber, invoiceDate, invoiceSupplierId, invoiceWarehouseId, discountType, discountValue, invoiceNotes, invoiceLines, invoiceExpensesAmount, priceDecimals, quantityDecimals, subtotal, discountAmount, netTotal, lineTotalFor])
 
   const resetInvoiceForm = useCallback(async () => {
-    const draftData = await purchasesService.getNextDraftData()
+    const [draftData, warehouses] = await Promise.all([
+      purchasesService.getNextDraftData(),
+      inventoryService.listWarehouses(),
+    ])
+    const availableWarehouses = warehouses.filter(
+      (warehouse) => warehouse.status === 'active',
+    )
+    const defaultWarehouseId =
+      availableWarehouses.find((warehouse) => warehouse.isDefault)?.id ?? ''
+
+    setActiveWarehouses(availableWarehouses)
     setInvoiceNumber(draftData.invoiceNumber)
     setInvoiceDate(getLocalTodayISO())
     setSupplierInvoiceNumber('')
     setInvoiceSupplierId('')
-    setInvoiceWarehouseId('')
-    setDiscountType('none')
+    setInvoiceWarehouseId(defaultWarehouseId)
+    setDiscountType('fixed')
     setDiscountValue(0)
     setInvoiceExpenses(0)
     setInvoiceNotes('')
@@ -1213,17 +1280,18 @@ export function PurchasesPage() {
       setInvoiceDate(invoice.date)
       setInvoiceSupplierId(invoice.supplierId)
       setInvoiceWarehouseId(invoice.warehouseId)
-      setDiscountType(invoice.discountType)
-      setDiscountValue(invoice.discountValue)
-      setInvoiceExpenses(invoice.expenses ?? 0)
+      setDiscountType(invoice.discountType === 'none' ? 'fixed' : invoice.discountType)
+      setDiscountValue(invoice.discountType === 'fixed'
+        ? roundNumber(invoice.discountValue, priceDecimals)
+        : invoice.discountValue)
+      setInvoiceExpenses(roundNumber(invoice.expenses ?? 0, priceDecimals))
       setInvoiceNotes(invoice.notes ?? '')
       setInvoiceLines(
         invoice.items.map((item) => ({
           key: item.id,
           materialId: item.materialId,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          notes: item.notes ?? '',
+          quantity: roundNumber(item.quantity, quantityDecimals),
+          unitPrice: roundNumber(item.unitPrice, priceDecimals),
         }))
       )
       setInvoicePayments([])
@@ -1235,7 +1303,7 @@ export function PurchasesPage() {
       scrollInvoiceDialogToTop()
       setInvoiceDialogOpen(true)
     }
-  }, [scrollInvoiceDialogToTop])
+  }, [scrollInvoiceDialogToTop, priceDecimals, quantityDecimals])
 
   const saveDraft = useCallback(async () => {
     const validationError = validateInvoiceForm()
@@ -1410,17 +1478,14 @@ export function PurchasesPage() {
         runningTotal += Number(payment.amount ?? 0)
         return {
           ...payment,
-          remainingAfterThisPayment: Math.max(
-            Number(selectedInvoice.subtotal ?? 0) - Number(selectedInvoice.discountAmount ?? 0) - runningTotal,
+          remainingAfterThisPayment: normalizeRemainingAmount(Math.max(
+            Number(selectedInvoice.netTotal ?? 0) - runningTotal,
             0,
-          ),
-          netTotal: Math.max(
-            Number(selectedInvoice.subtotal ?? 0) - Number(selectedInvoice.discountAmount ?? 0),
-            0,
-          ),
+          ), priceDecimals),
+          netTotal: normalizeRemainingAmount(Number(selectedInvoice.netTotal ?? 0), priceDecimals),
         }
       })
-  }, [selectedInvoice])
+  }, [selectedInvoice, priceDecimals])
 
   const selectedSupplier = activeSuppliers.find((item) => item.id === invoiceSupplierId) ?? null
   const selectedWarehouse = activeWarehouses.find((item) => item.id === invoiceWarehouseId) ?? null
@@ -1434,10 +1499,27 @@ export function PurchasesPage() {
 
       {isSuppliersPage ? (
         <SectionCard title="قائمة الموردين" actions={
-            <Button variant="contained" startIcon={<FiPlus />} onClick={() => setSupplierFormOpen(true)}>إضافة مورد</Button>
+            <Button
+              variant="contained"
+              startIcon={<FiPlus />}
+              onClick={() => {
+                setSupplierForm({
+                  code: '',
+                  name: '',
+                  phone: '',
+                  address: '',
+                  notes: '',
+                  status: 'active',
+                })
+                setSupplierFormError('')
+                setSupplierFormOpen(true)
+              }}
+            >
+              إضافة مورد
+            </Button>
         }>
-          <Box sx={{ overflowX: 'auto' }}>
-            <Table sx={{ minWidth: 800 }}>
+          <Box sx={tableScrollSx}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم المورد</TableCell>
@@ -1512,6 +1594,7 @@ export function PurchasesPage() {
                 setSupplierRowsPerPage(Number(event.target.value))
                 setSupplierPage(0)
               }}
+              labelRowsPerPage="الصفوف:"
             />
           </Box>
         </SectionCard>
@@ -1519,7 +1602,7 @@ export function PurchasesPage() {
         <SectionCard title="سجل فواتير المشتريات" actions={
           <Button variant="contained" startIcon={<FiPlus />} onClick={() => void openCreateInvoiceDialog()}>فاتورة شراء جديدة</Button>
         }>
-        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', mb: 2 }}>
+        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))', minWidth: 0, maxWidth: '100%', '& > *': { minWidth: 0, maxWidth: '100%' }, mb: 2 }}>
             <Tooltip title="بحث برقم الفاتورة أو اسم المورد" arrow>
                 <Box>
                     <SearchField
@@ -1553,7 +1636,8 @@ export function PurchasesPage() {
               <MenuItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</MenuItem>
             ))}
           </TextField>
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+        </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
             <Button
               variant="outlined"
               onClick={() => {
@@ -1568,12 +1652,11 @@ export function PurchasesPage() {
               مسح الفلاتر
             </Button>
           </Box>
-        </Box>
-        <Box sx={{ overflowX: 'auto' }}>
+        <Box sx={tableScrollSx}>
           {loading ? (
             <Box sx={{ display: 'grid', placeItems: 'center', p: 4 }}><CircularProgress /></Box>
           ) : (
-            <Table sx={{ minWidth: 1100 }}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>التاريخ</TableCell>
@@ -1584,7 +1667,7 @@ export function PurchasesPage() {
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الحسم</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المصاريف الإضافية</TableCell>
-                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي</TableCell>
+                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي المستحق للمورد</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>حالة الدفع</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجراءات</TableCell>
                 </TableRow>
@@ -1646,6 +1729,7 @@ export function PurchasesPage() {
               setRowsPerPage(Number(event.target.value))
               setPage(0)
             }}
+            labelRowsPerPage="الصفوف:"
           />
         </Box>
         </SectionCard>
@@ -1667,7 +1751,7 @@ export function PurchasesPage() {
             </Box>
           ) : (
             <Box sx={{ display: 'grid', gap: 2 }}>
-              <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+              <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fit, minmax(min(120px, 100%), 1fr))', minWidth: 0, maxWidth: '100%' }}>
                 <Box>
                   رقم المورد: <strong>{supplierStatementEntity.code}</strong>
                 </Box>
@@ -1753,11 +1837,13 @@ export function PurchasesPage() {
                   لا توجد حركات مسجلة لهذا المورد في الفترة المحددة.
                 </Typography>
               ) : (
-                <Table sx={{ width: '100%' }}>
+                <Box sx={tableScrollSx}>
+                <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                   <TableHead>
                     <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>مدين</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>دائن</TableCell>
+                      <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>نوع الحركة</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>طريقة الدفع</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم الفاتورة</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الملاحظات</TableCell>
@@ -1777,6 +1863,17 @@ export function PurchasesPage() {
                             : entry.credit > 0
                               ? priceNum(entry.credit)
                               : ''}
+                        </TableCell>
+                        <TableCell sx={{ textAlign: 'center' }}>
+                          {entry.id === 'carried-forward-balance'
+                            ? 'رصيد مدور'
+                            : entry.type === 'invoice'
+                              ? 'فاتورة شراء'
+                              : entry.type === 'return'
+                                ? 'مرتجع شراء'
+                                : entry.credit > 0
+                                  ? 'سند قبض من المورد'
+                                  : 'دفعة للمورد'}
                         </TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>{entry.paymentMethod}</TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>{entry.invoiceNumber}</TableCell>
@@ -1803,30 +1900,34 @@ export function PurchasesPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </Box>
               )}
 
-              <Table sx={{ width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
+              <Box sx={tableScrollSx}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto', '& td, & th': { textAlign: 'center' } }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
-                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>إجمالي المشتريات</TableCell>
-                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>إجمالي المدفوعات</TableCell>
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>صافي المشتريات</TableCell>
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الدفعات النقدية</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الرصيد</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   <TableRow sx={{ textAlignLast: 'center' }}>
-                    <TableCell sx={{ textAlign: 'center' }}>{priceSym(totalCredit)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>{priceSym(totalDebit)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{priceSym(netPurchases)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{priceSym(cashPayments)}</TableCell>
                     <TableCell sx={{ textAlign: 'center', color: remainingBalance > 0 ? '#FCA5A5' : 'inherit' }}>
                       {priceSym(remainingBalance)}
                     </TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
+                <Button sx={{ mr: 'auto' }} onClick={() => setSupplierStatementOpen(false)}>إغلاق</Button>
                 <Button
                   variant="contained"
                   startIcon={<FiCheckCircle />}
@@ -1835,7 +1936,7 @@ export function PurchasesPage() {
                     setStatementPaymentError('')
                     setStatementPaymentForm({
                       date: getLocalTodayISO(),
-                      amount: remainingBalance > 0 ? String(remainingBalance) : '',
+                      amount: remainingBalance > 0 ? String(normalizeRemainingAmount(remainingBalance, priceDecimals)) : '',
                       paymentMethod: loadSettings().paymentMethods[0] ?? '',
                       notes: '',
                     })
@@ -1851,7 +1952,6 @@ export function PurchasesPage() {
                 <Button variant="contained" onClick={handleExportSupplierStatementPdf}>
                   تصدير PDF
                 </Button>
-          <Button onClick={() => setSupplierStatementOpen(false)}>إغلاق</Button>
         </DialogActions>
       </Dialog>
 
@@ -1865,33 +1965,35 @@ export function PurchasesPage() {
             onChange={(value) => setStatementPaymentForm((prev) => ({ ...prev, date: toInternalDate(value) }))}
             required
           />
-          <TextField
-            select
-            label="طريقة الدفع"
-            value={statementPaymentForm.paymentMethod}
-            onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, paymentMethod: event.target.value }))}
-            slotProps={darkSelectSlotProps}
-            required
-          >
-            {loadSettings().paymentMethods.map((method) => (
-              <MenuItem key={method} value={method}>{method}</MenuItem>
-            ))}
-          </TextField>
-          <TextField
-            label="المبلغ"
-            type="number"
-            value={statementPaymentForm.amount}
-            onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, amount: event.target.value }))}
-            slotProps={{ htmlInput: { min: 0, step: 1 } }}
-            required
-          />
-          <TextField
-            label="ملاحظات"
-            value={statementPaymentForm.notes}
-            onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, notes: event.target.value }))}
-            multiline
-            minRows={2}
-          />
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '1fr' }}>
+            <TextField
+              label="المبلغ"
+              type="number"
+              value={statementPaymentForm.amount}
+              onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, amount: event.target.value }))}
+              slotProps={{ htmlInput: { min: 0, step: 10 ** -priceDecimals } }}
+              required
+            />
+            <TextField
+              select
+              label="طريقة الدفع"
+              value={statementPaymentForm.paymentMethod}
+              onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, paymentMethod: event.target.value }))}
+              slotProps={darkSelectSlotProps}
+              required
+            >
+              {loadSettings().paymentMethods.map((method) => (
+                <MenuItem key={method} value={method}>{method}</MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label="ملاحظات"
+              value={statementPaymentForm.notes}
+              onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, notes: event.target.value }))}
+              multiline
+              minRows={2}
+            />
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setStatementPaymentDialogOpen(false)}>إلغاء</Button>
@@ -1958,7 +2060,7 @@ export function PurchasesPage() {
               }
             }}
           >
-            {confirmAction?.type === 'deleteDraft' ? 'حذف' : 'حذف نهائي'}
+            حذف
           </Button>
         </DialogActions>
       </Dialog>
@@ -2062,7 +2164,7 @@ export function PurchasesPage() {
         >
           {invoiceFormError ? <Alert severity="error" sx={craftErrorAlertSx}>{invoiceFormError}</Alert> : null}
 
-          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(min(120px, 100%), 1fr))', minWidth: 0, maxWidth: '100%' }}>
             <TextField label="رقم الفاتورة" value={invoiceNumber} slotProps={{ input: { readOnly: true } }} />
             <TextField label="رقم فاتورة المورد" value={supplierInvoiceNumber} onChange={(event) => setSupplierInvoiceNumber(event.target.value)} />
             <DateFilterField
@@ -2089,42 +2191,33 @@ export function PurchasesPage() {
             />
           </Box>
 
-          <TextField label="ملاحظات" value={invoiceNotes} onChange={(event) => setInvoiceNotes(event.target.value)} multiline minRows={2} />
-
           <SectionCard title="مواد الفاتورة">
             <Box sx={{ display: 'grid', gap: 2 }}>
-              {invoiceLines.map((line) => {
+              {invoiceLines.map((line, index) => {
                 const material = line.materialId ? materialById.get(line.materialId) ?? null : null
-                const lineTotal = (typeof line.quantity === 'number' ? line.quantity : 0) * (typeof line.unitPrice === 'number' ? line.unitPrice : 0)
+                const isLast = index === invoiceLines.length - 1;
 
                 return (
-                  <Box key={line.key} sx={{
-                      p: 2,
-                      borderRadius: '14px',
-                      border: '1px solid rgba(255, 255, 255, 0.14)',
-                      background: 'rgba(255, 255, 255, 0.035)',
-                    }}>
-                    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', alignItems: 'center' }}>
+                  <Box key={line.key} sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr) auto auto', minWidth: 0, maxWidth: '100%', alignItems: 'center' }}>
                       <Autocomplete
                         options={materialOptions}
                         value={material}
-                        getOptionLabel={(option) => `${option.materialNumber} - ${option.name}`}
+                        getOptionLabel={(option) => `${option.materialNumber} - ${option.name}${option.unit ? ` / ${option.unit}` : ''}`}
                         onChange={(_, value) => {
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, materialId: value?.id ?? '' } : item))
                         }}
                         slotProps={{ paper: { sx: darkPopupPaperSx } }}
                         renderInput={(params) => <TextField {...params} label="المادة" required />}
                       />
-                      <TextField label="الوحدة" value={material?.unit ?? ''} slotProps={{ input: { readOnly: true } }} />
                       <TextField
                         label="الكمية"
                         type="number"
                         value={line.quantity}
                         onChange={(event) => {
                           const raw = event.target.value
-                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, quantity: raw === '' ? '' : Number(raw) } : item))
+                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, quantity: raw === '' ? '' : roundNumber(Number(raw), quantityDecimals) } : item))
                         }}
-                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 10 ** -quantityDecimals } }}
                         required
                       />
                       <TextField
@@ -2133,39 +2226,42 @@ export function PurchasesPage() {
                         value={line.unitPrice}
                         onChange={(event) => {
                           const raw = event.target.value
-                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, unitPrice: raw === '' ? '' : Number(raw) } : item))
+                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, unitPrice: raw === '' ? '' : roundNumber(Number(raw), priceDecimals) } : item))
                         }}
-                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 10 ** -priceDecimals } }}
                         required
                       />
-                      <TextField label="الإجمالي" value={priceNum(lineTotal)} slotProps={{ input: { readOnly: true } }} />
-                    </Box>
-                    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '1fr auto', mt: 2 }}>
-                      <TextField
-                        label="ملاحظات"
-                        value={line.notes}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, notes: value } : item))
-                        }}
-                        fullWidth
-                      />
-                      <Button color="error" onClick={() => setInvoiceLines((prev) => prev.filter((item) => item.key !== line.key))} disabled={invoiceLines.length === 1}>
-                        حذف السطر
-                      </Button>
-                    </Box>
+
+                      {/* زر الحذف */}
+                      <IconButton
+                        color="error"
+                        aria-label="حذف المادة"
+                        onClick={() => setInvoiceLines((prev) => prev.filter((item) => item.key !== line.key))}
+                        disabled={invoiceLines.length === 1}
+                      >
+                        <FiTrash2 />
+                      </IconButton>
+
+                      {/* زر الإضافة (يظهر في السطر الأخير فقط) */}
+                      {isLast ? (
+                        <IconButton
+                          color="primary"
+                          aria-label="إضافة مادة"
+                          onClick={() => setInvoiceLines((prev) => [...prev, createEmptyLine()])}
+                        >
+                          <FiPlus />
+                        </IconButton>
+                      ) : (
+                        <Box sx={{ width: 40 }} />
+                      )}
                   </Box>
                 )
               })}
-
-              <Button variant="outlined" startIcon={<FiPlus />} onClick={() => setInvoiceLines((prev) => [...prev, createEmptyLine()])}>
-                إضافة مادة
-              </Button>
             </Box>
           </SectionCard>
 
-            <SectionCard title="الحسم والإجمالي">
-            <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+          <SectionCard title="الحسم والإجمالي">
+            <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(min(120px, 100%), 1fr))', minWidth: 0, maxWidth: '100%' }}>
               <TextField
                 select
                 label="نوع الحسم"
@@ -2177,18 +2273,18 @@ export function PurchasesPage() {
                 }}
                 slotProps={darkSelectSlotProps}
               >
-                <MenuItem value="none">بدون حسم</MenuItem>
-                <MenuItem value="percentage">نسبة مئوية</MenuItem>
                 <MenuItem value="fixed">مبلغ ثابت</MenuItem>
+                <MenuItem value="percentage">نسبة مئوية</MenuItem>
               </TextField>
               <TextField
                 label={discountType === 'percentage' ? 'نسبة الحسم (%)' : 'قيمة الحسم'}
                 type="number"
                 value={discountValue}
-                disabled={discountType === 'none'}
                 onChange={(event) => {
                   const raw = event.target.value
-                  setDiscountValue(raw === '' ? '' : Number(raw))
+                  setDiscountValue(raw === '' ? '' : discountType === 'fixed'
+                    ? roundNumber(Number(raw), priceDecimals)
+                    : Number(raw))
                 }}
                 slotProps={{
                   htmlInput: {
@@ -2207,12 +2303,13 @@ export function PurchasesPage() {
                 value={invoiceExpenses}
                 onChange={(event) => {
                   const raw = event.target.value
-                  setInvoiceExpenses(raw === '' ? '' : Number(raw))
+                  setInvoiceExpenses(raw === '' ? '' : roundNumber(Number(raw), priceDecimals))
                 }}
                 slotProps={{ htmlInput: { min: 0, step: 1 } }}
               />
             </Box>
-            <Table sx={{ mt: 2, width: '100%', minWidth: discountType === 'percentage' ? 760 : 620, '& td, & th': { textAlign: 'center' } }}>
+            <Box sx={tableScrollSx}>
+            <Table sx={{ mt: 2, width: '100%', minWidth: 'max-content', tableLayout: 'auto', '& td, & th': { textAlign: 'center' } }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
@@ -2221,7 +2318,7 @@ export function PurchasesPage() {
                   ) : null}
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>قيمة الحسم</TableCell>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المصاريف الإضافية</TableCell>
-                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي المستحق</TableCell>
+                  <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي المستحق للمورد</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -2236,13 +2333,20 @@ export function PurchasesPage() {
                 </TableRow>
               </TableBody>
             </Table>
+            </Box>
           </SectionCard>
+          <TextField
+            label="الملاحظات العامة"
+            value={invoiceNotes}
+            onChange={(event) => setInvoiceNotes(event.target.value)}
+            multiline
+            minRows={3}
+            fullWidth
+          />
 
-          {(!editingInvoiceId || editingInvoiceStatus === 'draft') && (
-            <SectionCard title="سند دفع">
-              <Box sx={{ display: 'grid', gap: 2 }}>
-                {invoicePayments.length > 0 && (
-                  <Table>
+          {(!editingInvoiceId || editingInvoiceStatus === 'draft') && invoicePayments.length > 0 && (
+            <Box sx={tableScrollSx}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                     <TableHead>
                       <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                         <TableCell sx={{ textAlign: 'center' }}>المبلغ</TableCell>
@@ -2265,29 +2369,30 @@ export function PurchasesPage() {
                         </TableRow>
                       ))}
                     </TableBody>
-                  </Table>
-                )}
-                <Box>
-                  <Button
-                    variant="outlined"
-                    startIcon={<FiCheckCircle />}
-                    onClick={() => {
-                      const remaining = Math.max(netTotal - totalDirectPayments, 0)
-                      setDirectPaymentForm({ amount: String(remaining), paymentMethod: loadSettings().paymentMethods[0] ?? '', notes: '' })
-                      setDirectPaymentError('')
-                      setDirectPaymentDialogOpen(true)
-                    }}
-                  >
-                    تسديد دفعة
-                  </Button>
-                </Box>
-              </Box>
-            </SectionCard>
+              </Table>
+            </Box>
           )}
 
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setInvoiceDialogOpen(false)}>إلغاء</Button>
+          <Button sx={{ mr: 'auto' }} onClick={() => setInvoiceDialogOpen(false)}>إلغاء</Button>
+          {(!editingInvoiceId || editingInvoiceStatus === 'draft') && (
+            <Button
+              variant="outlined"
+              startIcon={<FiCheckCircle />}
+              onClick={() => {
+                const remaining = normalizeRemainingAmount(
+                  Math.max(subtotal - discountAmount - totalDirectPayments, 0),
+                  priceDecimals,
+                )
+                setDirectPaymentForm({ amount: String(remaining), paymentMethod: loadSettings().paymentMethods[0] ?? '', notes: '' })
+                setDirectPaymentError('')
+                setDirectPaymentDialogOpen(true)
+              }}
+            >
+              تسديد دفعة
+            </Button>
+          )}
           {editingInvoiceId && editingInvoiceStatus === 'completed' ? (
             <Button variant="contained" color="primary" onClick={() => void saveDraft()} disabled={saving}>
               {saving ? <CircularProgress size={18} /> : 'حفظ التعديلات'}
@@ -2306,8 +2411,8 @@ export function PurchasesPage() {
           {!selectedInvoice ? (
             <Box sx={{ display: 'grid', placeItems: 'center', p: 4 }}><CircularProgress /></Box>
           ) : (
-            <Box sx={{ display: 'grid', gap: 2 }}>
-              <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', gap: 2 }}>
+              <Box sx={{ display: 'grid', gap: 1, gridTemplateColumns: 'repeat(auto-fit, minmax(min(120px, 100%), 1fr))', minWidth: 0, maxWidth: '100%' }}>
                 <Box>رقم الفاتورة: <strong>{selectedInvoice.invoiceNumber}</strong></Box>
                 <Box>رقم فاتورة المورد: <strong>{selectedInvoice.supplierInvoiceNumber || ''}</strong></Box>
                 <Box>التاريخ: <strong>{formatDateDMY(selectedInvoice.date)}</strong></Box>
@@ -2315,7 +2420,8 @@ export function PurchasesPage() {
                 <Box>المخزن: <strong>{selectedInvoice.warehouseName}</strong></Box>
               </Box>
 
-              <Table>
+              <Box sx={tableScrollSx}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center' }}>المادة</TableCell>
@@ -2323,7 +2429,6 @@ export function PurchasesPage() {
                     <TableCell sx={{ textAlign: 'center' }}>الكمية</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>سعر الشراء</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>الإجمالي</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>ملاحظات</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -2334,17 +2439,18 @@ export function PurchasesPage() {
                       <TableCell sx={{ textAlign: 'center' }}>{item.quantity}</TableCell>
                       <TableCell sx={{ textAlign: 'center' }}>{priceNum(item.unitPrice)}</TableCell>
                       <TableCell sx={{ textAlign: 'center' }}>{priceNum(item.lineTotal)}</TableCell>
-                      <TableCell sx={{ textAlign: 'center' }}>{item.notes?.trim() ? item.notes : ''}</TableCell>
                     </TableRow>
                   ))}
                   <TableRow>
                     <TableCell sx={{ fontWeight: 700, textAlign: 'center' }}>ملاحظات الفاتورة</TableCell>
-                    <TableCell colSpan={5} sx={{ textAlign: 'center' }}>{selectedInvoice.notes?.trim() ? selectedInvoice.notes : ''}</TableCell>
+                    <TableCell colSpan={4} sx={{ textAlign: 'center' }}>{selectedInvoice.notes?.trim() ? selectedInvoice.notes : ''}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
 
-              <Table sx={{ width: '100%', minWidth: selectedInvoice.discountType === 'percentage' ? 760 : 620, '& td, & th': { textAlign: 'center' } }}>
+              <Box sx={tableScrollSx}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto', '& td, & th': { textAlign: 'center' } }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الإجمالي قبل الحسم</TableCell>
@@ -2353,7 +2459,7 @@ export function PurchasesPage() {
                     ) : null}
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>قيمة الحسم</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المصاريف الإضافية</TableCell>
-                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي</TableCell>
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الصافي المستحق للمورد</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المدفوع</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المتبقي</TableCell>
                   </TableRow>
@@ -2366,12 +2472,13 @@ export function PurchasesPage() {
                     ) : null}
                     <TableCell sx={{ textAlign: 'center' }}>{priceSym(selectedInvoice.discountAmount)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{priceSym(selectedInvoice.expenses ?? 0)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>{priceSym(Math.max(selectedInvoice.subtotal - selectedInvoice.discountAmount, 0))}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{priceSym(selectedInvoice.netTotal)}</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>{priceSym(selectedInvoice.paidAmount)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>{priceSym(Math.max((selectedInvoice.subtotal - selectedInvoice.discountAmount) - selectedInvoice.paidAmount, 0))}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{priceSym(Math.max(selectedInvoice.netTotal - selectedInvoice.paidAmount, 0))}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
 
               <Box sx={{ display: 'grid', gap: 1 }}>
                 <Box>حالة الدفع: <strong>{paymentStatusLabel[selectedInvoice.paymentStatus]}</strong></Box>
@@ -2382,7 +2489,8 @@ export function PurchasesPage() {
                 {selectedInvoice.payments.length === 0 ? (
                   <Typography>لا توجد دفعات مسجلة.</Typography>
                 ) : (
-                  <Table>
+                  <Box sx={tableScrollSx}>
+                  <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                     <TableHead>
                       <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                         <TableCell sx={{ textAlign: 'center' }}>التاريخ</TableCell>
@@ -2397,7 +2505,7 @@ export function PurchasesPage() {
                         <TableRow key={payment.id} sx={{ textAlignLast: 'center' }}>
                           <TableCell sx={{ textAlign: 'center' }}>{formatDateDMY(payment.date)}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>{priceNum(Number(payment.amount))}</TableCell>
-                          <TableCell sx={{ textAlign: 'center' }}>{payment.paymentMethod || '—'}</TableCell>
+                          <TableCell sx={{ textAlign: 'center' }}>{payment.paymentMethod || ''}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>{payment.notes || ''}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>
                             <IconButton
@@ -2419,12 +2527,14 @@ export function PurchasesPage() {
                       ))}
                     </TableBody>
                   </Table>
+                  </Box>
                 )}
               </SectionCard>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
+          <Button sx={{ mr: 'auto' }} onClick={() => setDetailsOpen(false)}>إغلاق</Button>
           <Button variant="contained" onClick={() => { void handleExportPdf() }} disabled={!selectedInvoice}>تصدير PDF</Button>
           {selectedInvoice?.status === 'completed' ? (
             <Button
@@ -2439,44 +2549,45 @@ export function PurchasesPage() {
               إنشاء مرتجع شراء
             </Button>
           ) : null}
-          <Button onClick={() => setDetailsOpen(false)}>إغلاق</Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog open={directPaymentDialogOpen} onClose={() => setDirectPaymentDialogOpen(false)} maxWidth="xs" fullWidth slotProps={craftDialogSlotProps}>
+      <Dialog open={directPaymentDialogOpen} onClose={() => setDirectPaymentDialogOpen(false)} maxWidth="sm" fullWidth slotProps={craftDialogSlotProps}>
         <DialogTitle>تسديد دفعة</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
           {directPaymentError ? <Alert severity="error" sx={craftErrorAlertSx}>{directPaymentError}</Alert> : null}
-          <TextField
-            select
-            label="طريقة الدفع"
-            value={directPaymentForm.paymentMethod}
-            onChange={(e) => setDirectPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value }))}
-            slotProps={darkSelectSlotProps}
-            required
-          >
-            {loadSettings().paymentMethods.map((method) => (
-              <MenuItem key={method} value={method}>{method}</MenuItem>
-            ))}
-          </TextField>
-          <TextField
-            label="المبلغ"
-            type="number"
-            value={directPaymentForm.amount}
-            onChange={(e) => setDirectPaymentForm(prev => ({ ...prev, amount: e.target.value }))}
-            slotProps={{ htmlInput: { min: 0, step: 1 } }}
-            required
-          />
-          <TextField
-            label="ملاحظات"
-            value={directPaymentForm.notes}
-            onChange={(e) => setDirectPaymentForm(prev => ({ ...prev, notes: e.target.value }))}
-            multiline
-            minRows={2}
-          />
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '1fr' }}>
+            <TextField
+              label="المبلغ"
+              type="number"
+              value={directPaymentForm.amount}
+              onChange={(e) => setDirectPaymentForm(prev => ({ ...prev, amount: e.target.value }))}
+              slotProps={{ htmlInput: { min: 0, step: 1 } }}
+              required
+            />
+            <TextField
+              select
+              label="طريقة الدفع"
+              value={directPaymentForm.paymentMethod}
+              onChange={(e) => setDirectPaymentForm(prev => ({ ...prev, paymentMethod: e.target.value }))}
+              slotProps={darkSelectSlotProps}
+              required
+            >
+              {loadSettings().paymentMethods.map((method) => (
+                <MenuItem key={method} value={method}>{method}</MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label="ملاحظات"
+              value={directPaymentForm.notes}
+              onChange={(e) => setDirectPaymentForm(prev => ({ ...prev, notes: e.target.value }))}
+              multiline
+              minRows={2}
+            />
+          </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDirectPaymentDialogOpen(false)}>إلغاء</Button>
+          <Button sx={{ mr: 'auto' }} onClick={() => setDirectPaymentDialogOpen(false)}>إلغاء</Button>
           <Button variant="contained" color="primary" startIcon={<FiCheckCircle />} onClick={() => {
             const amount = Number(directPaymentForm.amount)
             if (!directPaymentForm.paymentMethod) {

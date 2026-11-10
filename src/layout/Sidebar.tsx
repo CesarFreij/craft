@@ -1,7 +1,7 @@
 import { Box, Collapse, Divider, IconButton, Typography } from '@mui/material'
 import { motion } from 'framer-motion'
 import { FiChevronLeft } from 'react-icons/fi'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { 
   navItems
@@ -13,6 +13,7 @@ export const SIDEBAR_COLLAPSED_WIDTH = 96
 
 export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const location = useLocation()
+  const navigate = useNavigate()
   const [expandedSection, setExpandedSection] = useState<string | null>('inventory')
   const [activeParentSection, setActiveParentSection] = useState<string | null>('inventory')
 
@@ -42,7 +43,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
         return
       }
 
-      if (location.pathname === '/reports') {
+      if (location.pathname === '/reports' || location.pathname.startsWith('/reports/')) {
         setExpandedSection('reports')
         setActiveParentSection('reports')
         return
@@ -105,12 +106,15 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle:
             if (collapsed) {
               onToggle()
               setExpandedSection(item.key)
-              return
+            } else {
+              setExpandedSection((current) =>
+                current === item.key ? null : item.key
+              )
             }
 
-            setExpandedSection((current) =>
-              current === item.key ? null : item.key
-            )
+            if (item.submenu.length > 0) {
+              navigate(item.submenu[0].path)
+            }
           } : () => {
             setActiveParentSection(null)
           }}

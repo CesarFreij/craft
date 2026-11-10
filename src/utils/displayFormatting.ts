@@ -1,4 +1,29 @@
 import { loadSettings } from '../services/settingsService'
+
+export function roundNumber(value: number, decimals: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  const digits = Math.max(0, Math.min(6, Math.trunc(decimals)))
+  const factor = 10 ** digits
+  const rounded = Math.sign(value) * Math.round((Math.abs(value) + Number.EPSILON) * factor) / factor
+  return rounded === 0 ? 0 : rounded
+}
+
+export function normalizeRemainingAmount(value: number, decimals: number): number {
+  if (Math.abs(value) < 0.000001) {
+    return 0
+  }
+  return roundNumber(value, decimals)
+}
+
+export function roundNumberBySettings(value: number, kind: 'quantity' | 'price' | 'average' | 'currency' = 'price'): number {
+  const { quantityDecimals, priceDecimals, averageDecimals } = loadSettings()
+  const digits = kind === 'quantity' ? quantityDecimals : kind === 'average' ? averageDecimals : priceDecimals
+  return roundNumber(value, digits)
+}
+
 const ARABIC_DIGITS: Record<string, string> = {
   '٠': '0',
   '١': '1',
@@ -52,7 +77,7 @@ export function formatDisplayNumber(value: number | string | null | undefined, d
   return toEnglishDigits(formatted)
 }
 
-export function formatNumberBySettings(value: number | string | null | undefined, kind: 'quantity' | 'price' | 'average' = 'price'): string {
+export function formatNumberBySettings(value: number | string | null | undefined, kind: 'quantity' | 'price' | 'average' | 'currency' = 'price'): string {
   const { quantityDecimals, priceDecimals, averageDecimals } = loadSettings()
   const digits = kind === 'quantity' ? quantityDecimals : kind === 'average' ? averageDecimals : priceDecimals
   return formatDisplayNumber(value, digits)
@@ -60,7 +85,7 @@ export function formatNumberBySettings(value: number | string | null | undefined
 
 export function formatCurrencyValue(
   value: number | string | null | undefined,
-  kindOrDigits: 'quantity' | 'price' | 'average' | number = 'price',
+  kindOrDigits: 'quantity' | 'price' | 'average' | 'currency' | number = 'price',
 ): string {
   const { currencySymbol, quantityDecimals, priceDecimals, averageDecimals } = loadSettings()
 

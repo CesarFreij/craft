@@ -7,7 +7,7 @@ import { SearchField } from '../components/ui/SearchField'
 import { SectionCard } from '../components/ui/SectionCard'
 import { PageHeader } from '../components/ui/PageHeader'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatDateDMY, formatNumberBySettings, getLocalDateTimeString, toInternalDate } from '../utils/displayFormatting'
+import { formatDateDMY, formatNumberBySettings, getLocalDateTimeString, roundNumberBySettings, toInternalDate } from '../utils/displayFormatting'
 
 function priceNum(value: number | undefined): string {
   return formatNumberBySettings(Number(value ?? 0), 'price')
@@ -200,7 +200,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
 
       '& .MuiDialogTitle-root': {
         color: 'rgba(255, 255, 255, 0.96)',
@@ -630,7 +630,7 @@ type MovementRow = {
 
 type MovementLineItem = {
   materialId: string
-  quantity: number | ''
+  quantity: number | string
   unit: string
   notes?: string
 }
@@ -758,9 +758,10 @@ export default function MovementsPage() {
     setOpenDetails(true)
   }, [])
 
-  const filteredRows = movements
-    .filter((row) => !search || row.reference?.includes(search))
-    .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+  const filteredMovements = movements.filter((row) =>
+    !search || (row.reference ?? '').toLowerCase().includes(search.toLowerCase()),
+  )
+  const filteredRows = filteredMovements.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
 
   const getMovementParty = (row: MovementRow): string => {
     if (row.partyName) {
@@ -816,7 +817,7 @@ export default function MovementsPage() {
           {loading ? (
             <Box sx={{ display: 'grid', placeItems: 'center', p: 4 }}><CircularProgress /></Box>
           ) : (
-            <Table sx={{ minWidth: 1000, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', borderCollapse: 'collapse', tableLayout: 'auto' }}>
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ fontWeight: 700, textAlign: 'center', verticalAlign: 'middle' }}>التاريخ</TableCell>
@@ -835,7 +836,7 @@ export default function MovementsPage() {
                     <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>{formatDateDMY(row.date)}</TableCell>
                     <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle', fontWeight: 600 }}>{row.reference}</TableCell>
                     <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>
-                      <Box component="span" sx={{ display: 'inline-flex', px: 1.2, py: 0.6, borderRadius: 999, background: row.type === 'sale' ? 'rgba(248, 113, 113, 0.15)' : row.type === 'purchase' ? 'rgba(96, 165, 250, 0.16)' : row.type === 'production' || row.type === 'production_in' || row.type === 'production_out' ? 'rgba(34, 211, 238, 0.14)' : row.type === 'transfer' || row.type === 'transfer_in' || row.type === 'transfer_out' ? 'rgba(129, 140, 248, 0.16)' : 'rgba(192, 132, 252, 0.15)', color: row.type === 'sale' ? '#FCA5A5' : row.type === 'purchase' ? '#93C5FD' : row.type === 'production' || row.type === 'production_in' || row.type === 'production_out' ? '#67E8F9' : row.type === 'transfer' || row.type === 'transfer_in' || row.type === 'transfer_out' ? '#C7D2FE' : '#D8B4FE', border: '1px solid rgba(255, 255, 255, 0.10)', fontSize: 12, fontWeight: 700, textAlign: 'center' }}>
+                      <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', px: 1.25, py: 0.4, borderRadius: 999, fontSize: '0.85em', fontWeight: 400, whiteSpace: 'nowrap', background: row.type === 'sale' ? 'rgba(248, 113, 113, 0.15)' : row.type === 'purchase' ? 'rgba(96, 165, 250, 0.16)' : row.type === 'production' || row.type === 'production_in' || row.type === 'production_out' ? 'rgba(34, 211, 238, 0.14)' : row.type === 'transfer' || row.type === 'transfer_in' || row.type === 'transfer_out' ? 'rgba(129, 140, 248, 0.16)' : 'rgba(192, 132, 252, 0.15)', color: row.type === 'sale' ? '#FCA5A5' : row.type === 'purchase' ? '#93C5FD' : row.type === 'production' || row.type === 'production_in' || row.type === 'production_out' ? '#67E8F9' : row.type === 'transfer' || row.type === 'transfer_in' || row.type === 'transfer_out' ? '#C7D2FE' : '#D8B4FE', border: '1px solid rgba(255, 255, 255, 0.10)', textAlign: 'center' }}>
                         {getMovementTypeLabel(row.type, row.reference)}
                       </Box>
                     </TableCell>
@@ -854,7 +855,7 @@ export default function MovementsPage() {
         </Box>
 
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 2 }}>
-          <TablePagination component="div" count={movements.length} page={page} onPageChange={(_, newPage) => setPage(newPage)} rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(Number(e.target.value)); setPage(0) }} />
+          <TablePagination component="div" count={filteredMovements.length} page={page} onPageChange={(_, newPage) => setPage(newPage)} rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(Number(e.target.value)); setPage(0) }} labelRowsPerPage="الصفوف:" />
         </Box>
       </SectionCard>
 
@@ -875,6 +876,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
   const [loadingReference, setLoadingReference] = useState(false)
   const [formError, setFormError] = useState('')
   const dialogContentRef = useRef<HTMLDivElement | null>(null)
+  const activeWarehouses = warehouses.filter((warehouse) => warehouse.status === 'active')
 
   const handleClose = useCallback(() => {
     setFormError('')
@@ -974,7 +976,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
     }
 
     const invalid = items.find(
-      (item) => !item.materialId || item.quantity === '' || Number.isNaN(Number(item.quantity)) || Number(item.quantity) <= 0,
+      (item) => !item.materialId || item.quantity === '' || !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0,
     )
     if (invalid) {
       showFormError('تأكد من اختيار جميع المواد وإدخال كميات أكبر من صفر.')
@@ -998,7 +1000,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
       status: 'completed',
       items: items.map((item) => ({
         materialId: item.materialId,
-        quantity: Number(item.quantity),
+        quantity: roundNumberBySettings(Number(item.quantity), 'quantity'),
         unit: item.unit,
         notes: item.notes?.trim(),
       })),
@@ -1051,7 +1053,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
             slotProps={darkSelectSlotProps}
           >
             <MenuItem value="">اختر المخزن المصدر</MenuItem>
-            {warehouses
+            {activeWarehouses
               .filter((warehouse) => warehouse.id !== toWarehouse)
               .map((warehouse) => <MenuItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</MenuItem>)}
           </TextField>
@@ -1066,7 +1068,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
             slotProps={darkSelectSlotProps}
           >
             <MenuItem value="">اختر المخزن الهدف</MenuItem>
-            {warehouses
+            {activeWarehouses
               .filter((warehouse) => warehouse.id !== fromWarehouse)
               .map((warehouse) => <MenuItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</MenuItem>)}
           </TextField>
@@ -1083,7 +1085,7 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
 
         <SectionCard title="مواد التحويل">
           <Box sx={{ overflowX: 'auto' }}>
-            <Table sx={{ minWidth: 850, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', borderCollapse: 'collapse', tableLayout: 'auto' }}>
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ width: '34%', textAlign: 'center', fontWeight: 700 }}>المادة</TableCell>
@@ -1123,10 +1125,15 @@ function NewMovementDialog({ open, onClose, warehouses, materials }: { open: boo
                       <TextField
                         type="number"
                         value={item.quantity}
-                        onChange={(e) => updateItem(index, { quantity: e.target.value === '' ? '' : Number(e.target.value) })}
+                        onChange={(e) => updateItem(index, { quantity: e.target.value })}
+                        onBlur={() => {
+                          if (item.quantity !== '' && Number.isFinite(Number(item.quantity))) {
+                            updateItem(index, { quantity: String(roundNumberBySettings(Number(item.quantity), 'quantity')) })
+                          }
+                        }}
                         fullWidth
                         size="small"
-                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 'any' } }}
                       />
                     </TableCell>
                     <TableCell>
@@ -1176,8 +1183,8 @@ function MovementDetailsDialog({ open, onClose, details }: { open: boolean; onCl
             <Box>من مخزن: {getMovementWarehouseLabel(details.fromWarehouseName)}</Box>
             <Box>إلى مخزن: {getMovementWarehouseLabel(details.toWarehouseName)}</Box>
             <Box>الجهة: {details.partyName || ''}</Box>
-            <Box>
-              <Table sx={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+            <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', borderCollapse: 'collapse', tableLayout: 'auto' }}>
                 <TableHead>
                   <TableRow>
                     <TableCell sx={{ textAlign: 'center', verticalAlign: 'middle' }}>المادة</TableCell>

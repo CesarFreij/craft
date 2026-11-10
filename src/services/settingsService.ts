@@ -185,7 +185,7 @@ export function normalizeSettings(partial: Partial<AppSettings> | null | undefin
     salesPrice1Name: normalizeString(source.salesPrice1Name) || defaultSettings.salesPrice1Name,
     salesPrice2Name: normalizeString(source.salesPrice2Name) || defaultSettings.salesPrice2Name,
     salesPrice3Name: normalizeString(source.salesPrice3Name) || defaultSettings.salesPrice3Name,
-    allowNegativeStock: false,
+    allowNegativeStock: source.allowNegativeStock === true,
     backupDirectory: normalizeString(source.backupDirectory),
     lastBackupAt: normalizeString(source.lastBackupAt),
     autoBackupOnExit: source.autoBackupOnExit === true,

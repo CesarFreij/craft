@@ -29,6 +29,7 @@ import {
   FiTrash2,
   FiUpload,
 } from 'react-icons/fi'
+import { WarehousesPage } from './WarehousesPage'
 import { useThemeSettings } from '../contexts/ThemeContext'
 import { useNotifications } from '../contexts/useNotifications'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -87,6 +88,7 @@ type SettingsSection =
   | 'display'
   | 'sales'
   | 'payments'
+  | 'warehouses'
   | 'data'
 
 const craftPageGlassSx = {
@@ -289,11 +291,19 @@ const sectionTitles: Record<SettingsSection, string> = {
   display: 'إعدادات العرض والخط',
   sales: 'المبيعات',
   payments: 'طرق الدفع',
+  warehouses: 'المخازن',
   data: 'إدارة البيانات',
 }
 
 function normalizeSettingsSection(value: string | null): SettingsSection {
-  if (value === 'company' || value === 'display' || value === 'sales' || value === 'payments' || value === 'data') {
+  if (
+    value === 'company' ||
+    value === 'display' ||
+    value === 'sales' ||
+    value === 'payments' ||
+    value === 'warehouses' ||
+    value === 'data'
+  ) {
     return value
   }
   return 'general'
@@ -397,69 +407,15 @@ export function SettingsPage() {
   }, [])
 
   const updateSettingsDraft = (patch: Partial<AppSettings>) => {
-    setSettings((current) => ({
-      ...current,
-      ...patch,
-    }))
+    const saved = saveSettings({ ...loadSettings(), ...patch })
+    setSettings(saved)
   }
 
   const handleFontSizeChange = (event: SelectChangeEvent) => {
     const nextFontSize = event.target.value as AppSettings['fontSize']
-    setSettings((current) => ({ ...current, fontSize: nextFontSize }))
-    setFontSize(nextFontSize)
-  }
-
-  const saveGeneralSettings = () => {
-    const saved = saveSettings({
-      ...loadSettings(),
-      currencyName: settings.currencyName,
-      currencySymbol: settings.currencySymbol,
-      quantityDecimals: settings.quantityDecimals,
-      priceDecimals: settings.priceDecimals,
-      averageDecimals: settings.averageDecimals,
-    })
-
-    setSettings((current) => ({
-      ...current,
-      currencyName: saved.currencyName,
-      currencySymbol: saved.currencySymbol,
-      quantityDecimals: saved.quantityDecimals,
-      priceDecimals: saved.priceDecimals,
-      averageDecimals: saved.averageDecimals,
-    }))
-    success('تم حفظ الإعدادات العامة بنجاح.')
-  }
-
-  const saveSalesSettings = () => {
-    const saved = saveSettings({
-      ...loadSettings(),
-      defaultSalesPriceType: settings.defaultSalesPriceType,
-      salesPrice1Name: settings.salesPrice1Name,
-      salesPrice2Name: settings.salesPrice2Name,
-      salesPrice3Name: settings.salesPrice3Name,
-    })
-
-    setSettings((current) => ({
-      ...current,
-      defaultSalesPriceType: saved.defaultSalesPriceType,
-      salesPrice1Name: saved.salesPrice1Name,
-      salesPrice2Name: saved.salesPrice2Name,
-      salesPrice3Name: saved.salesPrice3Name,
-    }))
-    success('تم حفظ إعدادات المبيعات بنجاح.')
-  }
-
-  const savePaymentSettings = () => {
-    const saved = saveSettings({
-      ...loadSettings(),
-      paymentMethods: settings.paymentMethods,
-    })
-
-    setSettings((current) => ({
-      ...current,
-      paymentMethods: saved.paymentMethods,
-    }))
-    success('تم حفظ طرق الدفع بنجاح.')
+    const saved = saveSettings({ ...loadSettings(), fontSize: nextFontSize })
+    setSettings(saved)
+    setFontSize(saved.fontSize)
   }
 
   const handleCompanyFieldChange =
@@ -922,7 +878,7 @@ export function SettingsPage() {
     </SectionCard>
   )
 
-  const renderNumbersSection = () => (
+const renderNumbersSection = () => (
     <SectionCard
       title="العملة والأرقام"
       subtitle="العملة وعدد المنازل العشرية المستخدمة في العرض"
@@ -1064,15 +1020,6 @@ export function SettingsPage() {
         </Box>
 
       </Paper>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <Button
-          variant="contained"
-          onClick={saveGeneralSettings}
-          sx={primaryButtonSx}
-        >
-          حفظ إعدادات العملة والأرقام 
-        </Button>
-      </Box>
     </SectionCard>
   )
 
@@ -1197,15 +1144,6 @@ export function SettingsPage() {
         </Box>
 
       </Paper>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <Button
-          variant="contained"
-          onClick={saveSalesSettings}
-          sx={primaryButtonSx}
-        >
-          حفظ إعدادات المبيعات
-        </Button>
-      </Box>
     </SectionCard>
   )
 
@@ -1235,7 +1173,7 @@ export function SettingsPage() {
           />
 
           <Button
-            variant="contained"
+            variant="outlined"
             startIcon={<FiPlus />}
             onClick={addPaymentMethod}
             sx={{
@@ -1434,17 +1372,7 @@ export function SettingsPage() {
             )
           })}
         </Box>
-
       </Paper>
-      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-        <Button
-          variant="contained"
-          onClick={savePaymentSettings}
-          sx={primaryButtonSx}
-        >
-          حفظ طرق الدفع
-        </Button>
-      </Box>
     </SectionCard>
   )
 
@@ -1476,7 +1404,7 @@ export function SettingsPage() {
               <Typography
                 sx={{
                   mt: 0.35,
-                  fontSize: 12,
+                  fontSize: 13,
                   color: 'rgba(255,255,255,.54)',
                 }}
               >
@@ -1492,7 +1420,7 @@ export function SettingsPage() {
             sx={{ alignItems: 'stretch' }}
           >
             <TextField
-              sx={{ ...textFieldSx, flex: 1 }}
+              sx={{ ...textFieldSx, flex: 1, maxWidth: "77%" }}
               fullWidth
               label="مجلد النسخ الاحتياطي"
               value={settings.backupDirectory}
@@ -1515,7 +1443,7 @@ export function SettingsPage() {
               onClick={() => setBackupCreateConfirmOpen(true)}
               sx={[primaryButtonSx, { borderRadius: '18px' }]}
             >
-              إنشاء نسخة الآن
+              إنشاء نسخة
             </Button>
           </Stack>
 
@@ -1523,6 +1451,7 @@ export function SettingsPage() {
             sx={{
               height: '1px',
               background: 'rgba(255,255,255,.09)',
+              my: 2.5,
             }}
           />
 
@@ -1565,20 +1494,21 @@ export function SettingsPage() {
               </InputLabel>
               <Select
                 labelId="auto-backup-mode-label"
+                sx={{ maxWidth: '77%' }}
                 value={settings.autoBackupMode}
                 label="طريقة النسخ التلقائي"
                 MenuProps={selectMenuProps}
                 onChange={handleAutoBackupModeChange}
               >
                 <MenuItem value="new">إنشاء نسخة جديدة عند كل خروج</MenuItem>
-                <MenuItem value="replace">استبدال آخر نسخة تلقائية</MenuItem>
+                <MenuItem value="replace">استبدال آخر نسخة تلقائياً</MenuItem>
               </Select>
             </FormControl>
           </Box>
 
           <Typography
             sx={{
-              fontSize: 12,
+              fontSize: 13,
               lineHeight: 1.8,
               color: 'rgba(255,255,255,.54)',
             }}
@@ -1587,9 +1517,14 @@ export function SettingsPage() {
             حذف أو استبدال أي نسخة احتياطية أنشأها المستخدم يدوياً.
           </Typography>
 
-        </Paper>
+          <Box
+            sx={{
+              height: '1px',
+              background: 'rgba(255,255,255,.09)',
+              my: 2.5,
+            }}
+          />
 
-        <Paper className="craft-inner-panel" elevation={0} sx={innerPanelSx}>
           <Typography
             sx={{
               fontWeight: 850,
@@ -1605,7 +1540,7 @@ export function SettingsPage() {
             sx={{ alignItems: 'stretch' }}
           >
             <TextField
-              sx={{ ...textFieldSx, flex: 1 }}
+              sx={{ ...textFieldSx, flex: 1, maxWidth: "77%" }}
               fullWidth
               label="ملف النسخة الاحتياطية"
               value={backupFilePath}
@@ -1646,11 +1581,10 @@ export function SettingsPage() {
                   },
                 }}
               >
-                استعادة النسخة
+                استعادة نسخة
               </Button>
             </Box>
           </Stack>
-
         </Paper>
 
         <Paper
@@ -1688,7 +1622,7 @@ export function SettingsPage() {
                 sx={{
                   mt: 0.4,
                   color: 'rgba(255,255,255,.80)',
-                  fontSize: 12.5,
+                  fontSize: 13,
                   lineHeight: 1.8,
                 }}
               >
@@ -1734,13 +1668,18 @@ export function SettingsPage() {
         return renderSalesSection()
       case 'payments':
         return renderPaymentsSection()
+      case 'warehouses':
+        return <WarehousesPage embedded={true} />
       case 'data':
         return renderDataSection()
       case 'general':
       default:
         return (
-          <Stack spacing={2}>
+          <Stack spacing={3}>
             {renderNumbersSection()}
+            {renderPaymentsSection()}
+            {renderSalesSection()}
+            {renderDisplaySection()}
           </Stack>
         )
     }

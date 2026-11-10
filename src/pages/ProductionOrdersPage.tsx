@@ -11,6 +11,7 @@ import {
   IconButton,
   InputAdornment,
   MenuItem,
+  TableContainer,
   TablePagination,
   TextField,
   Tooltip,
@@ -19,7 +20,7 @@ import {
 import { FiCalendar, FiPlus, FiEye, FiEdit2, FiTrash2 } from 'react-icons/fi'
 import { PageHeader } from '../components/ui/PageHeader'
 import { SectionCard } from '../components/ui/SectionCard'
-import { inventoryService, type WarehouseRecord } from '../services/inventoryService'
+import { inventoryService, type StockBalanceRecord, type WarehouseRecord } from '../services/inventoryService'
 import { materialsService, type MaterialRecord } from '../services/materialsService'
 import { loadCompanyPrintSettings } from '../services/companyPrintSettingsService'
 import {
@@ -30,7 +31,7 @@ import {
 } from '../services/manufacturingService'
 import type { InvoicePrintData } from '../types/invoicePrint'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatDateDMY, getLocalDateYMD, toInternalDate, formatNumberBySettings } from '../utils/displayFormatting'
+import { formatDateDMY, getLocalDateYMD, toInternalDate, formatNumberBySettings, roundNumberBySettings } from '../utils/displayFormatting'
 import { useNavigate } from 'react-router-dom'
 import { useNotifications } from '../contexts/useNotifications'
 
@@ -65,9 +66,6 @@ const darkSelectSlotProps = {
       slotProps: {
         paper: {
           sx: darkPopupPaperSx,
-        },
-        htmlInput: { 
-          min: 0, step: 1 
         },
       },
     },
@@ -222,7 +220,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
 
       '& .MuiDialogTitle-root': {
         color: 'rgba(255, 255, 255, 0.96)',
@@ -234,6 +232,11 @@ const craftDialogSlotProps = {
 
       '& .MuiDialogContent-root': {
         color: 'rgba(255, 255, 255, 0.88)',
+        minWidth: 0,
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+        overflowX: 'hidden',
+        gridTemplateColumns: 'minmax(0, 1fr)',
       },
 
       '& .MuiTypography-root': {
@@ -383,8 +386,10 @@ const craftErrorAlertSx = {
 
 const craftHtmlTableSx = {
   width: '100%',
+  minWidth: 'max-content',
   borderCollapse: 'collapse',
   background: 'transparent',
+  tableLayout: 'auto',
   border: '1px solid rgba(255, 255, 255, 0.18)',
   '& thead': {
     background: 'rgba(255, 255, 255, 0.055)',
@@ -395,16 +400,31 @@ const craftHtmlTableSx = {
   '& tbody tr:hover': {
     background: 'rgba(255, 255, 255, 0.055)',
   },
+  '& td, & th': {
+    border: '1px solid rgba(255, 255, 255, 0.18)',
+    whiteSpace: 'nowrap',
+    wordBreak: 'normal',
+    overflowWrap: 'normal',
+    boxSizing: 'border-box',
+    verticalAlign: 'middle',
+    textAlign: 'center',
+  },
   '& th': {
     color: 'rgba(255, 255, 255, 0.94)',
-    border: '1px solid rgba(255, 255, 255, 0.18)',
     fontWeight: 700,
   },
   '& td': {
     color: 'rgba(255, 255, 255, 0.88)',
-    border: '1px solid rgba(255, 255, 255, 0.18)',
     fontWeight: 400,
   },
+}
+
+const tableScrollSx = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  overflowX: 'auto',
+  display: 'block',
 }
 
 const craftInfoAlertSx = {
@@ -420,6 +440,27 @@ const craftInfoAlertSx = {
     fontWeight: 600,
   },
 }
+
+const blendedFieldSx = {
+  width: '100%',
+  '& .MuiOutlinedInput-root': {
+    background: 'transparent',
+    borderRadius: '8px',
+    '& fieldset': {
+      borderColor: 'rgba(255, 255, 255, 0.12)',
+    },
+    '&:hover fieldset': {
+      borderColor: 'rgba(255, 255, 255, 0.25)',
+    },
+    '&.Mui-focused fieldset': { borderColor: '#67E8F9 !important' },
+  },
+  '& input': { textAlign: 'center' },
+}
+
+const materialFieldSx = { ...blendedFieldSx, minWidth: 170 }
+const unitFieldSx = { ...blendedFieldSx, minWidth: 75 }
+const quantityFieldSx = { ...blendedFieldSx, minWidth: 105 }
+const warehouseFieldSx = { ...blendedFieldSx, minWidth: 120 }
 
 type OrderFormItem = {
   id: string
@@ -461,35 +502,91 @@ function formatMaterialLabel(material: MaterialRecord): string {
   return `${material.materialNumber} - ${material.name}`
 }
 
-function roundToTwo(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0
-  }
-
-  return Math.round((value + Number.EPSILON) * 100) / 100
-}
-
 function formatNumber(value: number | string | null | undefined): string {
   return formatNumberBySettings(value, 'quantity')
 }
 
-function formatEditableNumber(value: number | string | null | undefined): string {
-  const numericValue = Number(value ?? 0)
-  return Number.isFinite(numericValue) ? roundToTwo(numericValue).toFixed(2) : '0.00'
+function roundQuantity(value: number): number {
+  return roundNumberBySettings(value, 'quantity')
+}
+
+function roundCurrency(value: number): number {
+  return roundNumberBySettings(value, 'currency')
+}
+
+function formatEditableQuantity(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? String(roundQuantity(numericValue)) : ''
+}
+
+function formatEditableCurrency(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? String(roundCurrency(numericValue)) : ''
+}
+
+function editableNumberString(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return ''
+  }
+
+  const numericValue = Number(value)
+  return Number.isFinite(numericValue) ? String(numericValue) : ''
+}
+
+function formatCurrency(value: number | string | null | undefined): string {
+  return formatNumberBySettings(value, 'currency')
+}
+
+function getMaterialUnitCost(
+  material: MaterialRecord | undefined,
+  warehouseId: string,
+  balances: StockBalanceRecord[],
+): number {
+  if (!material) {
+    return 0
+  }
+
+  const materialBalances = balances.filter((balance) => balance.materialNumber === material.materialNumber)
+  const warehouseCost = materialBalances.find((balance) =>
+    balance.warehouseId === warehouseId &&
+    Number.isFinite(balance.averageCost) &&
+    balance.averageCost > 0,
+  )?.averageCost
+  const weightedBalances = materialBalances.filter((balance) =>
+    Number.isFinite(balance.quantity) &&
+    balance.quantity > 0 &&
+    Number.isFinite(balance.averageCost) &&
+    balance.averageCost > 0,
+  )
+  const totalQuantity = weightedBalances.reduce((sum, balance) => sum + balance.quantity, 0)
+  const weightedCost = totalQuantity > 0
+    ? weightedBalances.reduce((sum, balance) => sum + balance.quantity * balance.averageCost, 0) / totalQuantity
+    : Number.NaN
+  const fallbackCost = Number(material.costPrice ?? 0)
+
+  if (warehouseCost !== undefined) {
+    return warehouseCost
+  }
+
+  return Number.isFinite(weightedCost) ? weightedCost : Number.isFinite(fallbackCost) ? fallbackCost : 0
 }
 
 function formatSignedNumber(value: number | string | null | undefined): string {
-  const numericValue = roundToTwo(Number(value ?? 0))
+  const numericValue = roundQuantity(Number(value ?? 0))
 
-  if (!Number.isFinite(numericValue) || Math.abs(numericValue) < 0.000001) {
-    return '0.00'
+  if (!Number.isFinite(numericValue) || numericValue === 0) {
+    return formatNumber(0)
   }
 
   return `${numericValue > 0 ? '+' : ''}${formatNumberBySettings(numericValue, 'quantity')}`
-}
-
-function nearlyEqual(a: number, b: number): boolean {
-  return Math.abs(a - b) < 0.000001
 }
 
 function flattenStockableMaterials(nodes: MaterialRecord[]): MaterialRecord[] {
@@ -631,6 +728,7 @@ export function ProductionOrdersPage() {
   const [orders, setOrders] = useState<ProductionOrderRecord[]>([])
   const [recipes, setRecipes] = useState<ManufacturingRecipeRecord[]>([])
   const [materials, setMaterials] = useState<MaterialRecord[]>([])
+  const [stockBalances, setStockBalances] = useState<StockBalanceRecord[]>([])
   const [warehouses, setWarehouses] = useState<WarehouseRecord[]>([])
   const [errorMessage, setErrorMessage] = useState('')
   const [newOrderOpen, setNewOrderOpen] = useState(false)
@@ -642,36 +740,10 @@ export function ProductionOrdersPage() {
   const [form, setForm] = useState<OrderFormState>(emptyFormState)
   const [deleteErrorMessage, setDeleteErrorMessage] = useState('')
   const [selectedRecipe, setSelectedRecipe] = useState<ManufacturingRecipeRecord | null>(null)
-  const [detailsRecipe, setDetailsRecipe] = useState<ManufacturingRecipeRecord | null>(null)
   const [isRecipeLoading, setIsRecipeLoading] = useState(false)
   const [page, setPage] = useState(0)
   const [rowsPerPage, setRowsPerPage] = useState(10)
-
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
-  const orderDialogContentRef = useRef<HTMLDivElement | null>(null)
-
-  const scrollOrderDialogToTop = useCallback(() => {
-    const scrollToTop = () => {
-      const content = orderDialogContentRef.current
-      if (!content) return
-
-      content.scrollTop = 0
-      content.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
-    }
-
-    window.requestAnimationFrame(() => {
-      scrollToTop()
-      window.requestAnimationFrame(scrollToTop)
-    })
-
-    window.setTimeout(scrollToTop, 80)
-  }, [])
-
-  useEffect(() => {
-    if (!newOrderOpen || !errorMessage) return
-    scrollOrderDialogToTop()
-  }, [newOrderOpen, errorMessage, scrollOrderDialogToTop])
-
   const isEditMode = Boolean(editingOrderId)
   const dialogOrderNumber = isEditMode ? editingOrderNumber : orderNumberPreview
 
@@ -692,16 +764,27 @@ export function ProductionOrdersPage() {
       productName: selectedOrder.productName,
       productQuantity: selectedOrder.actualOutputQuantity,
       notes: selectedOrder.notes,
-      items: (selectedOrder.inputs ?? []).map((input) => ({
-        id: input.id,
-        name: input.materialName,
-        unit: input.unit || '',
-        quantity: input.actualQuantity,
-        plannedQuantity: input.plannedQuantity,
-        actualQuantity: input.actualQuantity,
-        cost: input.totalCost,
-      })),
-      subtotal: (selectedOrder.inputs ?? []).reduce((sum, input) => sum + Number(input.totalCost ?? 0), 0),
+      items: [
+        ...(selectedOrder.inputs ?? []).map((input) => ({
+          id: input.id,
+          name: input.materialName,
+          unit: input.unit || '',
+          quantity: input.actualQuantity,
+          plannedQuantity: input.plannedQuantity,
+          actualQuantity: input.actualQuantity,
+          cost: input.totalCost,
+        })),
+        {
+          id: `${selectedOrder.id}-labor`,
+          name: 'تكلفة الأجور',
+          unit: '',
+          quantity: 0,
+          plannedQuantity: 0,
+          actualQuantity: 0,
+          cost: Number(selectedOrder.laborCost ?? 0),
+        },
+      ],
+      subtotal: roundCurrency((selectedOrder.inputs ?? []).reduce((sum, input) => sum + Number(input.totalCost ?? 0), 0) + Number(selectedOrder.laborCost ?? 0)),
       discount: 0,
       total: Number(selectedOrder.totalProductionCost ?? 0),
       productionMode: true,
@@ -727,19 +810,68 @@ export function ProductionOrdersPage() {
     () => flattenStockableMaterials(materials),
     [materials],
   )
+  const availableRecipes = useMemo(
+    () => recipes.filter((recipe) => recipe.status === 'active' || recipe.id === form.recipeId),
+    [recipes, form.recipeId],
+  )
+  const estimatedMaterialCost = roundCurrency(form.items.reduce((sum, item) => {
+    const quantity = Number(item.actualQuantity || 0)
+    const material = manufacturingMaterials.find((entry) => entry.id === item.materialId)
+    return sum + roundCurrency((Number.isFinite(quantity) ? quantity : 0) * getMaterialUnitCost(material, item.warehouseId, stockBalances))
+  }, 0))
+  const estimatedTotalCost = roundCurrency(estimatedMaterialCost + Number(form.laborCost || 0))
+  const actualOutputQuantity = Number(form.actualOutputQuantity)
+  const estimatedUnitProductionCost = actualOutputQuantity > 0
+    ? roundCurrency(estimatedTotalCost / actualOutputQuantity)
+    : ''
+
+  const handleAddMaterial = () => {
+    setForm((current) => ({
+      ...current,
+      items: [
+        ...current.items,
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          materialId: '',
+          warehouseId: current.defaultInputWarehouseId,
+          plannedQuantity: '0',
+          actualQuantity: '',
+          actualQuantityEdited: true,
+          notes: '',
+          unit: '',
+        },
+      ],
+    }))
+  }
+
+  const handleResetMaterialsToRecipe = () => {
+    setForm((current) => ({
+      ...current,
+      items: syncRecipeItems(
+        selectedRecipe,
+        current.plannedOutputQuantity,
+        current.actualOutputQuantity,
+        [],
+        current.defaultInputWarehouseId,
+        false,
+      ),
+    }))
+  }
 
   const loadData = async () => {
-    const [allOrders, allRecipes, allMaterials, allWarehouses] = await Promise.all([
+    const [allOrders, allRecipes, allMaterials, allWarehouses, allBalances] = await Promise.all([
       manufacturingService.listProductionOrders(),
       manufacturingService.listRecipes(),
       materialsService.listMaterials(),
       inventoryService.listWarehouses(),
+      inventoryService.getBalancesByWarehouse(null),
     ])
 
     setOrders(allOrders)
     setRecipes(allRecipes)
     setMaterials(allMaterials)
     setWarehouses(allWarehouses)
+    setStockBalances(allBalances)
   }
 
   useEffect(() => {
@@ -784,11 +916,11 @@ export function ProductionOrdersPage() {
         ? actualOutput / standardOutput
         : plannedFactor
 
-    return recipe.items.map((item, index) => {
+    const recipeItems = recipe.items.map((item, index) => {
       const previousItem = currentItems.find((entry) => entry.materialId === item.materialId)
       const recipeQuantity = Number(item.quantity ?? 0)
-      const plannedQuantity = roundToTwo(recipeQuantity * plannedFactor)
-      const calculatedActualQuantity = roundToTwo(recipeQuantity * actualFactor)
+      const plannedQuantity = roundQuantity(recipeQuantity * plannedFactor)
+      const calculatedActualQuantity = roundQuantity(recipeQuantity * actualFactor)
 
       const keepEditedActual =
         preserveEditedActual &&
@@ -799,15 +931,21 @@ export function ProductionOrdersPage() {
         recipeItemId: item.id,
         materialId: item.materialId,
         warehouseId: previousItem?.warehouseId || defaultWarehouseId || '',
-        plannedQuantity: formatEditableNumber(plannedQuantity),
+        plannedQuantity: formatEditableQuantity(plannedQuantity),
         actualQuantity: keepEditedActual
-          ? previousItem?.actualQuantity ?? formatEditableNumber(calculatedActualQuantity)
-          : formatEditableNumber(calculatedActualQuantity),
+          ? previousItem?.actualQuantity ?? formatEditableQuantity(calculatedActualQuantity)
+          : formatEditableQuantity(calculatedActualQuantity),
         actualQuantityEdited: keepEditedActual,
         notes: previousItem?.notes ?? item.notes ?? '',
         unit: item.unit || previousItem?.unit || '',
       }
     })
+    const recipeMaterialIds = new Set(recipe.items.map((item) => item.materialId))
+    const additionalItems = currentItems.filter(
+      (item) => !item.recipeItemId && !recipeMaterialIds.has(item.materialId),
+    )
+
+    return [...recipeItems, ...additionalItems]
   }
 
   const handleRecipeChange = async (recipeOption: ManufacturingRecipeRecord | null) => {
@@ -909,90 +1047,26 @@ export function ProductionOrdersPage() {
 
       setSelectedRecipe(recipe)
 
-      const standardOutput = Number(recipe.standardOutputQuantity)
-      const plannedOutput = Number(order.plannedOutputQuantity)
-      const actualOutput = Number(order.actualOutputQuantity)
-
-      const hasValidStandard =
-        Number.isFinite(standardOutput) &&
-        standardOutput > 0
-
-      const plannedFactor =
-        hasValidStandard &&
-        Number.isFinite(plannedOutput) &&
-        plannedOutput > 0
-          ? plannedOutput / standardOutput
-          : 1
-
-      const actualFactor =
-        hasValidStandard &&
-        Number.isFinite(actualOutput) &&
-        actualOutput > 0
-          ? actualOutput / standardOutput
-          : plannedFactor
-
       const nextForm: OrderFormState = {
         recipeId: order.recipeId,
         outputWarehouseId: order.outputWarehouseId,
-        plannedOutputQuantity: formatEditableNumber(order.plannedOutputQuantity),
-        actualOutputQuantity: formatEditableNumber(order.actualOutputQuantity),
-        laborCost: formatEditableNumber(order.laborCost ?? 0),
+        plannedOutputQuantity: editableNumberString(order.plannedOutputQuantity),
+        actualOutputQuantity: editableNumberString(order.actualOutputQuantity),
+        laborCost: editableNumberString(order.laborCost ?? 0),
         date: order.date,
         notes: order.notes ?? '',
         defaultInputWarehouseId: order.inputs?.[0]?.warehouseId ?? '',
-        items: (order.inputs ?? []).map((input) => {
-          const recipeItem = recipe.items?.find(
-            (item) =>
-              (input.recipeItemId && item.id === input.recipeItemId) ||
-              item.materialId === input.materialId,
-          )
-
-          if (!recipeItem) {
-            return {
-              id: input.id,
-              recipeItemId: input.recipeItemId ?? undefined,
-              materialId: input.materialId,
-              warehouseId: input.warehouseId,
-              plannedQuantity: formatEditableNumber(input.plannedQuantity),
-              actualQuantity: formatEditableNumber(input.actualQuantity),
-              actualQuantityEdited: true,
-              notes: input.notes ?? '',
-              unit: input.unit || '',
-            }
-          }
-
-          const recipeQuantity = Number(recipeItem.quantity ?? 0)
-          const expectedPlanned = roundToTwo(recipeQuantity * plannedFactor)
-          const expectedActual = roundToTwo(recipeQuantity * actualFactor)
-          const storedPlanned = roundToTwo(Number(input.plannedQuantity ?? 0))
-          const storedActual = roundToTwo(Number(input.actualQuantity ?? 0))
-
-          // Legacy records created by the old logic often have
-          // actual consumption exactly equal to planned consumption,
-          // even when actual output differs from planned output.
-          const looksLikeLegacyAutoActual =
-            nearlyEqual(storedActual, storedPlanned) &&
-            nearlyEqual(storedPlanned, expectedPlanned) &&
-            !nearlyEqual(expectedActual, storedActual)
-
-          const normalizedActual = looksLikeLegacyAutoActual
-            ? expectedActual
-            : storedActual
-
-          return {
-            id: input.id,
-            recipeItemId: input.recipeItemId ?? undefined,
-            materialId: input.materialId,
-            warehouseId: input.warehouseId,
-            plannedQuantity: formatEditableNumber(expectedPlanned),
-            actualQuantity: formatEditableNumber(normalizedActual),
-            actualQuantityEdited:
-              !looksLikeLegacyAutoActual &&
-              !nearlyEqual(normalizedActual, expectedActual),
-            notes: input.notes ?? '',
-            unit: input.unit || '',
-          }
-        }),
+        items: (order.inputs ?? []).map((input) => ({
+          id: input.id,
+          recipeItemId: input.recipeItemId ?? undefined,
+          materialId: input.materialId,
+          warehouseId: input.warehouseId,
+          plannedQuantity: editableNumberString(input.plannedQuantity),
+          actualQuantity: editableNumberString(input.actualQuantity),
+          actualQuantityEdited: true,
+          notes: input.notes ?? '',
+          unit: input.unit || '',
+        })),
       }
 
       setForm((current) => ({
@@ -1016,13 +1090,9 @@ export function ProductionOrdersPage() {
         return
       }
 
-      const recipe = await manufacturingService.getRecipeById(order.recipeId)
-
       setSelectedOrder(order)
-      setDetailsRecipe(recipe)
       setDetailsOpen(true)
     } catch (error) {
-      setDetailsRecipe(null)
       setErrorMessage(getUserFriendlyErrorMessage(error, 'تعذر تحميل تفاصيل أمر الإنتاج.'))
     }
   }
@@ -1065,9 +1135,16 @@ export function ProductionOrdersPage() {
       return 'يجب إضافة مادة أولية واحدة على الأقل.'
     }
 
+    const seenMaterialIds = new Set<string>()
     for (const item of form.items) {
       if (!item.materialId) {
         return 'توجد مادة أولية غير محددة.'
+      }
+      if (item.materialId === selectedRecipe.productMaterialId) {
+        return 'لا يمكن استخدام المنتج النهائي نفسه كمادة أولية.'
+      }
+      if (seenMaterialIds.has(item.materialId)) {
+        return 'لا يمكن تكرار المادة الأولية في أكثر من سطر.'
       }
       if (!item.warehouseId) {
         return 'كل مادة أولية تحتاج إلى مخزن صرف.'
@@ -1076,6 +1153,7 @@ export function ProductionOrdersPage() {
       if (!Number.isFinite(qty) || qty <= 0) {
         return 'كل مادة أولية يجب أن تحتوي على كمية فعلية أكبر من صفر.'
       }
+      seenMaterialIds.add(item.materialId)
     }
 
     return null
@@ -1085,24 +1163,23 @@ export function ProductionOrdersPage() {
     const validationMessage = validateForm()
     if (validationMessage) {
       setErrorMessage(validationMessage)
-      scrollOrderDialogToTop()
       return
     }
 
     const payload: ProductionOrderPayload = {
       recipeId: form.recipeId,
       outputWarehouseId: form.outputWarehouseId,
-      plannedOutputQuantity: roundToTwo(Number(form.plannedOutputQuantity)),
-      actualOutputQuantity: roundToTwo(Number(form.actualOutputQuantity)),
-      laborCost: roundToTwo(Number(form.laborCost || 0)),
+      plannedOutputQuantity: roundQuantity(Number(form.plannedOutputQuantity)),
+      actualOutputQuantity: roundQuantity(Number(form.actualOutputQuantity)),
+      laborCost: roundCurrency(Number(form.laborCost || 0)),
       date: form.date,
       notes: form.notes.trim(),
       items: form.items.map((item) => ({
         recipeItemId: item.recipeItemId ?? null,
         materialId: item.materialId,
         warehouseId: item.warehouseId,
-        plannedQuantity: roundToTwo(Number(item.plannedQuantity || item.actualQuantity)),
-        actualQuantity: roundToTwo(Number(item.actualQuantity)),
+        plannedQuantity: roundQuantity(Number(item.plannedQuantity || 0)),
+        actualQuantity: roundQuantity(Number(item.actualQuantity)),
         unit: item.unit,
         notes: item.notes.trim(),
       })),
@@ -1124,7 +1201,6 @@ export function ProductionOrdersPage() {
         ? 'تعذر حفظ تعديلات أمر الإنتاج. يرجى المحاولة مرة أخرى.'
         : 'تعذر إنشاء أمر الإنتاج. يرجى المحاولة مرة أخرى.'
       setErrorMessage(getUserFriendlyErrorMessage(error, message))
-      scrollOrderDialogToTop()
     }
   }
 
@@ -1156,33 +1232,44 @@ export function ProductionOrdersPage() {
           </Button>
         }
       >
-        <Box sx={{ overflowX: 'auto' }}>
-          <Box component="table" sx={{ ...craftHtmlTableSx, minWidth: 900 }}>
+        <Box sx={tableScrollSx}>
+          <Box component="table" sx={craftHtmlTableSx}>
             <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
               <Box component="tr">
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>رقم الأمر</Box>
+                <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>التاريخ</Box>
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>النموذج</Box>
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>المنتج</Box>
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>كمية الإنتاج</Box>
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>المخزن</Box>
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>الأجور</Box>
                 <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>التكلفة</Box>
-                <Box component="th" sx={{ p: 1, textAlign: 'center', fontWeight: 700, width: 130, minWidth: 130, maxWidth: 130 }}>الإجراءات</Box>
+                <Box component="th" sx={{ p: 2, textAlign: 'center', fontWeight: 700 }}>تكلفة الوحدة</Box>
+                <Box component="th" sx={{ p: 1, textAlign: 'center', fontWeight: 700 }}>الإجراءات</Box>
               </Box>
             </Box>
             <Box component="tbody">
+              {orders.length === 0 ? (
+                <Box component="tr">
+                  <Box component="td" colSpan={10} sx={{ p: 3, textAlign: 'center', color: 'rgba(255, 255, 255, 0.72)' }}>
+                    لا توجد أوامر إنتاج.
+                  </Box>
+                </Box>
+              ) : null}
               {orders
                 .slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
                 .map((order) => (
                 <Box component="tr" key={order.id} sx={{ borderTop: '1px solid rgba(255, 255, 255, 0.18)', background: 'rgba(255, 255, 255, 0.022)' }}>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.orderNumber}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatDateDMY(order.date)}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.recipeName}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.productName}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatNumber(order.actualOutputQuantity)}</Box>
                   <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{order.outputWarehouseName}</Box>
-                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatNumber(order.laborCost)}</Box>
-                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatNumber(order.totalProductionCost)}</Box>
-                  <Box component="td" sx={{ p: 1, textAlign: 'center', width: 130, minWidth: 130, maxWidth: 130 }}>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatCurrency(order.laborCost)}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatCurrency(order.totalProductionCost)}</Box>
+                  <Box component="td" sx={{ p: 2, textAlign: 'center' }}>{formatCurrency(order.unitProductionCost)}</Box>
+                  <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
                     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 0.5, flexWrap: 'nowrap' }}>
 
                       <Tooltip title="عرض">
@@ -1217,6 +1304,7 @@ export function ProductionOrdersPage() {
             page={page}
             onPageChange={(_, newPage) => setPage(newPage)}
             rowsPerPage={rowsPerPage}
+            labelRowsPerPage="الصفوف:"
             onRowsPerPageChange={(event) => {
               setRowsPerPage(Number(event.target.value))
               setPage(0)
@@ -1225,12 +1313,18 @@ export function ProductionOrdersPage() {
         </Box>
       </SectionCard>
 
-      <Dialog open={newOrderOpen} onClose={handleCloseOrderDialog} maxWidth="lg" fullWidth slotProps={craftDialogSlotProps}>
+      <Dialog
+        open={newOrderOpen}
+        onClose={handleCloseOrderDialog}
+        maxWidth="lg"
+        fullWidth
+        slotProps={craftDialogSlotProps}
+      >
         <DialogTitle>{isEditMode ? 'تعديل أمر الإنتاج' : 'إنشاء أمر إنتاج جديد'}</DialogTitle>
-        <DialogContent ref={orderDialogContentRef} dividers>
-          <Box sx={{ display: 'grid', gap: 2 }}>
+        <DialogContent sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', gap: 2, paddingTop: '12px' }}>
             {errorMessage ? <Alert severity="error" sx={craftErrorAlertSx}>{errorMessage}</Alert> : null}
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(220px, 1fr))', gap: 2 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' }, minWidth: 0, maxWidth: '100%', gap: 2 }}>
               <TextField label="رقم الأمر" value={dialogOrderNumber} slotProps={{ input: { readOnly: true } }} />
               <DateFilterField
                 label="تاريخ الأمر"
@@ -1238,9 +1332,9 @@ export function ProductionOrdersPage() {
                 onChange={(value) => setForm((current) => ({ ...current, date: toInternalDate(value) }))}
               />
               <Autocomplete
-                options={recipes}
+                options={availableRecipes}
                 getOptionLabel={(option) => option.name}
-                value={recipes.find((recipe) => recipe.id === form.recipeId) ?? null}
+                value={availableRecipes.find((recipe) => recipe.id === form.recipeId) ?? null}
                 onChange={(_, value) => {
                   void handleRecipeChange(value)
                 }}
@@ -1283,11 +1377,11 @@ export function ProductionOrdersPage() {
                   setForm((current) => ({
                     ...current,
                     plannedOutputQuantity: current.plannedOutputQuantity
-                      ? formatEditableNumber(current.plannedOutputQuantity)
+                      ? formatEditableQuantity(current.plannedOutputQuantity)
                       : '',
                   }))
                 }}
-                slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                slotProps={{ htmlInput: { min: 0, step: 'any' } }}
               />
               <TextField
                 label="الكمية الفعلية"
@@ -1314,11 +1408,11 @@ export function ProductionOrdersPage() {
                   setForm((current) => ({
                     ...current,
                     actualOutputQuantity: current.actualOutputQuantity
-                      ? formatEditableNumber(current.actualOutputQuantity)
+                      ? formatEditableQuantity(current.actualOutputQuantity)
                       : '',
                   }))
                 }}
-                slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                slotProps={{ htmlInput: { min: 0, step: 'any' } }}
               />
               <TextField
                 label="تكلفة الأجور الفعلية"
@@ -1328,20 +1422,37 @@ export function ProductionOrdersPage() {
                 onBlur={() => {
                   setForm((current) => ({
                     ...current,
-                    laborCost: current.laborCost ? formatEditableNumber(current.laborCost) : '0.00',
+                    laborCost: current.laborCost ? formatEditableCurrency(current.laborCost) : '',
                   }))
                 }}
-                slotProps={{
-                  htmlInput: {
-                    min: 0,
-                    step: 1,
-                  },
-                }}
+                slotProps={{ htmlInput: { min: 0, step: 'any' } }}
               />
+              <TextField
+                select
+                label="المخزن الافتراضي للمواد الأولية"
+                value={form.defaultInputWarehouseId}
+                slotProps={darkSelectSlotProps}
+                onChange={(event) => {
+                  const warehouseId = event.target.value
+                  setForm((current) => ({
+                    ...current,
+                    defaultInputWarehouseId: warehouseId,
+                    items: current.items.map((item) => ({
+                      ...item,
+                      warehouseId,
+                    })),
+                  }))
+                }}
+              >
+                <MenuItem value="">بدون مخزن افتراضي</MenuItem>
+                {warehouses.filter((warehouse) => warehouse.status !== 'deleted').map((warehouse) => (
+                  <MenuItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</MenuItem>
+                ))}
+              </TextField>
             </Box>
 
             {selectedRecipe && (
-              <Box sx={{ p: 2, border: '1px solid rgba(255, 255, 255, 0.14)', borderRadius: '14px', background: 'rgba(255, 255, 255, 0.035)' }}>
+              <Box sx={{ p: 2, minWidth: 0, maxWidth: '100%', overflow: 'hidden', border: '1px solid rgba(255, 255, 255, 0.14)', borderRadius: '14px', background: 'rgba(255, 255, 255, 0.035)' }}>
                 <Typography sx={{ fontWeight: 700, mb: 1 }}>{selectedRecipe.name}</Typography>
                 <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.72)' }}>الكمية القياسية: {selectedRecipe.standardOutputQuantity} | المنتج: {selectedRecipe.productName}</Typography>
               </Box>
@@ -1352,58 +1463,68 @@ export function ProductionOrdersPage() {
             ) : null}
 
             {selectedRecipe && selectedRecipe.items && selectedRecipe.items.length > 0 ? (
-              <Box sx={{ display: 'grid', gap: 2 }}>
-                <TextField
-                  select
-                  label="المخزن الافتراضي للمواد الأولية"
-                  value={form.defaultInputWarehouseId}
-                  slotProps={darkSelectSlotProps}
-                  onChange={(event) => {
-                    const warehouseId = event.target.value
-                    setForm((current) => ({
-                      ...current,
-                      defaultInputWarehouseId: warehouseId,
-                      items: current.items.map((item) => ({
-                        ...item,
-                        warehouseId: item.warehouseId || warehouseId,
-                      })),
-                    }))
-                  }}
-                >
-                  <MenuItem value="">بدون مخزن افتراضي</MenuItem>
-                  {warehouses.filter((warehouse) => warehouse.status !== 'deleted').map((warehouse) => (
-                    <MenuItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</MenuItem>
-                  ))}
-                </TextField>
-
-                <Box sx={{ display: 'grid', gap: 1 }}>
-                  <Typography sx={{ fontWeight: 700 }}>المواد الأولية</Typography>
-                  <Box component="table" sx={{ ...craftHtmlTableSx }}>
-                    <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
-                      <Box component="tr">
-                        <Box component="th" sx={{ p: 1, textAlign: 'center' }}>المادة</Box>
-                        <Box component="th" sx={{ p: 1, textAlign: 'center' }}>الوحدة</Box>
-                        <Box component="th" sx={{ p: 1, textAlign: 'center' }}>الكمية حسب النموذج</Box>
-                        <Box component="th" sx={{ p: 1, textAlign: 'center' }}>الاستهلاك الفعلي</Box>
-                        <Box component="th" sx={{ p: 1, textAlign: 'center' }}>مخزن الصرف</Box>
-                        <Box component="th" sx={{ p: 1, textAlign: 'center' }}>الإجراءات</Box>
-                      </Box>
+              <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', gap: 2 }}>
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', gap: 1 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+                    <Typography sx={{ fontWeight: 700 }}>المواد الأولية</Typography>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                      <Button variant="outlined" startIcon={<FiPlus />} onClick={handleAddMaterial}>إضافة مادة أولية</Button>
+                      <Button variant="outlined" onClick={handleResetMaterialsToRecipe}>إعادة ضبط حسب النموذج</Button>
                     </Box>
-                    <Box component="tbody">
-                      {form.items.map((item) => {
-                        const material = manufacturingMaterials.find((entry) => entry.id === item.materialId)
-                        return (
-                          <Box component="tr" key={item.id} sx={{ borderTop: '1px solid rgba(255, 255, 255, 0.18)', textAlignLast: 'center' }}>
-                            <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
-                              <TextField value={material ? formatMaterialLabel(material) : ''} slotProps={{ input: { readOnly: true } }} size="small" fullWidth />
+                  </Box>
+                  <TableContainer sx={{ width: '100%', maxWidth: '100%', minWidth: 0, display: 'block', overflowX: 'auto', overflowY: 'hidden' }}>
+                    <Box component="table" sx={{ ...craftHtmlTableSx, '& th, & td': { p: 0.75 }, '& .MuiInputBase-root': { minWidth: 'max-content' } }}>
+                      <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
+                        <Box component="tr">
+                          <Box component="th">المادة</Box>
+                          <Box component="th">الوحدة</Box>
+                          <Box component="th">الكمية حسب النموذج</Box>
+                          <Box component="th">الاستهلاك الفعلي</Box>
+                          <Box component="th">تكلفة الوحدة التقديرية</Box>
+                          <Box component="th">إجمالي التكلفة التقديرية للسطر</Box>
+                          <Box component="th">مخزن الصرف</Box>
+                          <Box component="th">الإجراءات</Box>
+                        </Box>
+                      </Box>
+                      <Box component="tbody">
+                        {form.items.map((item) => {
+                          const material = manufacturingMaterials.find((entry) => entry.id === item.materialId)
+                          return (
+                            <Box component="tr" key={item.id} sx={{ borderTop: '1px solid rgba(255, 255, 255, 0.18)', textAlignLast: 'center' }}>
+                            <Box component="td">
+                              {item.recipeItemId ? (
+                                <TextField value={material ? formatMaterialLabel(material) : ''} slotProps={{ input: { readOnly: true } }} size="small" fullWidth sx={materialFieldSx} />
+                              ) : (
+                                <Autocomplete
+                                  options={manufacturingMaterials}
+                                  getOptionLabel={formatMaterialLabel}
+                                  isOptionEqualToValue={(option, value) => option.id === value.id}
+                                  value={material ?? null}
+                                  onChange={(_, selectedMaterial) => {
+                                    setForm((current) => ({
+                                      ...current,
+                                      items: current.items.map((entry) => entry.id === item.id
+                                        ? {
+                                            ...entry,
+                                            materialId: selectedMaterial?.id ?? '',
+                                            unit: selectedMaterial?.unit ?? '',
+                                          }
+                                        : entry),
+                                    }))
+                                  }}
+                                  slotProps={{ paper: { sx: darkPopupPaperSx } }}
+                                  renderInput={(params) => <TextField {...params} size="small" fullWidth sx={materialFieldSx} />}
+                                  fullWidth
+                                />
+                              )}
                             </Box>
-                            <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
-                              <TextField value={item.unit || material?.unit || ''} slotProps={{ input: { readOnly: true } }} size="small" fullWidth />
+                            <Box component="td">
+                              <TextField value={item.unit || material?.unit || ''} slotProps={{ input: { readOnly: true } }} size="small" fullWidth sx={unitFieldSx} />
                             </Box>
-                            <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
-                              <TextField value={formatNumber(item.plannedQuantity)} slotProps={{ input: { readOnly: true } }} size="small" fullWidth />
+                            <Box component="td">
+                              <TextField value={formatNumber(item.plannedQuantity)} slotProps={{ input: { readOnly: true } }} size="small" fullWidth sx={quantityFieldSx} />
                             </Box>
-                            <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
+                            <Box component="td">
                               <TextField
                                 value={item.actualQuantity}
                                 type="number"
@@ -1424,21 +1545,30 @@ export function ProductionOrdersPage() {
                                       ? {
                                           ...entry,
                                           actualQuantity: entry.actualQuantity
-                                            ? formatEditableNumber(entry.actualQuantity)
+                                            ? formatEditableQuantity(entry.actualQuantity)
                                             : '',
                                         }
                                       : entry),
                                   }))
                                 }}
-                                slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                                slotProps={{ htmlInput: { min: 0, step: 'any' } }}
+                                sx={quantityFieldSx}
                               />
                             </Box>
-                            <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
+                            <Box component="td">
+                              {formatCurrency(getMaterialUnitCost(material, item.warehouseId, stockBalances))}
+                            </Box>
+                            <Box component="td">
+                              {formatCurrency(roundCurrency(Number(item.actualQuantity || 0) * getMaterialUnitCost(material, item.warehouseId, stockBalances)))}
+                            </Box>
+                            <Box component="td">
                               <TextField
                                 select
                                 value={item.warehouseId}
                                 size="small"
                                 fullWidth
+                                slotProps={darkSelectSlotProps}
+                                sx={warehouseFieldSx}
                                 onChange={(event) => {
                                   setForm((current) => ({
                                     ...current,
@@ -1451,8 +1581,8 @@ export function ProductionOrdersPage() {
                                 ))}
                               </TextField>
                             </Box>
-                            <Box component="td" sx={{ p: 1, textAlign: 'center' }}>
-                              <Button size="small" color="error" onClick={() => {
+                            <Box component="td">
+                              <Button size="small" color="error" sx={{ minWidth: 0, px: 0.5 }} onClick={() => {
                                 setForm((current) => ({
                                   ...current,
                                   items: current.items.filter((entry) => entry.id !== item.id),
@@ -1460,9 +1590,16 @@ export function ProductionOrdersPage() {
                               }}>حذف</Button>
                             </Box>
                           </Box>
-                        )
-                      })}
+                          )
+                        })}
+                      </Box>
                     </Box>
+                    </TableContainer>
+                  <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(4, minmax(0, 1fr))' }, minWidth: 0, maxWidth: '100%', gap: 2, mt: 2 }}>
+                    <TextField label="إجمالي تكلفة المواد التقديرية" value={formatCurrency(estimatedMaterialCost)} slotProps={{ input: { readOnly: true } }} fullWidth />
+                    <TextField label="تكلفة الأجور الفعلية" value={formatCurrency(form.laborCost || 0)} slotProps={{ input: { readOnly: true } }} fullWidth />
+                    <TextField label="إجمالي التكلفة المتوقعة" value={formatCurrency(estimatedTotalCost)} slotProps={{ input: { readOnly: true } }} fullWidth />
+                    <TextField label="تكلفة الوحدة المنتجة المتوقعة" value={estimatedUnitProductionCost === '' ? '' : formatCurrency(estimatedUnitProductionCost)} slotProps={{ input: { readOnly: true } }} fullWidth />
                   </Box>
                 </Box>
               </Box>
@@ -1495,7 +1632,7 @@ export function ProductionOrdersPage() {
         slotProps={craftDialogSlotProps}
       >
         <DialogTitle>تأكيد حذف أمر الإنتاج</DialogTitle>
-        <DialogContent sx={{ pt: 2, display: 'grid', gap: 2 }}>
+        <DialogContent sx={{ pt: 2, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', overflowX: 'hidden', gap: 2 }}>
           {deleteErrorMessage ? <Alert severity="error" sx={craftErrorAlertSx}>{deleteErrorMessage}</Alert> : null}
           <Typography>
             هل أنت متأكد من حذف هذا الأمر؟ سيتم إلغاء أثر المخزون والتكلفة المرتبط به.
@@ -1523,18 +1660,17 @@ export function ProductionOrdersPage() {
         open={detailsOpen}
         onClose={() => {
           setDetailsOpen(false)
-          setDetailsRecipe(null)
         }}
         maxWidth="xl"
         fullWidth
         slotProps={craftDialogSlotProps}
       >
         <DialogTitle>تفاصيل أمر الإنتاج</DialogTitle>
-        <DialogContent dividers>
+        <DialogContent dividers sx={{ minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
           {selectedOrder ? (
-            <Box sx={{ display: 'grid', gap: 2 }}>
-              <Box sx={{ overflowX: 'auto' }}>
-                <Box component="table" sx={{ ...craftHtmlTableSx, minWidth: 1080 }}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', minWidth: 0, maxWidth: '100%', gap: 2 }}>
+              <Box sx={tableScrollSx}>
+                <Box component="table" sx={craftHtmlTableSx}>
                   <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                     <Box component="tr">
                       <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>رقم الأمر</Box>
@@ -1557,18 +1693,10 @@ export function ProductionOrdersPage() {
                       <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{selectedOrder.outputWarehouseName}</Box>
                       <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(selectedOrder.plannedOutputQuantity)}</Box>
                       <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(selectedOrder.actualOutputQuantity)}</Box>
-                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>
-                        {formatNumber((selectedOrder.inputs ?? []).reduce((sum, input) => sum + Number(input.totalCost ?? 0), 0))}
-                      </Box>
-                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(selectedOrder.laborCost)}</Box>
-                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(selectedOrder.totalProductionCost)}</Box>
-                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>
-                        {formatNumber(
-                          selectedOrder.actualOutputQuantity > 0
-                            ? selectedOrder.totalProductionCost / selectedOrder.actualOutputQuantity
-                            : 0,
-                        )}
-                      </Box>
+                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatCurrency(selectedOrder.materialCostTotal)}</Box>
+                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatCurrency(selectedOrder.laborCost)}</Box>
+                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatCurrency(selectedOrder.totalProductionCost)}</Box>
+                      <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatCurrency(selectedOrder.unitProductionCost)}</Box>
                     </Box>
                   </Box>
                 </Box>
@@ -1577,14 +1705,14 @@ export function ProductionOrdersPage() {
               <Typography sx={{ fontWeight: 700 }}>المواد الأولية والتكلفة</Typography>
 
               {selectedOrder.inputs && selectedOrder.inputs.length > 0 ? (
-                <Box sx={{ overflowX: 'auto' }}>
-                  <Box component="table" sx={{ ...craftHtmlTableSx, minWidth: 1000 }}>
+                <Box sx={tableScrollSx}>
+                  <Box component="table" sx={craftHtmlTableSx}>
                     <Box component="thead" sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                       <Box component="tr">
                         <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>المادة</Box>
                         <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>المخزن</Box>
                         <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>الوحدة</Box>
-                        <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>الكمية حسب النموذج</Box>
+                        <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>الكمية المخططة</Box>
                         <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>الاستهلاك الفعلي</Box>
                         <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>الفرق</Box>
                         <Box component="th" sx={{ p: 1.25, textAlign: 'center', fontWeight: 700 }}>تكلفة الوحدة</Box>
@@ -1593,44 +1721,9 @@ export function ProductionOrdersPage() {
                     </Box>
                     <Box component="tbody">
                       {selectedOrder.inputs.map((input) => {
-                        const recipeItem = detailsRecipe?.items?.find(
-                          (item) =>
-                            (input.recipeItemId && item.id === input.recipeItemId) ||
-                            item.materialId === input.materialId,
-                        )
-
-                        const standardOutput = Number(detailsRecipe?.standardOutputQuantity ?? 0)
-                        const plannedOutput = Number(selectedOrder.plannedOutputQuantity)
-                        const actualOutput = Number(selectedOrder.actualOutputQuantity)
-                        const recipeQuantity = Number(recipeItem?.quantity ?? 0)
-
-                        const hasRecipeBasis =
-                          Boolean(recipeItem) &&
-                          Number.isFinite(standardOutput) &&
-                          standardOutput > 0
-
-                        const calculatedPlanned = hasRecipeBasis
-                          ? roundToTwo(recipeQuantity * (plannedOutput / standardOutput))
-                          : roundToTwo(Number(input.plannedQuantity ?? 0))
-
-                        const calculatedActual = hasRecipeBasis
-                          ? roundToTwo(recipeQuantity * (actualOutput / standardOutput))
-                          : roundToTwo(Number(input.actualQuantity ?? 0))
-
-                        const storedPlanned = roundToTwo(Number(input.plannedQuantity ?? 0))
-                        const storedActual = roundToTwo(Number(input.actualQuantity ?? 0))
-
-                        const looksLikeLegacyAutoActual =
-                          hasRecipeBasis &&
-                          nearlyEqual(storedActual, storedPlanned) &&
-                          nearlyEqual(storedPlanned, calculatedPlanned) &&
-                          !nearlyEqual(storedActual, calculatedActual)
-
-                        const displayedActual = looksLikeLegacyAutoActual
-                          ? calculatedActual
-                          : storedActual
-
-                        const difference = roundToTwo(displayedActual - calculatedPlanned)
+                        const plannedQuantity = Number(input.plannedQuantity ?? 0)
+                        const actualQuantity = Number(input.actualQuantity ?? 0)
+                        const difference = roundQuantity(actualQuantity - plannedQuantity)
                         const differenceText = formatSignedNumber(difference)
 
                         return (
@@ -1638,11 +1731,11 @@ export function ProductionOrdersPage() {
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.materialName}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.warehouseName}</Box>
                             <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{input.unit || ''}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(calculatedPlanned)}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(displayedActual)}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{differenceText}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(input.unitCost)}</Box>
-                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(input.totalCost)}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(input.plannedQuantity)}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatNumber(input.actualQuantity)}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center', color: difference > 0 ? '#FCA5A5' : difference < 0 ? '#86EFAC' : 'inherit' }}>{differenceText}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatCurrency(input.unitCost)}</Box>
+                            <Box component="td" sx={{ p: 1.25, textAlign: 'center' }}>{formatCurrency(input.totalCost)}</Box>
                           </Box>
                         )
                       })}
@@ -1666,7 +1759,6 @@ export function ProductionOrdersPage() {
           <Button variant="contained" onClick={() => { void handleExportPdf() }}>تصدير PDF</Button>
           <Button onClick={() => {
             setDetailsOpen(false)
-            setDetailsRecipe(null)
           }}>إغلاق</Button>
         </DialogActions>
       </Dialog>

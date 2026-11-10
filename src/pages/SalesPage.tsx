@@ -45,7 +45,8 @@ import type { InvoicePrintData } from '../types/invoicePrint'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { loadSettings } from '../services/settingsService'
 import { getUserFriendlyErrorMessage } from '../utils/errorMessages'
-import { formatCurrencyValue, formatDateDMY, getLocalDateTimeString, formatNumberBySettings, toInternalDate } from '../utils/displayFormatting'
+import { formatCurrencyValue, formatDateDMY, getLocalDateTimeString, formatNumberBySettings, normalizeRemainingAmount, roundNumber, toInternalDate } from '../utils/displayFormatting'
+import { calculateNetInvoiceItemAmounts } from '../utils/invoiceCalculations'
 import { useNotifications } from '../contexts/useNotifications'
 
 function getLocalTodayISO(): string {
@@ -247,7 +248,7 @@ const craftDialogSlotProps = {
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
       backgroundImage: 'none',
-      overflow: 'hidden',
+      overflowX: 'clip',
       '& input[type="date"], & input[type="datetime-local"]': {
         colorScheme: 'dark',
       },
@@ -389,10 +390,8 @@ const craftErrorAlertSx = {
 type SaleLine = {
   key: string
   materialId: string
-  unit: string
   quantity: number | ''
   unitPrice: number | ''
-  notes: string
 }
 
 type InvoicePrintDataWithDiscount = InvoicePrintData & {
@@ -566,10 +565,8 @@ function createEmptyLine(): SaleLine {
   return {
     key: crypto.randomUUID(),
     materialId: '',
-    unit: '',
     quantity: '',
     unitPrice: '',
-    notes: '',
   }
 }
 
@@ -630,7 +627,7 @@ export function SalesPage() {
   const [invoiceCustomerId, setInvoiceCustomerId] = useState('')
   const [invoiceDelegates, setInvoiceDelegates] = useState<InvoiceDelegateForm[]>([])
   const [invoiceWarehouseId, setInvoiceWarehouseId] = useState('')
-  const [discountType, setDiscountType] = useState<DiscountType>('none')
+  const [discountType, setDiscountType] = useState<DiscountType>('fixed')
   const [discountValue, setDiscountValue] = useState<number | ''>(0)
   const [invoiceNotes, setInvoiceNotes] = useState('')
   const [invoiceLines, setInvoiceLines] = useState<SaleLine[]>([createEmptyLine()])
@@ -680,27 +677,30 @@ export function SalesPage() {
     scrollInvoiceDialogToTop()
   }, [invoiceDialogOpen, invoiceFormError, scrollInvoiceDialogToTop])
 
+  const priceDecimals = loadSettings().priceDecimals
+  const quantityDecimals = loadSettings().quantityDecimals
+  const lineTotalFor = useCallback((line: SaleLine) => roundNumber(
+    (typeof line.quantity === 'number' ? line.quantity : 0)
+      * (typeof line.unitPrice === 'number' ? line.unitPrice : 0),
+    priceDecimals,
+  ), [priceDecimals])
   const subtotal = useMemo(
-    () => invoiceLines.reduce((sum, line) => {
-      const quantity = typeof line.quantity === 'number' ? line.quantity : 0
-      const unitPrice = typeof line.unitPrice === 'number' ? line.unitPrice : 0
-      return sum + quantity * unitPrice
-    }, 0),
-    [invoiceLines]
+    () => roundNumber(invoiceLines.reduce((sum, line) => sum + lineTotalFor(line), 0), priceDecimals),
+    [invoiceLines, lineTotalFor, priceDecimals]
   )
 
   const discountAmount = useMemo(() => {
     const value = typeof discountValue === 'number' ? discountValue : 0
     if (discountType === 'percentage') {
-      return (subtotal * value) / 100
+      return roundNumber((subtotal * value) / 100, priceDecimals)
     }
     if (discountType === 'fixed') {
-      return value
+      return roundNumber(value, priceDecimals)
     }
     return 0
-  }, [discountType, discountValue, subtotal])
+  }, [discountType, discountValue, subtotal, priceDecimals])
 
-  const netTotal = useMemo(() => Math.max(subtotal - discountAmount, 0), [subtotal, discountAmount])
+  const netTotal = useMemo(() => roundNumber(Math.max(subtotal - discountAmount, 0), priceDecimals), [subtotal, discountAmount, priceDecimals])
   
   const totalDirectPayments = useMemo(() => invoicePayments.reduce((sum, p) => sum + (typeof p.amount === 'number' ? p.amount : 0), 0), [invoicePayments])
 
@@ -787,7 +787,7 @@ export function SalesPage() {
     const allInvoices: LedgerEntry[] = customerStatementInvoices.map((inv) => ({
       id: `inv-${inv.id}`,
       type: 'invoice',
-      debit: inv.amount, 
+      debit: roundNumber(inv.amount, priceDecimals),
       credit: 0,
       paymentMethod: '',
       invoiceNumber: inv.invoiceNumber,
@@ -801,7 +801,7 @@ export function SalesPage() {
       paymentId: p.id,
       paymentSource: p.source ?? (p.invoiceNumber ? 'invoice' : 'account'),
       debit: 0,
-      credit: p.amount,
+      credit: roundNumber(p.amount, priceDecimals),
       paymentMethod: p.paymentMethod || '',
       invoiceNumber: p.invoiceNumber || '',
       notes: p.notes || '',
@@ -813,7 +813,7 @@ export function SalesPage() {
         id: `return-${returnRecord.id}`,
         type: 'return',
         debit: 0,
-        credit: returnRecord.amount,
+        credit: roundNumber(returnRecord.amount, priceDecimals),
         paymentMethod: '',
         invoiceNumber: returnRecord.returnNumber,
         notes: returnRecord.notes || '',
@@ -824,7 +824,7 @@ export function SalesPage() {
         type: 'payment' as const,
         paymentId: payment.id,
         paymentSource: 'return' as const,
-        debit: payment.amount,
+        debit: roundNumber(payment.amount, priceDecimals),
         credit: 0,
         paymentMethod: payment.paymentMethod || '',
         invoiceNumber: returnRecord.returnNumber,
@@ -834,7 +834,10 @@ export function SalesPage() {
     ])
 
     const all = [...allInvoices, ...allPayments, ...returnEntries].sort(
-      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+      (a, b) =>
+        new Date(a.date).getTime() - new Date(b.date).getTime()
+        || ['invoice', 'return', 'payment'].indexOf(a.type) - ['invoice', 'return', 'payment'].indexOf(b.type)
+        || a.id.localeCompare(b.id),
     )
 
     let carryOverBalance = 0
@@ -880,16 +883,30 @@ export function SalesPage() {
       })
     }
 
-    const calcDebit = finalEntries.reduce((sum, inv) => sum + inv.debit, 0)
-    const calcCredit = finalEntries.reduce((sum, p) => sum + p.credit, 0)
+    const calcDebit = roundNumber(finalEntries.reduce((sum, inv) => sum + inv.debit, 0), priceDecimals)
+    const calcCredit = roundNumber(finalEntries.reduce((sum, p) => sum + p.credit, 0), priceDecimals)
 
     return {
       ledgerEntries: finalEntries,
       totalDebit: calcDebit,
       totalCredit: calcCredit,
-      remainingBalance: calcDebit - calcCredit,
+      remainingBalance: normalizeRemainingAmount(calcDebit - calcCredit, priceDecimals),
     }
-  }, [customerStatementInvoices, customerStatementPayments, customerStatementReturns, startDateFilter, endDateFilter])
+  }, [customerStatementInvoices, customerStatementPayments, customerStatementReturns, startDateFilter, endDateFilter, priceDecimals])
+
+  const grossSales = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'invoice' && entry.id !== 'carried-forward-balance' ? sum + entry.debit : sum,
+    0,
+  ), priceDecimals)
+  const salesReturnsTotal = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'return' ? sum + entry.credit : sum,
+    0,
+  ), priceDecimals)
+  const netSales = roundNumber(Math.max(grossSales - salesReturnsTotal, 0), priceDecimals)
+  const cashReceipts = roundNumber(ledgerEntries.reduce(
+    (sum, entry) => entry.type === 'payment' ? sum + entry.credit - entry.debit : sum,
+    0,
+  ), priceDecimals)
 
   const openCustomerStatement = useCallback(async (customer: CustomerRecord) => {
     setCustomerStatementEntity(customer)
@@ -907,7 +924,7 @@ export function SalesPage() {
         id: invoice.id,
         invoiceNumber: invoice.invoiceNumber,
         date: invoice.date,
-        amount: Math.max(Number(invoice.subtotal ?? 0) - Number(invoice.discountAmount ?? 0), 0),
+        amount: normalizeRemainingAmount(Number(invoice.netTotal ?? 0), priceDecimals),
         notes: invoice.notes,
       }))
 
@@ -938,7 +955,7 @@ export function SalesPage() {
     } finally {
       setStatementLoading(false)
     }
-  }, [notify])
+  }, [notify, priceDecimals])
 
   const submitStatementPayment = useCallback(async () => {
     if (!customerStatementEntity) return
@@ -962,7 +979,7 @@ export function SalesPage() {
       await customersService.createPayment({
         customerId: customerStatementEntity.id,
         date: toInternalDate(statementPaymentForm.date) || statementPaymentForm.date,
-        amount,
+        amount: roundNumber(amount, priceDecimals),
         paymentMethod: statementPaymentForm.paymentMethod,
         notes: statementPaymentForm.notes.trim(),
       })
@@ -975,7 +992,7 @@ export function SalesPage() {
       setStatementPaymentError(message)
       notify.error(message)
     }
-  }, [customerStatementEntity, notify, openCustomerStatement, statementPaymentForm])
+  }, [customerStatementEntity, notify, openCustomerStatement, statementPaymentForm, priceDecimals])
 
   const handleDeleteCustomerPayment = useCallback(async () => {
     if (!customerStatementEntity || !paymentToDelete) return
@@ -1048,12 +1065,12 @@ export function SalesPage() {
     if (!selectedInvoice) return null
     const paymentMethodOrder = loadSettings().paymentMethods
     const normalizedPaymentMethod = (selectedInvoice.payments ?? []).length === 0
-      ? '—'
+      ? ''
       : (selectedInvoice.payments ?? [])
           .map((payment, originalIndex) => ({
             payment,
             originalIndex,
-            method: String(payment.paymentMethod ?? '').trim() || '—',
+            method: String(payment.paymentMethod ?? '').trim() || '',
           }))
           .sort((first, second) => {
             const firstIndex = paymentMethodOrder.indexOf(first.method)
@@ -1194,7 +1211,10 @@ export function SalesPage() {
       customerId: invoiceCustomerId,
       warehouseId: invoiceWarehouseId,
       discountType,
-      discountValue: typeof discountValue === 'number' ? discountValue : 0,
+      discountValue: typeof discountValue === 'number' ? roundNumber(discountValue, discountType === 'fixed' ? priceDecimals : 6) : 0,
+      subtotal,
+      discountAmount,
+      netTotal,
       delegates: invoiceDelegates.map((delegate) => ({
         delegateId: delegate.delegateId,
         commissionPercentage: typeof delegate.commissionPercentage === 'number' ? delegate.commissionPercentage : 0,
@@ -1202,26 +1222,42 @@ export function SalesPage() {
       })),
       notes: invoiceNotes,
       items: invoiceLines.map((line) => ({
+        ...calculateNetInvoiceItemAmounts(
+          roundNumber(Number(line.quantity), quantityDecimals),
+          lineTotalFor(line),
+          subtotal,
+          discountAmount,
+          priceDecimals,
+        ),
         materialId: line.materialId,
-        unit: line.unit,
-        quantity: Number(line.quantity),
-        unitPrice: Number(line.unitPrice),
-        notes: line.notes,
+        quantity: roundNumber(Number(line.quantity), quantityDecimals),
+        unitPrice: roundNumber(Number(line.unitPrice), priceDecimals),
+        lineTotal: lineTotalFor(line),
       })),
     }
-  }, [invoiceNumber, invoiceDate, invoiceCustomerId, invoiceWarehouseId, discountType, discountValue, invoiceNotes, invoiceLines, invoiceDelegates])
+  }, [invoiceNumber, invoiceDate, invoiceCustomerId, invoiceWarehouseId, discountType, discountValue, invoiceNotes, invoiceLines, invoiceDelegates, priceDecimals, quantityDecimals, subtotal, discountAmount, netTotal, lineTotalFor])
 
   const resetInvoiceForm = useCallback(async () => {
-    const draftData = await salesService.getNextDraftData()
+    const [draftData, warehouses] = await Promise.all([
+      salesService.getNextDraftData(),
+      inventoryService.listWarehouses(),
+    ])
+    const availableWarehouses = warehouses.filter(
+      (warehouse) => warehouse.status === 'active',
+    )
+    const defaultWarehouseId =
+      availableWarehouses.find((warehouse) => warehouse.isDefault)?.id ?? ''
+
+    setActiveWarehouses(availableWarehouses)
     setInvoiceNumber(draftData.invoiceNumber)
     setInvoiceDate(getLocalTodayISO())
     setInvoiceCustomerId('')
     setInvoiceDelegates([])
     seedInvoiceDelegateRowRef.current = true
-    setInvoiceWarehouseId('')
+    setInvoiceWarehouseId(defaultWarehouseId)
     setWarehouseBalances([])
-    setWarehouseBalancesLoading(false)
-    setDiscountType('none')
+    setWarehouseBalancesLoading(Boolean(defaultWarehouseId))
+    setDiscountType('fixed')
     setDiscountValue(0)
     setInvoiceNotes('')
     setInvoiceLines([createEmptyLine()])
@@ -1231,6 +1267,19 @@ export function SalesPage() {
     setEditingInvoiceId(null)
     setEditingInvoiceStatus('draft')
     setInvoiceFormError('')
+
+    if (defaultWarehouseId) {
+      try {
+        const balances = await inventoryService.getBalancesByWarehouse(defaultWarehouseId)
+        setWarehouseBalances(balances)
+      } catch (error) {
+        console.error('LOAD DEFAULT SALES WAREHOUSE BALANCES FAILED', error)
+        setWarehouseBalances([])
+        throw error
+      } finally {
+        setWarehouseBalancesLoading(false)
+      }
+    }
   }, [])
 
   const openCreateInvoiceDialog = useCallback(async () => {
@@ -1271,16 +1320,16 @@ export function SalesPage() {
         setWarehouseBalancesLoading(false)
       }
 
-      setDiscountType(invoice.discountType)
-      setDiscountValue(invoice.discountValue)
+      setDiscountType(invoice.discountType === 'none' ? 'fixed' : invoice.discountType)
+      setDiscountValue(invoice.discountType === 'fixed'
+        ? roundNumber(invoice.discountValue, priceDecimals)
+        : invoice.discountValue)
       setInvoiceNotes(invoice.notes ?? '')
       setInvoiceLines(invoice.items.map((item) => ({
         key: item.id,
         materialId: item.materialId,
-        unit: item.unit,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        notes: item.notes ?? '',
+        quantity: roundNumber(item.quantity, quantityDecimals),
+        unitPrice: roundNumber(item.unitPrice, priceDecimals),
       })))
       setInvoicePayments([])
       setInvoiceFormError('')
@@ -1291,7 +1340,7 @@ export function SalesPage() {
       scrollInvoiceDialogToTop()
       setInvoiceDialogOpen(true)
     }
-  }, [scrollInvoiceDialogToTop])
+  }, [scrollInvoiceDialogToTop, priceDecimals, quantityDecimals])
 
   const saveDraft = useCallback(async () => {
     const validationError = validateInvoiceForm()
@@ -1466,11 +1515,11 @@ export function SalesPage() {
         runningTotal += Number(payment.amount ?? 0)
         return {
           ...payment,
-          remainingAfterThisPayment: Math.max(Number(selectedInvoice.netAfterReturns ?? selectedInvoice.netTotal ?? 0) - runningTotal, 0),
+          remainingAfterThisPayment: normalizeRemainingAmount(Math.max(Number(selectedInvoice.netAfterReturns ?? selectedInvoice.netTotal ?? 0) - runningTotal, 0), priceDecimals),
           netTotal: Number(selectedInvoice.netAfterReturns ?? selectedInvoice.netTotal ?? 0),
         }
       })
-  }, [selectedInvoice])
+  }, [selectedInvoice, priceDecimals])
 
   const selectedCustomer = activeCustomers.find((item) => item.id === invoiceCustomerId) ?? null
   const selectedWarehouse = activeWarehouses.find((item) => item.id === invoiceWarehouseId) ?? null
@@ -1544,7 +1593,7 @@ export function SalesPage() {
           >إضافة عميل</Button>
         }>
           <Box sx={{ overflowX: 'auto' }}>
-            <Table sx={{ minWidth: 800 }}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم العميل</TableCell>
@@ -1623,6 +1672,7 @@ export function SalesPage() {
                 setCustomerRowsPerPage(Number(event.target.value))
                 setCustomerPage(0)
               }}
+              labelRowsPerPage="الصفوف:"
             />
           </Box>
         </SectionCard>
@@ -1631,7 +1681,7 @@ export function SalesPage() {
         <SectionCard title="سجل فواتير المبيعات" actions={
           <Button variant="contained" startIcon={<FiPlus />} onClick={() => void openCreateInvoiceDialog()}>فاتورة بيع جديدة</Button>
         }>
-        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', mb: 2 }}>
+        <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', mb: 2 }}>
           <Tooltip title="بحث برقم الفاتورة أو اسم العميل" arrow>
             <Box>
               <SearchField
@@ -1665,28 +1715,28 @@ export function SalesPage() {
               <MenuItem key={warehouse.id} value={warehouse.id}>{warehouse.name}</MenuItem>
             ))}
           </TextField>
-          <Box sx={{ display: 'flex', alignItems: 'center' }}>
-            <Button
-              variant="outlined"
-              onClick={() => {
-                setSearch('')
-                setFromDate('')
-                setToDate('')
-                setCustomerFilter('')
-                setWarehouseFilter('')
-                setPage(0)
-              }}
-            >
-              مسح الفلاتر
-            </Button>
-          </Box>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', marginBottom: 2 }}>
+          <Button
+            variant="outlined"
+            onClick={() => {
+              setSearch('')
+              setFromDate('')
+              setToDate('')
+              setCustomerFilter('')
+              setWarehouseFilter('')
+              setPage(0)
+            }}
+          >
+            مسح الفلاتر
+          </Button>
         </Box>
 
         <Box sx={{ overflowX: 'auto' }}>
           {loading ? (
             <Box sx={{ display: 'grid', placeItems: 'center', p: 4 }}><CircularProgress /></Box>
           ) : (
-            <Table sx={{ width: '100%', minWidth: 1000 }}>
+            <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>التاريخ</TableCell>
@@ -1705,7 +1755,6 @@ export function SalesPage() {
                       minWidth: 130,
                       maxWidth: 130,
                       px: 1,
-                      whiteSpace: 'nowrap',
                     }}
                   >
                     الإجراءات
@@ -1730,7 +1779,6 @@ export function SalesPage() {
                         minWidth: 130,
                         maxWidth: 130,
                         px: 1,
-                        whiteSpace: 'nowrap',
                       }}
                     >
                       <Box
@@ -1784,6 +1832,7 @@ export function SalesPage() {
               setRowsPerPage(Number(event.target.value))
               setPage(0)
             }}
+            labelRowsPerPage="الصفوف:"
           />
         </Box>
       </SectionCard>
@@ -1891,11 +1940,13 @@ export function SalesPage() {
                   لا توجد حركات مسجلة لهذا العميل في الفترة المحددة.
                 </Typography>
               ) : (
-                <Table sx={{ width: '100%' }}>
+                <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+                <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                   <TableHead>
                     <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>مدين</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>دائن</TableCell>
+                      <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>نوع الحركة</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>طريقة الدفع</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>رقم الفاتورة</TableCell>
                       <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الملاحظات</TableCell>
@@ -1915,6 +1966,15 @@ export function SalesPage() {
                             : entry.credit > 0
                               ? priceNum(entry.credit)
                               : ''}
+                        </TableCell>
+                        <TableCell sx={{ textAlign: 'center' }}>
+                          {entry.id === 'carried-forward-balance'
+                            ? 'رصيد مدور'
+                            : entry.type === 'invoice'
+                              ? 'فاتورة مبيعات'
+                              : entry.type === 'return'
+                                ? 'مرتجع مبيعات'
+                                : 'مقبوض نقدي'}
                         </TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>{entry.paymentMethod}</TableCell>
                         <TableCell sx={{ textAlign: 'center' }}>{entry.invoiceNumber}</TableCell>
@@ -1941,30 +2001,34 @@ export function SalesPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </Box>
               )}
 
-              <Table sx={{ width: '100%', minWidth: 620, '& td, & th': { textAlign: 'center' } }}>
+              <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto', '& td, & th': { textAlign: 'center' } }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
-                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الاجمالي</TableCell>
-                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المدفوع</TableCell>
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>صافي المبيعات</TableCell>
+                    <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المقبوضات النقدية</TableCell>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الرصيد</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   <TableRow sx={{ textAlignLast: 'center' }}>
-                    <TableCell sx={{ textAlign: 'center' }}>{currency(totalDebit)}</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>{currency(totalCredit)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{currency(netSales)}</TableCell>
+                    <TableCell sx={{ textAlign: 'center' }}>{currency(cashReceipts)}</TableCell>
                     <TableCell sx={{ textAlign: 'center', color: remainingBalance > 0 ? '#67E8F9' : 'inherit' }}>
                       {currency(remainingBalance)}
                     </TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
             </Box>
           )}
         </DialogContent>
         <DialogActions>
+          <Button sx={{ mr: 'auto' }} onClick={() => setCustomerStatementOpen(false)}>إغلاق</Button>
           <Button
             variant="contained"
             startIcon={<FiCheckCircle />}
@@ -1973,7 +2037,7 @@ export function SalesPage() {
               setStatementPaymentError('')
               setStatementPaymentForm({
                 date: getLocalTodayISO(),
-                amount: remainingBalance > 0 ? String(remainingBalance) : '',
+                amount: remainingBalance > 0 ? String(normalizeRemainingAmount(remainingBalance, priceDecimals)) : '',
                 paymentMethod: loadSettings().paymentMethods[0] ?? '',
                 notes: '',
               })
@@ -1989,7 +2053,6 @@ export function SalesPage() {
           <Button variant="contained" onClick={handleExportCustomerStatementPdf}>
             تصدير PDF
           </Button>
-          <Button onClick={() => setCustomerStatementOpen(false)}>إغلاق</Button>
         </DialogActions>
       </Dialog>
 
@@ -2003,24 +2066,30 @@ export function SalesPage() {
             onChange={(value) => setStatementPaymentForm((prev) => ({ ...prev, date: toInternalDate(value) }))}
             required
           />
-          <TextField
-            select
-            label="طريقة الدفع"
-            value={statementPaymentForm.paymentMethod}
-            onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, paymentMethod: event.target.value }))}
-            slotProps={darkSelectSlotProps}
-            required
-          >
-            {loadSettings().paymentMethods.map((method) => (
-              <MenuItem key={method} value={method}>{method}</MenuItem>
-            ))}
-          </TextField>
-          <TextField label="المبلغ" type="number" value={statementPaymentForm.amount} onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, amount: event.target.value }))} slotProps={{ htmlInput: { min: 0, step: 1 } }} required />
-          <TextField label="ملاحظات" value={statementPaymentForm.notes} onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, notes: event.target.value }))} multiline minRows={2} />
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '1fr' }}>
+            <TextField label="المبلغ" type="number" value={statementPaymentForm.amount} onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, amount: event.target.value }))} slotProps={{ htmlInput: { min: 0, step: 10 ** -priceDecimals } }} required />
+            <TextField
+              select
+              label="طريقة الدفع"
+              value={statementPaymentForm.paymentMethod}
+              onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, paymentMethod: event.target.value }))}
+              slotProps={darkSelectSlotProps}
+              required
+            >
+              {loadSettings().paymentMethods.map((method) => (
+                <MenuItem key={method} value={method}>{method}</MenuItem>
+              ))}
+            </TextField>
+            <TextField label="ملاحظات" value={statementPaymentForm.notes} onChange={(event) => setStatementPaymentForm((prev) => ({ ...prev, notes: event.target.value }))} multiline minRows={2} />
+          </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setStatementPaymentDialogOpen(false)}>إلغاء</Button>
-          <Button variant="contained" color="primary" startIcon={<FiCheckCircle />} onClick={() => void submitStatementPayment()}>حفظ الدفعة</Button>
+          <Button onClick={() => setStatementPaymentDialogOpen(false)}>
+            إلغاء
+          </Button>
+          <Button variant="contained" color="primary" startIcon={<FiCheckCircle />} onClick={() => void submitStatementPayment()}>
+            حفظ الدفعة
+          </Button>
         </DialogActions>
       </Dialog>
 
@@ -2039,7 +2108,7 @@ export function SalesPage() {
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setPaymentToDelete(null); setPaymentDeleteError('') }}>إلغاء</Button>
+          <Button sx={{ mr: 'auto' }} onClick={() => { setPaymentToDelete(null); setPaymentDeleteError('') }}>إلغاء</Button>
           <Button variant="contained" color="error" onClick={() => void handleDeleteCustomerPayment()}>حذف</Button>
         </DialogActions>
       </Dialog>
@@ -2080,7 +2149,7 @@ export function SalesPage() {
               }
             }}
           >
-            {confirmAction?.type === 'deleteDraft' ? 'حذف' : 'حذف نهائي'}
+            حذف
           </Button>
         </DialogActions>
       </Dialog>
@@ -2213,69 +2282,82 @@ export function SalesPage() {
             />
           </Box>
 
-          <TextField label="ملاحظات" value={invoiceNotes} onChange={(event) => setInvoiceNotes(event.target.value)} multiline minRows={2} />
-
           <SectionCard title="المناديب">
             <Box sx={{ display: 'grid', gap: 1.5 }}>
-              {invoiceDelegates.map((invoiceDelegate, index) => (
-                <Box key={`${invoiceDelegate.delegateId}-${index}`} sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: '2fr 1fr 1.8fr auto', alignItems: 'center' }}>
-                  <TextField
-                    select
-                    label="المندوب"
-                    value={invoiceDelegate.delegateId}
-                    onChange={(event) => setInvoiceDelegates((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, delegateId: event.target.value } : item))}
-                    slotProps={darkSelectSlotProps}
-                  >
-                    <MenuItem value="">اختر المندوب</MenuItem>
-                    {activeDelegates.filter((delegate) => delegate.id === invoiceDelegate.delegateId || !invoiceDelegates.some((item) => item.delegateId === delegate.id)).map((delegate) => (
-                      <MenuItem key={delegate.id} value={delegate.id}>{delegate.code} - {delegate.name}</MenuItem>
-                    ))}
-                  </TextField>
-                  <TextField
-                    label="النسبة (%)"
-                    type="number"
-                    value={invoiceDelegate.commissionPercentage}
-                    onChange={(event) => setInvoiceDelegates((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, commissionPercentage: event.target.value === '' ? '' : Number(event.target.value) } : item))}
-                    slotProps={{ htmlInput: { min: 0, max: 100, step: 1 } }}
-                  />
-                  <TextField
-                    label="ملاحظات"
-                    value={invoiceDelegate.notes}
-                    onChange={(event) => setInvoiceDelegates((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, notes: event.target.value } : item))}
-                    multiline
-                    minRows={1}
-                  />
-                  <IconButton
-                  color="error"
-                    onClick={() => setInvoiceDelegates((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
-                  >
-                    <FiTrash2 />
-                  </IconButton>
-                </Box>
-              ))}
-              <Button
-                variant="outlined"
-                startIcon={<FiPlus />}
-                disabled={activeDelegates.length === invoiceDelegates.length}
-                onClick={() => {
-                  const next = activeDelegates.find((delegate) => !invoiceDelegates.some((item) => item.delegateId === delegate.id))
-                  if (next) setInvoiceDelegates((prev) => [...prev, { delegateId: next.id, commissionPercentage: 0, notes: '' }])
-                }}
-              >
-                إضافة مندوب
-              </Button>
+              {invoiceDelegates.map((invoiceDelegate, index) => {
+                const isLast = index === invoiceDelegates.length - 1
+
+                return (
+                  <Box key={`${invoiceDelegate.delegateId}-${index}`} sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: '1.5fr 1fr 1.5fr auto auto', alignItems: 'center' }}>
+                    <TextField
+                      select
+                      label="المندوب"
+                      value={invoiceDelegate.delegateId}
+                      onChange={(event) => setInvoiceDelegates((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, delegateId: event.target.value } : item))}
+                      slotProps={darkSelectSlotProps}
+                    >
+                      <MenuItem value="">اختر المندوب</MenuItem>
+                      {activeDelegates.filter((delegate) => delegate.id === invoiceDelegate.delegateId || !invoiceDelegates.some((item) => item.delegateId === delegate.id)).map((delegate) => (
+                        <MenuItem key={delegate.id} value={delegate.id}>{delegate.code} - {delegate.name}</MenuItem>
+                      ))}
+                    </TextField>
+
+                    <TextField
+                      label="النسبة (%)"
+                      type="number"
+                      value={invoiceDelegate.commissionPercentage}
+                      onChange={(event) => setInvoiceDelegates((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, commissionPercentage: event.target.value === '' ? '' : Number(event.target.value) } : item))}
+                      slotProps={{ htmlInput: { min: 0, max: 100, step: 1 } }}
+                    />
+
+                    <TextField
+                      label="ملاحظات"
+                      value={invoiceDelegate.notes}
+                      onChange={(event) => setInvoiceDelegates((prev) => prev.map((item, itemIndex) => itemIndex === index ? { ...item, notes: event.target.value } : item))}
+                      multiline
+                      minRows={1}
+                    />
+
+                    <IconButton
+                      color="error"
+                      aria-label="حذف المندوب"
+                      onClick={() => setInvoiceDelegates((prev) => prev.filter((_, itemIndex) => itemIndex !== index))}
+                      disabled={invoiceDelegates.length === 1}
+                    >
+                      <FiTrash2 />
+                    </IconButton>
+
+                    {isLast ? (
+                      <IconButton
+                        color="primary"
+                        aria-label="إضافة مندوب"
+                        onClick={() => {
+                          const next = activeDelegates.find((delegate) => !invoiceDelegates.some((item) => item.delegateId === delegate.id))
+                          setInvoiceDelegates((prev) => [
+                            ...prev,
+                            { delegateId: next ? next.id : '', commissionPercentage: 0, notes: '' }
+                          ])
+                        }}
+                      >
+                        <FiPlus />
+                      </IconButton>
+                    ) : (
+                      <Box sx={{ width: 40 }} />
+                    )}
+                  </Box>
+                )
+              })}
             </Box>
           </SectionCard>
 
           <SectionCard title="مواد الفاتورة">
             <Box sx={{ display: 'grid', gap: 2 }}>
-              {invoiceLines.map((line) => {
+              {invoiceLines.map((line, index) => {
                 const material = materialById.get(line.materialId) ?? null
-                const lineTotal = (typeof line.quantity === 'number' ? line.quantity : 0) * (typeof line.unitPrice === 'number' ? line.unitPrice : 0)
+                const isLast = index === invoiceLines.length - 1;
 
                 return (
-                  <Box key={line.key} sx={{ p: 2, borderRadius: '14px', border: '1px solid rgba(255, 255, 255, 0.14)', background: 'rgba(255, 255, 255, 0.035)' }}>
-                    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', alignItems: 'center' }}>
+                  <Box key={line.key} sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: '1.5fr 1fr 1fr auto auto', alignItems: 'center' }}>
                       <Autocomplete
                         options={materialOptions}
                         value={material}
@@ -2295,10 +2377,10 @@ export function SalesPage() {
                         onClose={() => {
                           setMaterialPickerOpenKey((current) => current === line.key ? null : current)
                         }}
-                        getOptionLabel={(option) => option?.name ?? ''}
+                        getOptionLabel={(option) => `${option.materialNumber} - ${option.name}${option.unit ? ` / ${option.unit}` : ''}`}
                         onChange={(_, value) => {
                           if (!value) {
-                            setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, materialId: '', unit: '', unitPrice: '', quantity: item.quantity || '' } : item))
+                            setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, materialId: '', unitPrice: '', quantity: item.quantity || '' } : item))
                             return
                           }
 
@@ -2332,8 +2414,7 @@ export function SalesPage() {
                           setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? {
                             ...item,
                             materialId: value.id,
-                            unit: value.unit ?? '',
-                            unitPrice: defaultUnitPrice,
+                            unitPrice: roundNumber(defaultUnitPrice, priceDecimals),
                             quantity: typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1,
                           } : item))
                           setMaterialWarehouseHintLineKey(null)
@@ -2359,16 +2440,15 @@ export function SalesPage() {
                           />
                         )}
                       />
-                      <TextField label="الوحدة" value={line.unit} slotProps={{ input: { readOnly: true } }} />
                       <TextField
                         label="الكمية"
                         type="number"
                         value={line.quantity}
                         onChange={(event) => {
                           const raw = event.target.value
-                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, quantity: raw === '' ? '' : Number(raw) } : item))
+                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, quantity: raw === '' ? '' : roundNumber(Number(raw), quantityDecimals) } : item))
                         }}
-                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 10 ** -quantityDecimals } }}
                         required
                       />
                       <TextField
@@ -2377,34 +2457,35 @@ export function SalesPage() {
                         value={line.unitPrice}
                         onChange={(event) => {
                           const raw = event.target.value
-                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, unitPrice: raw === '' ? '' : Number(raw) } : item))
+                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, unitPrice: raw === '' ? '' : roundNumber(Number(raw), priceDecimals) } : item))
                         }}
-                        slotProps={{ htmlInput: { min: 0, step: 1 } }}
+                        slotProps={{ htmlInput: { min: 0, step: 10 ** -priceDecimals } }}
                         required
                       />
-                      <TextField label="الاجمالي" value={priceNum(lineTotal)} slotProps={{ input: { readOnly: true } }} />
-                    </Box>
-                    <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '1fr auto', mt: 2 }}>
-                      <TextField
-                        label="ملاحظات"
-                        value={line.notes}
-                        onChange={(event) => {
-                          const value = event.target.value
-                          setInvoiceLines((prev) => prev.map((item) => item.key === line.key ? { ...item, notes: value } : item))
-                        }}
-                        fullWidth
-                      />
-                      <Button color="error" onClick={() => setInvoiceLines((prev) => prev.filter((item) => item.key !== line.key))} disabled={invoiceLines.length === 1}>
-                        حذف السطر
-                      </Button>
-                    </Box>
+
+                      <IconButton
+                        color="error"
+                        aria-label="حذف المادة"
+                        onClick={() => setInvoiceLines((prev) => prev.filter((item) => item.key !== line.key))}
+                        disabled={invoiceLines.length === 1}
+                      >
+                        <FiTrash2 />
+                      </IconButton>
+
+                      {isLast ? (
+                        <IconButton
+                          color="primary"
+                          aria-label="إضافة مادة"
+                          onClick={() => setInvoiceLines((prev) => [...prev, createEmptyLine()])}
+                        >
+                          <FiPlus />
+                        </IconButton>
+                      ) : (
+                        <Box sx={{ width: 40 }} />
+                      )}
                   </Box>
                 )
               })}
-
-              <Button variant="outlined" startIcon={<FiPlus />} onClick={() => setInvoiceLines((prev) => [...prev, createEmptyLine()])}>
-                إضافة مادة
-              </Button>
             </Box>
           </SectionCard>
 
@@ -2421,18 +2502,18 @@ export function SalesPage() {
                 }}
                 slotProps={darkSelectSlotProps}
               >
-                <MenuItem value="none">بدون حسم</MenuItem>
-                <MenuItem value="percentage">نسبة مئوية</MenuItem>
                 <MenuItem value="fixed">مبلغ ثابت</MenuItem>
+                <MenuItem value="percentage">نسبة مئوية</MenuItem>
               </TextField>
               <TextField
                 label={discountType === 'percentage' ? 'نسبة الحسم (%)' : 'قيمة الحسم'}
                 type="number"
                 value={discountValue}
-                disabled={discountType === 'none'}
                 onChange={(event) => {
                   const raw = event.target.value
-                  setDiscountValue(raw === '' ? '' : Number(raw))
+                  setDiscountValue(raw === '' ? '' : discountType === 'fixed'
+                    ? roundNumber(Number(raw), priceDecimals)
+                    : Number(raw))
                 }}
                 slotProps={{
                   htmlInput: { min: 0, max: discountType === 'percentage' ? 100 : undefined, step: 1 },
@@ -2442,7 +2523,7 @@ export function SalesPage() {
                 }}
               />
             </Box>
-            <Table sx={{ mt: 2, width: '100%', minWidth: discountType === 'percentage' ? 760 : 620, '& td, & th': { textAlign: 'center' } }}>
+            <Table sx={{ mt: 2, width: '100%', minWidth: 'max-content', tableLayout: 'auto', '& td, & th': { textAlign: 'center' } }}>
               <TableHead>
                 <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                   <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الاجمالي قبل الحسم</TableCell>
@@ -2465,12 +2546,18 @@ export function SalesPage() {
               </TableBody>
             </Table>
           </SectionCard>
+          <TextField
+            label="الملاحظات العامة"
+            value={invoiceNotes}
+            onChange={(event) => setInvoiceNotes(event.target.value)}
+            multiline
+            minRows={3}
+            fullWidth
+          />
 
-          {(!editingInvoiceId || editingInvoiceStatus === 'draft') && (
-            <SectionCard title="سند قبض">
-              <Box sx={{ display: 'grid', gap: 2 }}>
-                {invoicePayments.length > 0 && (
-                  <Table size="small">
+          {(!editingInvoiceId || editingInvoiceStatus === 'draft') && invoicePayments.length > 0 && (
+              <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+                  <Table size="small" sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                     <TableHead>
                       <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)' }}>
                         <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>المبلغ</TableCell>
@@ -2492,24 +2579,29 @@ export function SalesPage() {
                       ))}
                     </TableBody>
                   </Table>
-                )}
-                <Box>
-                  <Button variant="outlined" onClick={() => {
-                    const remaining = Math.max(netTotal - totalDirectPayments, 0)
-                    setDirectPaymentForm({ amount: remaining > 0 ? String(remaining) : '', paymentMethod: loadSettings().paymentMethods[0] || '', notes: '' })
-                    setDirectPaymentError('')
-                    setDirectPaymentDialogOpen(true)
-                  }}>
-                    قبض دفعة
-                  </Button>
-                </Box>
               </Box>
-            </SectionCard>
           )}
         </DialogContent>
 
         <DialogActions>
-          <Button onClick={() => setInvoiceDialogOpen(false)}>إلغاء</Button>
+          <Button sx={{ mr: 'auto' }} onClick={() => setInvoiceDialogOpen(false)}>إلغاء</Button>
+          {(!editingInvoiceId || editingInvoiceStatus === 'draft') && (
+            <Button
+              variant="outlined"
+              sx={{ ml: 'auto' }}
+              onClick={() => {
+                const remaining = normalizeRemainingAmount(
+                  Math.max(subtotal - discountAmount - totalDirectPayments, 0),
+                  priceDecimals,
+                )
+                setDirectPaymentForm({ amount: remaining > 0 ? String(remaining) : '', paymentMethod: loadSettings().paymentMethods[0] || '', notes: '' })
+                setDirectPaymentError('')
+                setDirectPaymentDialogOpen(true)
+              }}
+            >
+              قبض دفعة
+            </Button>
+          )}
           {editingInvoiceId && editingInvoiceStatus === 'completed' ? (
             <Button variant="contained" onClick={() => void saveDraft()} disabled={saving}>{saving ? <CircularProgress size={18} /> : 'حفظ التعديلات'}</Button>
           ) : (
@@ -2535,7 +2627,8 @@ export function SalesPage() {
                 <Box>حالة الدفع: <strong>{paymentStatusLabel[selectedInvoice.paymentStatus]}</strong></Box>
               </Box>
 
-              <Table>
+              <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center' }}>المادة</TableCell>
@@ -2543,7 +2636,6 @@ export function SalesPage() {
                     <TableCell sx={{ textAlign: 'center' }}>الكمية</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>سعر البيع</TableCell>
                     <TableCell sx={{ textAlign: 'center' }}>الاجمالي</TableCell>
-                    <TableCell sx={{ textAlign: 'center' }}>ملاحظات</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -2554,18 +2646,19 @@ export function SalesPage() {
                       <TableCell sx={{ textAlign: 'center' }}>{item.quantity}</TableCell>
                       <TableCell sx={{ textAlign: 'center' }}>{priceNum(item.unitPrice)}</TableCell>
                       <TableCell sx={{ textAlign: 'center' }}>{priceNum(item.lineTotal)}</TableCell>
-                      <TableCell sx={{ textAlign: 'center' }}>{item.notes?.trim() ? item.notes : ''}</TableCell>
                     </TableRow>
                   ))}
                   <TableRow>
                     <TableCell sx={{ fontWeight: 700, textAlign: 'center' }}>ملاحظات الفاتورة</TableCell>
-                    <TableCell colSpan={5} sx={{ textAlign: 'center' }}>{selectedInvoice.notes?.trim() ? selectedInvoice.notes : ''}</TableCell>
+                    <TableCell colSpan={4} sx={{ textAlign: 'center' }}>{selectedInvoice.notes?.trim() ? selectedInvoice.notes : ''}</TableCell>
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
 
               {(selectedInvoice.delegates ?? []).length > 0 ? (
-                <Table>
+                <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+                <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                   <TableHead><TableRow sx={{ textAlignLast: 'center' }}><TableCell sx={{ textAlign: 'center' }}>المندوب</TableCell><TableCell sx={{ textAlign: 'center' }}>نسبة العمولة</TableCell><TableCell sx={{ textAlign: 'center' }}>ملاحظات</TableCell><TableCell sx={{ textAlign: 'center' }}>مبلغ العمولة</TableCell></TableRow></TableHead>
                   <TableBody>
                     {selectedInvoice.delegates.map((delegate) => (
@@ -2578,9 +2671,11 @@ export function SalesPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </Box>
               ) : null}
 
-              <Table sx={{ width: '100%', minWidth: selectedInvoice.discountType === 'percentage' ? 760 : 620, '& td, & th': { textAlign: 'center' } }}>
+              <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+              <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto', '& td, & th': { textAlign: 'center' } }}>
                 <TableHead>
                   <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                     <TableCell sx={{ textAlign: 'center', fontWeight: 700 }}>الاجمالي قبل الحسم</TableCell>
@@ -2606,6 +2701,7 @@ export function SalesPage() {
                   </TableRow>
                 </TableBody>
               </Table>
+              </Box>
 
               {selectedInvoice.customerCredit > 0 ? (
                 <Box sx={{ fontWeight: 700, color: 'success.main' }}>
@@ -2617,7 +2713,8 @@ export function SalesPage() {
                 {selectedInvoice.payments.length === 0 ? (
                   <Typography>لا توجد دفعات مسجلة.</Typography>
                 ) : (
-                  <Table>
+                  <Box sx={{ width: '100%', minWidth: 0, overflowX: 'auto' }}>
+                  <Table sx={{ width: '100%', minWidth: 'max-content', tableLayout: 'auto' }}>
                     <TableHead>
                       <TableRow sx={{ background: 'rgba(255, 255, 255, 0.055)', textAlignLast: 'center' }}>
                         <TableCell sx={{ textAlign: 'center' }}>التاريخ</TableCell>
@@ -2632,7 +2729,7 @@ export function SalesPage() {
                         <TableRow key={payment.id} sx={{ textAlignLast: 'center' }}>
                           <TableCell sx={{ textAlign: 'center' }}>{formatDateDMY(payment.date)}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>{priceNum(Number(payment.amount))}</TableCell>
-                          <TableCell sx={{ textAlign: 'center' }}>{payment.paymentMethod || '—'}</TableCell>
+                          <TableCell sx={{ textAlign: 'center' }}>{payment.paymentMethod || ''}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>{payment.notes || ''}</TableCell>
                           <TableCell sx={{ textAlign: 'center' }}>
                             <IconButton
@@ -2650,12 +2747,14 @@ export function SalesPage() {
                       ))}
                     </TableBody>
                   </Table>
+                  </Box>
                 )}
               </SectionCard>
             </Box>
             )}
         </DialogContent>
         <DialogActions>
+          <Button sx={{ mr: 'auto' }} onClick={() => setDetailsOpen(false)}>إلغاء</Button>
           <Button variant="contained" onClick={() => { void handleExportPdf() }} disabled={!selectedInvoice}>تصدير PDF</Button>
           {selectedInvoice?.status === 'completed' ? (
             <Button
@@ -2670,7 +2769,6 @@ export function SalesPage() {
               إنشاء مرتجع بيع
             </Button>
           ) : null}
-          <Button onClick={() => setDetailsOpen(false)}>إلغاء</Button>
         </DialogActions>
       </Dialog>
 
@@ -2678,36 +2776,38 @@ export function SalesPage() {
         <DialogTitle>قبض دفعة</DialogTitle>
         <DialogContent sx={{ display: 'grid', gap: 2, pt: '12px !important' }}>
           {directPaymentError ? <Alert severity="error" sx={craftErrorAlertSx}>{directPaymentError}</Alert> : null}
-          <TextField
-            select
-            label="طريقة الدفع"
-            value={directPaymentForm.paymentMethod}
-            onChange={(e) => setDirectPaymentForm((prev: typeof directPaymentForm) => ({ ...prev, paymentMethod: e.target.value }))}
-            slotProps={darkSelectSlotProps}
-            required
-          >
-            {loadSettings().paymentMethods.map((method) => (
-              <MenuItem key={method} value={method}>{method}</MenuItem>
-            ))}
-          </TextField>
-          <TextField
-            label="المبلغ"
-            type="number"
-            value={directPaymentForm.amount}
-            onChange={(e) => setDirectPaymentForm((prev: typeof directPaymentForm) => ({ ...prev, amount: e.target.value }))}
-            slotProps={{ htmlInput: { min: 0, step: 1 } }}
-            required
-          />
-          <TextField
-            label="ملاحظات"
-            value={directPaymentForm.notes}
-            onChange={(e) => setDirectPaymentForm((prev: typeof directPaymentForm) => ({ ...prev, notes: e.target.value }))}
-            multiline
-            minRows={2}
-          />
+          <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: '1fr' }}>
+            <TextField
+              label="المبلغ"
+              type="number"
+              value={directPaymentForm.amount}
+              onChange={(e) => setDirectPaymentForm((prev: typeof directPaymentForm) => ({ ...prev, amount: e.target.value }))}
+              slotProps={{ htmlInput: { min: 0, step: 1 } }}
+              required
+            />
+            <TextField
+              select
+              label="طريقة الدفع"
+              value={directPaymentForm.paymentMethod}
+              onChange={(e) => setDirectPaymentForm((prev: typeof directPaymentForm) => ({ ...prev, paymentMethod: e.target.value }))}
+              slotProps={darkSelectSlotProps}
+              required
+            >
+              {loadSettings().paymentMethods.map((method) => (
+                <MenuItem key={method} value={method}>{method}</MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label="ملاحظات"
+              value={directPaymentForm.notes}
+              onChange={(e) => setDirectPaymentForm((prev: typeof directPaymentForm) => ({ ...prev, notes: e.target.value }))}
+              multiline
+              minRows={2}
+            />
+          </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDirectPaymentDialogOpen(false)}>إلغاء</Button>
+          <Button sx={{ mr: 'auto' }} onClick={() => setDirectPaymentDialogOpen(false)}>إلغاء</Button>
           <Button variant="contained" color="primary" startIcon={<FiCheckCircle />} onClick={() => {
             const amount = Number(directPaymentForm.amount)
             if (!directPaymentForm.paymentMethod) {
@@ -2752,7 +2852,7 @@ export function SalesPage() {
           <Typography>هل أنت متأكد من حذف الدفعة بتاريخ {paymentDeleteConfirm ? formatDateDMY(paymentDeleteConfirm.paymentDate) : ''} بمبلغ {paymentDeleteConfirm ? priceSym(paymentDeleteConfirm.paymentAmount) : ''}؟</Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setPaymentDeleteConfirm(null); setPaymentDeleteErrorState('') }}>إلغاء</Button>
+          <Button sx={{ mr: 'auto' }} onClick={() => { setPaymentDeleteConfirm(null); setPaymentDeleteErrorState('') }}>إلغاء</Button>
           <Button
             variant="contained"
             color="error"

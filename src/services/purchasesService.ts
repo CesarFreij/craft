@@ -23,8 +23,10 @@ export interface PurchaseInvoiceItemInput {
   materialId: string
   quantity: number
   unitPrice: number
+  lineTotal?: number
+  netUnitPrice?: number
+  netTotal?: number
   unit?: string
-  notes?: string
 }
 
 export interface PurchaseInvoiceDraftInput {
@@ -36,6 +38,9 @@ export interface PurchaseInvoiceDraftInput {
   warehouseId: string
   discountType: DiscountType
   discountValue: number
+  subtotal?: number
+  discountAmount?: number
+  netTotal?: number
   expenses?: number
   notes?: string
   items: PurchaseInvoiceItemInput[]
@@ -105,7 +110,8 @@ export interface PurchaseInvoiceDetails {
     unit: string
     unitPrice: number
     lineTotal: number
-    notes?: string
+    netUnitPrice: number
+    netTotal: number
   }>
   payments: PurchaseInvoicePayment[]
 }
@@ -245,6 +251,7 @@ export interface AccountPayment {
   amount: number
   paymentMethod?: string
   notes?: string
+  paymentDirection?: 'in' | 'out'
   referenceType?: 'purchase-return' | 'sales-return'
   referenceId?: string
   referenceNumber?: string
@@ -275,8 +282,10 @@ export interface SalesInvoiceItemInput {
   materialId: string
   quantity: number
   unitPrice: number
+  lineTotal?: number
+  netUnitPrice?: number
+  netTotal?: number
   unit?: string
-  notes?: string
 }
 
 export interface SalesInvoiceDraftInput {
@@ -287,6 +296,9 @@ export interface SalesInvoiceDraftInput {
   warehouseId: string
   discountType: DiscountType
   discountValue: number
+  subtotal?: number
+  discountAmount?: number
+  netTotal?: number
   customerAdditionalFees?: number
   delegates?: Array<{ delegateId: string; commissionPercentage: number; notes?: string }>
   notes?: string
@@ -371,7 +383,8 @@ export interface SalesInvoiceDetails {
     unit: string
     unitPrice: number
     lineTotal: number
-    notes?: string
+    netUnitPrice: number
+    netTotal: number
   }>
   payments: SalesInvoicePayment[]
 }

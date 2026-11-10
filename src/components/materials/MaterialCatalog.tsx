@@ -109,7 +109,7 @@ const craftDialogSlotProps = {
       border: '1px solid rgba(148, 197, 255, 0.16)',
       boxShadow: '0 28px 72px rgba(2, 6, 23, 0.46)',
       color: 'rgba(255, 255, 255, 0.92)',
-      overflow: 'hidden',
+      overflowX: 'clip',
 
       '& .MuiDialogTitle-root': {
         color: 'rgba(255, 255, 255, 0.96)',
@@ -1258,7 +1258,7 @@ export function MaterialCatalog({ onLoaded }: MaterialCatalogProps) {
                     ملاحظات
                   </Typography>
                   <Typography sx={{ color: 'rgba(255, 255, 255, 0.78)', fontSize: '1.071rem', whiteSpace: 'pre-wrap' }}>
-                    {selectedNode.notes || '__'}
+                    {selectedNode.notes || ''}
                   </Typography>
                 </Box>
               </Box>

@@ -51,23 +51,26 @@ function ReferenceInvoiceTable({ items }: { items: InvoicePrintItem[] }) {
       dir="rtl"
       sx={{
         width: '100%',
+        minWidth: 'max-content',
         borderCollapse: 'collapse',
-        tableLayout: 'fixed',
+        tableLayout: 'auto',
         color: '#111827',
         '& th, & td': {
           border: '1px solid #BFC5CC',
           px: 0.75,
           py: 0.72,
-          fontSize: 12.5,
           lineHeight: 1.35,
           verticalAlign: 'middle',
           textAlign: 'center',
+          whiteSpace: 'nowrap',
+          wordBreak: 'normal',
+          overflowWrap: 'normal',
+          boxSizing: 'border-box',
         },
         '& th': {
           fontWeight: 800,
           background: '#FFFFFF',
           color: '#111827',
-          whiteSpace: 'nowrap',
         },
         '& td': {
           fontWeight: 500,
@@ -76,16 +79,14 @@ function ReferenceInvoiceTable({ items }: { items: InvoicePrintItem[] }) {
         },
       }}
     >
-      <Box component="colgroup">
-        <Box component="col" sx={{ width: '7%' }} />
-        <Box component="col" sx={{ width: '14%' }} />
-        <Box component="col" sx={{ width: '36%' }} />
-        <Box component="col" sx={{ width: '10%' }} />
-        <Box component="col" sx={{ width: '16.5%' }} />
-        <Box component="col" sx={{ width: '16.5%' }} />
-      </Box>
-
-      <Box component="thead">
+      <Box
+        component="thead"
+        sx={{
+          '@media print': {
+            display: 'table-header-group',
+          },
+        }}
+      >
         <Box component="tr">
           <Box component="th">الرقم</Box>
           <Box component="th">رقم المادة</Box>
@@ -103,11 +104,22 @@ function ReferenceInvoiceTable({ items }: { items: InvoicePrintItem[] }) {
           )
 
           return (
-            <Box component="tr" key={item.id ?? `${item.code ?? 'item'}-${index}`}>
+            <Box
+              component="tr"
+              key={item.id ?? `${item.code ?? 'item'}-${index}`}
+              sx={{
+                breakInside: 'avoid',
+                pageBreakInside: 'avoid',
+                '@media print': {
+                  breakInside: 'avoid',
+                  pageBreakInside: 'avoid',
+                },
+              }}
+            >
               <Box component="td">{index + 1}</Box>
 
               <Box component="td">
-                {item.code?.trim() || '—'}
+                {item.code?.trim() || ''}
               </Box>
 
               <Box
@@ -117,7 +129,7 @@ function ReferenceInvoiceTable({ items }: { items: InvoicePrintItem[] }) {
                   px: '8px !important',
                 }}
               >
-                {item.name || '—'}
+                {item.name || ''}
               </Box>
 
               <Box component="td">{formatQuantity(item.quantity)}</Box>
@@ -206,29 +218,27 @@ export function InvoicePrintTemplate({
   const companyTaxNumber = settings.taxNumber?.trim() ?? ''
   const partyDisplay = [data.partyName?.trim(), (data.partyPhone || data.partyNumber)?.trim()]
     .filter(Boolean)
-    .join(' / ') || '—'
+    .join(' / ') || ''
   const referenceValue = data.referenceValue?.trim() ?? ''
-  const hasReference = Boolean(
-    data.referenceLabel?.trim() &&
-    referenceValue &&
-    referenceValue !== '—',
-  )
+  const hasReference = Boolean(data.referenceLabel?.trim() && referenceValue)
   const isReturnDocument = String(data.documentType).includes('return')
+  const isPurchase = data.documentType === 'purchase'
   const isSalesOrPurchase =
     data.documentType === 'sales' || data.documentType === 'purchase'
   const additionalFees = Number(data.additionalFees ?? 0)
   const paidAmount = Number(data.paidAmount ?? 0)
-  const paymentRows = (data.paymentMethod ?? '—')
+  const paymentRows = (data.paymentMethod ?? '')
     .split('\n')
     .map((line) => {
       const [method, amount] = line.split('\t')
       return {
-        method: method?.trim() || '—',
+        method: method?.trim() || '',
         amount: amount?.trim() || '',
       }
     })
-  const netAmountWithoutAdditionalFees =
-    Number(data.total ?? 0) - additionalFees
+  const netAmountWithoutAdditionalFees = isPurchase
+    ? Number(data.total ?? 0)
+    : Number(data.total ?? 0) - additionalFees
   const remainingAmount = isSalesOrPurchase
     ? Math.max(0, netAmountWithoutAdditionalFees - paidAmount)
     : Number(
@@ -252,11 +262,7 @@ export function InvoicePrintTemplate({
           background: '#FFFFFF !important',
           boxShadow: 'none !important',
           border: 'none !important',
-          padding: '12mm 12mm 14mm',
-        },
-        '@page': {
-          size: 'A4',
-          margin: 0,
+          padding: 0,
         },
       }}
     >
@@ -401,7 +407,7 @@ export function InvoicePrintTemplate({
           <Box sx={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: 1 }}>
             <Box sx={{ fontWeight: 800 }}>{isReturnDocument ? 'رقم المرتجع:' : 'فاتورة:'}</Box>
             <Box dir="rtl">
-              {data.documentNumber || '—'}
+              {data.documentNumber || ''}
             </Box>
           </Box>
 
@@ -415,7 +421,7 @@ export function InvoicePrintTemplate({
           <Box sx={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: 1 }}>
             <Box sx={{ fontWeight: 800 }}>التاريخ:</Box>
             <Box dir="rtl">
-              {formatDateDMY(data.date) || '—'}
+              {formatDateDMY(data.date) || ''}
             </Box>
           </Box>
 
@@ -537,9 +543,9 @@ export function InvoicePrintTemplate({
               />
             ) : null}
 
-            {!isSalesOrPurchase && additionalFees !== 0 ? (
+            {additionalFees !== 0 && (isPurchase || !isSalesOrPurchase) ? (
               <ValueRow
-                label="رسوم إضافية"
+                label={isPurchase ? 'رسوم إضافية لتكلفة المخزون' : 'رسوم إضافية'}
                 value={formatMoney(additionalFees)}
               />
             ) : null}
@@ -554,7 +560,7 @@ export function InvoicePrintTemplate({
           >
             <Box sx={{ borderTop: '1px solid #C7CCD2' }}>
               <ValueRow
-                label="الصافي"
+                label={isPurchase ? 'الصافي المستحق للمورد' : 'الصافي'}
                 value={formatMoney(netAmountWithoutAdditionalFees)}
                 bold
               />
